@@ -1,0 +1,9 @@
+[project]
+name = "horo-dcb"
+version = "0.1.0"
+description = "Discord bot for horo-DCB"
+readme = "README.md"
+requires-python = ">=3.13,<3.14"
+dependencies = [
+    "discord.py>=2.7.1,<3",
+]
