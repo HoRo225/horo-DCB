@@ -1,18 +1,18 @@
-name: bootstrap-lock
+name: bootstrap-test
 
 on:
   push:
     branches:
       - feat/bootstrap-discord-bot
     paths:
+      - horo_dcb/**
+      - tests/**
       - pyproject.toml
+      - uv.lock
       - .github/workflows/bootstrap-lock.yml
 
-permissions:
-  contents: write
-
 jobs:
-  lock:
+  test:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -21,13 +21,7 @@ jobs:
           python-version: "3.13"
       - name: Install uv
         run: python -m pip install uv==0.10.0
-      - name: Generate lockfile
-        run: uv lock
-      - name: Commit lockfile
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add uv.lock
-          if git diff --cached --quiet; then exit 0; fi
-          git commit -m "chore: lock dependencies"
-          git push
+      - name: Sync locked dependencies
+        run: uv sync --locked
+      - name: Run tests
+        run: uv run python -m unittest discover -s tests -v
