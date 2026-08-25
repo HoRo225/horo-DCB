@@ -1,0 +1,116 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  docker:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v7
+
+      - name: Verify Docker toolchain
+        run: |
+          docker version
+          docker compose version
+
+      - name: Exercise fresh-clone setup
+        run: |
+          set -eu
+          sh scripts/setup.sh
+          test "$(stat -c '%a' .env)" = "600"
+          grep -qx 'NINEROUTER_IMAGE_SEARCH_PROVIDER=' .env
+          before=$(sha256sum .env)
+          sh scripts/setup.sh
+          after=$(sha256sum .env)
+          test "$before" = "$after"
+          if sh scripts/check-env.sh; then
+            echo "check-env unexpectedly accepted credential placeholders" >&2
+            exit 1
+          fi
+          sed -i 's/\[REDACTED_SECRET\]/configured-for-ci/g' .env
+          sh scripts/check-env.sh
+
+          configured_env=$(mktemp)
+          trap 'rm -f "$configured_env"' EXIT
+          cp .env "$configured_env"
+          for key in \
+            SEMANTIC_MEMORY_ENABLED TEMP_VOICE_ENABLED \
+            STEAM_FREE_GAMES_ENABLED AI_TEXT_DISPLAY_ENABLED \
+            NINEROUTER_EMBEDDING_MODEL NINEROUTER_EMBEDDING_DIMENSIONS
+          do
+            sed -i "/^${key}=/d" .env
+          done
+          sh scripts/check-env.sh
+
+          for key in NINEROUTER_EMBEDDING_MODEL NINEROUTER_EMBEDDING_DIMENSIONS
+          do
+            cp "$configured_env" .env
+            sed -i "s/^${key}=.*/${key}=/" .env
+            if sh scripts/check-env.sh; then
+              echo "check-env unexpectedly accepted blank ${key}" >&2
+              exit 1
+            fi
+          done
+          cp "$configured_env" .env
+
+      - name: Validate Compose model
+        run: docker compose config --quiet
+
+      - name: Verify 9Router uses the unmodified upstream image
+        run: |
+          test -z "$(find 9router -maxdepth 1 -type f -name 'patch-*' -print -quit)"
+          test "$(wc -l < 9router/Dockerfile)" -eq 1
+
+      - name: Build both images from pinned inputs
+        run: docker compose build --pull bot 9router
+
+      - name: Run Python regression suite
+        run: docker compose run --rm --no-deps bot python -m unittest discover -s tests -v
+
+      - name: Check runtime configuration and bytecode compilation
+        run: |
+          if docker compose run --rm --no-deps bot python -m pip --version; then
+            echo "runtime image unexpectedly contains pip" >&2
+            exit 1
+          fi
+          docker compose run --rm --no-deps bot python -m src.preflight
+          docker compose run --rm --no-deps -e PYTHONPYCACHEPREFIX=/tmp/pycache bot python -m compileall -q src tests
+
+      - name: Smoke-test 9Router readiness
+        shell: bash
+        run: |
+          set -euo pipefail
+          trap 'docker compose down -v --remove-orphans' EXIT
+          docker compose up -d 9router
+          container_id=$(docker compose ps -q 9router)
+          test -n "$container_id"
+
+          for attempt in $(seq 1 36); do
+            status=$(docker inspect --format '{{.State.Health.Status}}' "$container_id")
+            case "$status" in
+              healthy)
+                exit 0
+                ;;
+              unhealthy)
+                docker compose logs 9router
+                exit 1
+                ;;
+            esac
+            sleep 5
+          done
+
+          docker compose logs 9router
+          echo "9Router did not become healthy" >&2
+          exit 1

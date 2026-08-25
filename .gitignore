@@ -1,0 +1,37 @@
+# Environment files
+.env
+.env.*
+!.env.example
+
+# Logs
+*.log
+
+# Operating system files
+.DS_Store
+Thumbs.db
+
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.venv/
+.coverage
+coverage.xml
+htmlcov/
+
+# Runtime state
+*.sqlite3
+*.sqlite3-*
+data/
+
+# Local editor and agent state
+.vscode/
+.idea/
+.ai-bridge/
+
+# Local-only project documents
+AGENTS.md
+SERVER.md
+ARCHITECTURE_AUDIT_*.md

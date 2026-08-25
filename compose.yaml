@@ -1,0 +1,81 @@
+services:
+  bot:
+    build: .
+    init: true
+    restart: unless-stopped
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    environment:
+      DISCORD_TOKEN: ${DISCORD_TOKEN:?DISCORD_TOKEN is required}
+      NINEROUTER_API_KEY: ${NINEROUTER_API_KEY:?NINEROUTER_API_KEY is required}
+      NINEROUTER_MODEL: ${NINEROUTER_MODEL:?NINEROUTER_MODEL is required}
+      NINEROUTER_WEB_SEARCH_PROVIDER: ${NINEROUTER_WEB_SEARCH_PROVIDER:?NINEROUTER_WEB_SEARCH_PROVIDER is required}
+      NINEROUTER_IMAGE_SEARCH_PROVIDER: ${NINEROUTER_IMAGE_SEARCH_PROVIDER:-}
+      NINEROUTER_WEB_FETCH_PROVIDER: ${NINEROUTER_WEB_FETCH_PROVIDER:?NINEROUTER_WEB_FETCH_PROVIDER is required}
+      NINEROUTER_EMBEDDING_MODEL: ${NINEROUTER_EMBEDDING_MODEL:-gemini/gemini-embedding-2}
+      NINEROUTER_EMBEDDING_DIMENSIONS: ${NINEROUTER_EMBEDDING_DIMENSIONS:-768}
+      NINEROUTER_URL: http://9router:20128/v1
+      SEMANTIC_MEMORY_ENABLED: ${SEMANTIC_MEMORY_ENABLED:-1}
+      TEMP_VOICE_ENABLED: ${TEMP_VOICE_ENABLED:-1}
+      STEAM_FREE_GAMES_ENABLED: ${STEAM_FREE_GAMES_ENABLED:-1}
+      AI_TEXT_DISPLAY_ENABLED: ${AI_TEXT_DISPLAY_ENABLED:-1}
+    depends_on:
+      9router:
+        condition: service_healthy
+    volumes:
+      - bot_data:/app/data
+    tmpfs:
+      - /tmp:size=16m,mode=1777
+    stop_grace_period: 30s
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "3"
+
+  9router:
+    build: ./9router
+    image: horo-9router:0.5.55
+    init: true
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    ports:
+      - "127.0.0.1:20128:20128"
+    environment:
+      DATA_DIR: /app/data
+      PORT: "20128"
+      HOSTNAME: "0.0.0.0"
+      NODE_ENV: production
+      JWT_SECRET: ${JWT_SECRET:?JWT_SECRET is required}
+      INITIAL_PASSWORD: ${INITIAL_PASSWORD:?INITIAL_PASSWORD is required}
+      API_KEY_SECRET: ${API_KEY_SECRET:?API_KEY_SECRET is required}
+      MACHINE_ID_SALT: ${MACHINE_ID_SALT:?MACHINE_ID_SALT is required}
+    volumes:
+      - 9router_data:/app/data
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - >-
+          fetch('http://127.0.0.1:20128/api/health').then(async (response) => {
+            if (!response.ok) process.exit(1)
+            const payload = await response.json()
+            if (payload?.ok !== true) process.exit(1)
+          }).catch(() => process.exit(1))
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
+    stop_grace_period: 30s
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "3"
+
+volumes:
+  bot_data:
+  9router_data:
