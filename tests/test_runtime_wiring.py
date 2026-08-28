@@ -16,6 +16,7 @@ class RuntimeWiringTest(unittest.TestCase):
             embedding_model="configured-embedding",
             embedding_dimensions=4,
             semantic_memory_enabled=False,
+            server_activity_enabled=False,
             temp_voice_enabled=False,
             steam_free_games_enabled=False,
             ai_text_display_enabled=False,
@@ -30,6 +31,7 @@ class RuntimeWiringTest(unittest.TestCase):
             patch("src.bot.TempVoiceManager") as temp_voice_class,
             patch("src.bot.SteamFreeGamesNotifier") as steam_class,
             patch("src.bot.CalendarManager") as calendar_class,
+            patch("src.bot.ServerActivityMonitor") as activity_class,
             patch("src.bot.AgentTools") as agent_tools_class,
             patch("src.bot.ChatManager") as chat_class,
             patch("src.bot.HoroBot") as bot_class,
@@ -43,6 +45,7 @@ class RuntimeWiringTest(unittest.TestCase):
             config.ninerouter_model,
         )
         semantic_memory_class.assert_not_called()
+        activity_class.assert_not_called()
         calendar_class.assert_called_once_with()
         agent_tools_class.assert_called_once_with(
             steam_class.return_value,
@@ -59,6 +62,8 @@ class RuntimeWiringTest(unittest.TestCase):
             steam_class.return_value,
             semantic_memory=None,
             calendar=calendar_class.return_value,
+            server_activity=None,
+            ai_client=ai_client_class.return_value,
             ai_text_display_enabled=False,
             temp_voice_enabled=False,
             steam_free_games_enabled=False,
@@ -74,7 +79,12 @@ class RuntimeWiringTest(unittest.TestCase):
             agent_tools=SimpleNamespace(semantic_memory=hidden_memory),
         )
 
-        bot = HoroBot(chat, SimpleNamespace(), SimpleNamespace())
+        bot = HoroBot(
+            chat,
+            SimpleNamespace(),
+            SimpleNamespace(),
+            ai_client=SimpleNamespace(),
+        )
 
         self.assertIsNone(bot.semantic_memory)
 

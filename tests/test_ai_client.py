@@ -1,7 +1,15 @@
 import unittest
 from unittest.mock import patch
 
-from src.ai_client import AIClient, AIClientError, AIToolCall
+from src.ai_client import (
+    AIClient,
+    AIClientError,
+    AIToolCall,
+    WebFetchResponse,
+    WebSearchImage,
+    WebSearchResponse,
+    WebSearchResult,
+)
 
 
 class FakeResponse:
@@ -384,7 +392,21 @@ class AIClientTest(unittest.IsolatedAsyncioTestCase):
             "recent news", provider="trusted-search", search_type="news"
         )
 
-        self.assertIs(result, response_data)
+        self.assertEqual(
+            result,
+            WebSearchResponse(
+                results=(
+                    WebSearchResult(
+                        title="Result",
+                        url="https://example.com/result",
+                        snippet="Summary",
+                        published_at="2026-08-19",
+                        image_url=None,
+                    ),
+                ),
+                images=(),
+            ),
+        )
         self.assertEqual(session.last_url, "http://9router:20128/v1/search")
         self.assertEqual(
             session.last_json,
@@ -414,6 +436,62 @@ class AIClientTest(unittest.IsolatedAsyncioTestCase):
             },
         )
 
+    async def test_web_search_normalizes_optional_result_and_image_fields(self):
+        session = FakeSession(
+            FakeResponse(
+                data={
+                    "results": [
+                        {
+                            "title": 123,
+                            "url": ["https://example.com"],
+                            "snippet": {"text": "Summary"},
+                            "published_at": False,
+                            "metadata": {"image_url": "https://example.com/result.jpg"},
+                        }
+                    ],
+                    "images": [
+                        "https://example.com/string.jpg",
+                        {
+                            "url": "https://example.com/dict.jpg",
+                            "description": "Dict image",
+                        },
+                        {"url": 123, "description": ["invalid"]},
+                        None,
+                        456,
+                    ],
+                }
+            )
+        )
+        client = AIClient("http://9router:20128/v1", "secret-key", "model-a")
+        client._session = session
+
+        result = await client.web_search("images", provider="trusted-search")
+
+        self.assertEqual(
+            result,
+            WebSearchResponse(
+                results=(
+                    WebSearchResult(
+                        title=None,
+                        url=None,
+                        snippet=None,
+                        published_at=None,
+                        image_url="https://example.com/result.jpg",
+                    ),
+                ),
+                images=(
+                    WebSearchImage(
+                        url="https://example.com/string.jpg", description=None
+                    ),
+                    WebSearchImage(
+                        url="https://example.com/dict.jpg",
+                        description="Dict image",
+                    ),
+                    WebSearchImage(url=None, description=None),
+                ),
+            ),
+        )
+
     async def test_web_fetch_uses_verified_endpoint_and_fixed_payload(self):
         response_data = {
             "provider": "trusted-fetch",
@@ -429,7 +507,7 @@ class AIClientTest(unittest.IsolatedAsyncioTestCase):
             "https://example.com/article", provider="trusted-fetch"
         )
 
-        self.assertIs(result, response_data)
+        self.assertEqual(result, WebFetchResponse(title="Article", content="Body"))
         self.assertEqual(session.last_url, "http://9router:20128/v1/web/fetch")
         self.assertEqual(
             session.last_json,
@@ -456,7 +534,7 @@ class AIClientTest(unittest.IsolatedAsyncioTestCase):
             max_characters=50000,
         )
 
-        self.assertIs(result, response_data)
+        self.assertEqual(result, WebFetchResponse(title=None, content="page"))
         self.assertEqual(
             session.last_json,
             {

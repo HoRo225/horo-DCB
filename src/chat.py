@@ -120,12 +120,6 @@ class ChatManager:
         self._channel_locks: defaultdict[int, asyncio.Lock] = defaultdict(asyncio.Lock)
         self._cooldowns: dict[int, float] = {}
 
-    async def start(self) -> None:
-        await self.ai_client.start()
-
-    async def close(self) -> None:
-        await self.ai_client.close()
-
     def record_user_message(
         self,
         channel_id: int,

@@ -10,6 +10,7 @@ import discord
 
 from src.steam_free_games import (
     NOTIFICATION_CHANNEL_NAME,
+    SteamConfigurationError,
     SteamFetchResult,
     SteamFreeGamesNotifier,
     SteamOffer,
@@ -38,13 +39,32 @@ class FakeTextChannel:
         self.sent.append(kwargs)
 
 
+class FakeRole:
+    def __init__(self, role_id, guild, *, mentionable=True, default=False):
+        self.id = role_id
+        self.guild = guild
+        self.mentionable = mentionable
+        self._default = default
+
+    @property
+    def mention(self):
+        return f"<@&{self.id}>"
+
+    def is_default(self):
+        return self._default
+
+
 class FakeGuild:
     def __init__(self, guild_id=1):
         self.id = guild_id
         self.me = SimpleNamespace(
-            guild_permissions=SimpleNamespace(manage_channels=True),
+            guild_permissions=SimpleNamespace(
+                manage_channels=True,
+                mention_everyone=True,
+            ),
         )
         self._channels = {}
+        self._roles = {}
         self.created_channels = []
         self._next_channel_id = 100
 
@@ -57,6 +77,12 @@ class FakeGuild:
 
     def get_channel(self, channel_id):
         return self._channels.get(channel_id)
+
+    def add_role(self, role):
+        self._roles[role.id] = role
+
+    def get_role(self, role_id):
+        return self._roles.get(role_id)
 
     async def create_text_channel(self, name, *, reason=None):
         channel = FakeTextChannel(self._next_channel_id, name)
@@ -152,6 +178,36 @@ class SteamFreeGamesNotifierTest(unittest.IsolatedAsyncioTestCase):
                 "channel_id": 20,
                 "active_app_ids": [True],
             },
+            "role": {
+                "guild_id": 2,
+                "channel_id": 20,
+                "active_app_ids": [214341],
+                "role_id": True,
+            },
+            "everyone_role": {
+                "guild_id": 2,
+                "channel_id": 20,
+                "active_app_ids": [214341],
+                "role_id": 2,
+            },
+            "roles_bool": {
+                "guild_id": 2,
+                "channel_id": 20,
+                "active_app_ids": [214341],
+                "role_ids": [50, True],
+            },
+            "roles_duplicate": {
+                "guild_id": 2,
+                "channel_id": 20,
+                "active_app_ids": [214341],
+                "role_ids": [50, 50],
+            },
+            "roles_everyone": {
+                "guild_id": 2,
+                "channel_id": 20,
+                "active_app_ids": [214341],
+                "role_ids": [2],
+            },
         }
 
         for label, invalid_record in invalid_records.items():
@@ -184,6 +240,7 @@ class SteamFreeGamesNotifierTest(unittest.IsolatedAsyncioTestCase):
                             "guild_id": 1,
                             "channel_id": 10,
                             "active_app_ids": [214340],
+                            "role_id": 50,
                         }
                     ],
                 }
@@ -196,6 +253,28 @@ class SteamFreeGamesNotifierTest(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(status.state_available)
         self.assertEqual(status.channel_id, 10)
         self.assertEqual(status.active_app_count, 1)
+        self.assertEqual(status.role_ids, (50,))
+
+    def test_multi_role_state_ids_load_normally(self):
+        self.state_path.write_text(
+            json.dumps(
+                {
+                    "version": 1,
+                    "guilds": [
+                        {
+                            "guild_id": 1,
+                            "channel_id": 10,
+                            "active_app_ids": [214340],
+                            "role_ids": [50, 60],
+                        }
+                    ],
+                }
+            ),
+            encoding="utf-8",
+        )
+        notifier = SteamFreeGamesNotifier(self.state_path)
+
+        self.assertEqual(notifier.get_guild_status(1).role_ids, (50, 60))
 
     def test_extract_app_id_from_steam_logo(self):
         self.assertEqual(
@@ -348,6 +427,120 @@ class SteamFreeGamesNotifierTest(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(notifier._task)
         self.assertIsNone(notifier._session)
 
+    async def test_notification_roles_can_be_set_and_cleared(self):
+        guild = FakeGuild()
+        channel = self.make_notification_channel(guild)
+        roles = (FakeRole(50, guild), FakeRole(60, guild))
+        for role in roles:
+            guild.add_role(role)
+        notifier = StubNotifier(self.state_path)
+
+        await notifier.set_notification_roles(guild, roles)
+
+        status = notifier.get_guild_status(guild.id)
+        self.assertEqual(status.channel_id, channel.id)
+        self.assertEqual(status.role_ids, (50, 60))
+        state = self.read_state()["guilds"][0]
+        self.assertEqual(state["role_ids"], [50, 60])
+        self.assertNotIn("role_id", state)
+
+        self.assertTrue(await notifier.clear_notification_roles(guild.id))
+        self.assertEqual(notifier.get_guild_status(guild.id).role_ids, ())
+        self.assertEqual(self.read_state()["guilds"][0]["role_ids"], [])
+
+    async def test_clear_notification_roles_waits_for_guild_lock(self):
+        guild = FakeGuild()
+        role = FakeRole(50, guild)
+        guild.add_role(role)
+        notifier = StubNotifier(self.state_path)
+        await notifier.set_notification_roles(guild, (role,))
+        lock = notifier._guild_locks[guild.id]
+
+        await lock.acquire()
+        clear_task = asyncio.create_task(
+            notifier.clear_notification_roles(guild.id)
+        )
+        await asyncio.sleep(0)
+
+        self.assertFalse(clear_task.done())
+        self.assertEqual(notifier.get_guild_status(guild.id).role_ids, (50,))
+        self.assertEqual(self.read_state()["guilds"][0]["role_ids"], [50])
+
+        lock.release()
+        self.assertTrue(await clear_task)
+        self.assertEqual(notifier.get_guild_status(guild.id).role_ids, ())
+        self.assertEqual(self.read_state()["guilds"][0]["role_ids"], [])
+
+    async def test_notification_roles_reject_default_unpingable_or_duplicate_roles(self):
+        guild = FakeGuild()
+        notifier = StubNotifier(self.state_path)
+        default_role = FakeRole(guild.id, guild, default=True)
+        unpingable_role = FakeRole(50, guild, mentionable=False)
+        valid_role = FakeRole(60, guild)
+
+        with self.assertRaises(SteamConfigurationError):
+            await notifier.set_notification_roles(guild, (default_role,))
+
+        guild.me.guild_permissions.mention_everyone = False
+        with self.assertRaises(SteamConfigurationError):
+            await notifier.set_notification_roles(guild, (unpingable_role, valid_role))
+
+        with self.assertRaises(SteamConfigurationError):
+            await notifier.set_notification_roles(guild, (valid_role, valid_role))
+
+        too_many = tuple(FakeRole(100 + index, guild) for index in range(26))
+        with self.assertRaises(SteamConfigurationError):
+            await notifier.set_notification_roles(guild, too_many)
+
+        self.assertFalse(self.state_path.exists())
+
+    async def test_configured_roles_are_the_only_allowed_public_pings(self):
+        guild = FakeGuild()
+        channel = self.make_notification_channel(guild)
+        roles = (FakeRole(50, guild), FakeRole(60, guild))
+        for role in roles:
+            guild.add_role(role)
+        notifier = StubNotifier(self.state_path)
+        await notifier.set_notification_roles(guild, roles)
+        offer = self.offer()
+        notifier.result = SteamFetchResult(frozenset({offer.app_id}), (offer,))
+
+        await notifier.check_once([guild])
+
+        self.assertEqual(len(channel.sent), 1)
+        payload = channel.sent[0]["view"].to_components()
+        text_contents = [
+            component["content"]
+            for component in payload[0]["components"]
+            if component["type"] == discord.ComponentType.text_display.value
+        ]
+        for role in roles:
+            self.assertTrue(any(role.mention in content for content in text_contents))
+        allowed_mentions = channel.sent[0]["allowed_mentions"]
+        self.assertFalse(allowed_mentions.everyone)
+        self.assertFalse(allowed_mentions.users)
+        self.assertEqual(allowed_mentions.roles, list(roles))
+        self.assertFalse(allowed_mentions.replied_user)
+
+    async def test_deleted_notification_role_is_removed_without_blocking_other_role_or_offer(self):
+        guild = FakeGuild()
+        channel = self.make_notification_channel(guild)
+        deleted_role = FakeRole(50, guild)
+        surviving_role = FakeRole(60, guild)
+        guild.add_role(deleted_role)
+        guild.add_role(surviving_role)
+        notifier = StubNotifier(self.state_path)
+        await notifier.set_notification_roles(guild, (deleted_role, surviving_role))
+        guild._roles.pop(deleted_role.id)
+        offer = self.offer()
+        notifier.result = SteamFetchResult(frozenset({offer.app_id}), (offer,))
+
+        await notifier.check_once([guild])
+
+        self.assertEqual(len(channel.sent), 1)
+        self.assertEqual(channel.sent[0]["allowed_mentions"].roles, [surviving_role])
+        self.assertEqual(self.read_state()["guilds"][0]["role_ids"], [surviving_role.id])
+
     async def test_first_check_sends_once_and_identical_check_does_not_duplicate(self):
         guild = FakeGuild()
         channel = self.make_notification_channel(guild)
@@ -460,6 +653,120 @@ class SteamFreeGamesNotifierTest(unittest.IsolatedAsyncioTestCase):
 
         self.assertFalse(self.state_path.exists())
         self.assertEqual(guild.created_channels, [])
+
+    async def test_stale_channel_state_is_preserved_when_rebinding_is_unsafe(self):
+        offer = self.offer()
+        original_payload = {
+            "version": 1,
+            "guilds": [
+                {
+                    "guild_id": 1,
+                    "channel_id": 999,
+                    "active_app_ids": [offer.app_id],
+                    "role_ids": [50],
+                }
+            ],
+        }
+
+        for candidate_count in (0, 2):
+            with self.subTest(candidate_count=candidate_count):
+                self.state_path.write_text(
+                    json.dumps(original_payload, indent=2) + "\n",
+                    encoding="utf-8",
+                )
+                original_bytes = self.state_path.read_bytes()
+                guild = FakeGuild()
+                guild.me.guild_permissions.manage_channels = False
+                for index in range(candidate_count):
+                    self.make_notification_channel(
+                        guild,
+                        channel_id=10 + index,
+                    )
+                notifier = StubNotifier(self.state_path)
+                notifier.result = SteamFetchResult(
+                    frozenset({offer.app_id}),
+                    (offer,),
+                )
+
+                await notifier.check_once([guild])
+
+                self.assertEqual(guild.created_channels, [])
+                self.assertTrue(
+                    all(channel.sent == [] for channel in guild.channels)
+                )
+                status = notifier.get_guild_status(guild.id)
+                self.assertEqual(status.channel_id, 999)
+                self.assertEqual(status.active_app_count, 1)
+                self.assertEqual(status.role_ids, (50,))
+                self.assertEqual(self.state_path.read_bytes(), original_bytes)
+                self.assertEqual(self.read_state(), original_payload)
+
+    async def test_concurrent_channel_creation_and_role_selection_are_serialized(self):
+        guild = FakeGuild()
+        role = FakeRole(50, guild)
+        guild.add_role(role)
+        creation_entered = asyncio.Event()
+        allow_creation = asyncio.Event()
+        original_create = guild.create_text_channel
+
+        async def controlled_create(name, *, reason=None):
+            creation_entered.set()
+            await allow_creation.wait()
+            return await original_create(name, reason=reason)
+
+        guild.create_text_channel = AsyncMock(side_effect=controlled_create)
+        notifier = StubNotifier(self.state_path)
+        check_task = asyncio.create_task(notifier.check_once([guild]))
+        await creation_entered.wait()
+        role_task = asyncio.create_task(
+            notifier.set_notification_roles(guild, (role,))
+        )
+        await asyncio.sleep(0)
+        self.assertFalse(role_task.done())
+
+        allow_creation.set()
+        await asyncio.gather(check_task, role_task)
+
+        guild.create_text_channel.assert_awaited_once_with(
+            NOTIFICATION_CHANNEL_NAME,
+            reason=unittest.mock.ANY,
+        )
+        self.assertEqual(len(guild.created_channels), 1)
+        status = notifier.get_guild_status(guild.id)
+        self.assertEqual(status.channel_id, guild.created_channels[0].id)
+        self.assertEqual(status.role_ids, (50,))
+        self.assertEqual(self.read_state()["guilds"][0]["role_ids"], [50])
+
+    async def test_absent_guild_keeps_shared_lock_for_waiting_tasks(self):
+        notifier = StubNotifier(self.state_path)
+        notifier._guilds[1] = SimpleNamespace(
+            channel_id=999,
+            active_app_ids=set(),
+            role_ids=set(),
+        )
+        notifier._persist_state()
+        lock = notifier._guild_locks[1]
+        await lock.acquire()
+        check_task = asyncio.create_task(notifier.check_once([]))
+        await asyncio.sleep(0)
+        waiter_acquired = asyncio.Event()
+        waiter_release = asyncio.Event()
+
+        async def waiter():
+            async with notifier._guild_locks[1]:
+                waiter_acquired.set()
+                await waiter_release.wait()
+
+        waiter_task = asyncio.create_task(waiter())
+        await asyncio.sleep(0)
+        lock.release()
+        await check_task
+        await waiter_acquired.wait()
+
+        self.assertIs(notifier._guild_locks[1], lock)
+        self.assertNotIn(1, notifier._guilds)
+        waiter_release.set()
+        await waiter_task
 
     async def test_missing_send_permission_does_not_mark_offer_active(self):
         guild = FakeGuild()

@@ -5,9 +5,20 @@ import time
 
 import discord
 
-from src.ai_client import AIRuntimeStatus
+from src.ai_client import AIClient, AIRuntimeStatus
 from src.chat import MAX_AGENT_TURNS, MAX_TOTAL_TOOL_CALLS, ChatManager
-from src.steam_free_games import SteamFetchResult, SteamFreeGamesNotifier, SteamOffer
+from src.server_activity import (
+    ActivitySummary,
+    ServerActivityMonitor,
+    ServerActivityStatus,
+    StoredActivityEvent,
+)
+from src.steam_free_games import (
+    SteamConfigurationError,
+    SteamFetchResult,
+    SteamFreeGamesNotifier,
+    SteamOffer,
+)
 from src.temp_voice import TempVoiceManager
 
 MAX_STEAM_OFFERS_SHOWN = 5
@@ -17,6 +28,7 @@ MAIN_PAGES = (
     ("overview", "總覽", "控制台首頁"),
     ("ai", "AI 助手", "模型、對話與 Agent 設定"),
     ("modules", "功能模組", "臨時語音與 Steam 免費遊戲"),
+    ("activity", "伺服器活動", "活動監聽與稽核紀錄"),
 )
 MODULE_PAGES = (
     ("voice", "臨時語音", "入口頻道與同步狀態"),
@@ -69,6 +81,48 @@ class _PanelSelect(discord.ui.Select["AdminPanelView"]):
             await view.handle_action(interaction, self.values[0])
 
 
+class _SteamRoleSelect(discord.ui.RoleSelect):
+    def __init__(self, *, disabled: bool, configured: bool) -> None:
+        super().__init__(
+            placeholder=(
+                "重新選擇 Steam 通知身分組"
+                if configured
+                else "選擇 Steam 通知身分組"
+            ),
+            min_values=1,
+            max_values=25,
+            disabled=disabled,
+        )
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        view = self.view
+        if isinstance(view, AdminPanelView) and self.values:
+            await view.handle_steam_role_select(interaction, tuple(self.values))
+
+
+class _ActivityFilterSelect(discord.ui.Select["AdminPanelView"]):
+    def __init__(self, current: str) -> None:
+        options = (
+            ("all", "全部"),
+            ("admin", "管理"),
+            ("member", "成員"),
+            ("message", "訊息"),
+            ("voice", "語音"),
+        )
+        super().__init__(
+            placeholder="篩選活動",
+            options=[
+                discord.SelectOption(label=label, value=value, default=value == current)
+                for value, label in options
+            ],
+        )
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        view = self.view
+        if isinstance(view, AdminPanelView):
+            await view.handle_action(interaction, f"activity_filter:{self.values[0]}")
+
+
 class AdminPanelView(discord.ui.LayoutView):
     def __init__(
         self,
@@ -76,31 +130,48 @@ class AdminPanelView(discord.ui.LayoutView):
         user_id: int,
         guild_id: int,
         chat: ChatManager,
+        ai_client: AIClient,
         ai_status: AIRuntimeStatus,
         temp_voice: TempVoiceManager,
         steam_free_games: SteamFreeGamesNotifier,
         temp_voice_enabled: bool = True,
         steam_free_games_enabled: bool = True,
+        server_activity: ServerActivityMonitor | None = None,
     ) -> None:
         super().__init__(timeout=15 * 60)
         self.user_id = user_id
         self.guild_id = guild_id
         self.chat = chat
+        self.ai_client = ai_client
         self.ai_status = ai_status
         self.temp_voice = temp_voice
         self.steam_free_games = steam_free_games
         self.temp_voice_enabled = temp_voice_enabled
         self.steam_free_games_enabled = steam_free_games_enabled
+        self.server_activity = server_activity
+        self.activity_filter = "all"
+        self._activity_summary: ActivitySummary | None = None
+        self._activity_recent: tuple[StoredActivityEvent, ...] = ()
+        self._activity_error = False
         self._overview_updated_at = int(time.time())
         self.page = "overview"
         self._render_overview()
 
     async def interaction_check(self, interaction: discord.Interaction, /) -> bool:
-        return (
+        allowed = (
             interaction.user.id == self.user_id
             and interaction.guild_id == self.guild_id
             and interaction.permissions.administrator
         )
+        if allowed:
+            return True
+        if not interaction.response.is_done():
+            await interaction.response.send_message(
+                "只有開啟控制台的伺服器管理員可以操作這個控制台。",
+                ephemeral=True,
+                allowed_mentions=discord.AllowedMentions.none(),
+            )
+        return False
 
     def _set_container(self, *children: discord.ui.Item) -> None:
         self.clear_items()
@@ -207,7 +278,7 @@ class AdminPanelView(discord.ui.LayoutView):
 
     async def _refresh_ai_status(self) -> None:
         try:
-            self.ai_status = await self.chat.ai_client.get_runtime_status()
+            self.ai_status = await self.ai_client.get_runtime_status()
         except Exception:
             logging.exception("管理控制台讀取 9Router 狀態失敗。")
             self.ai_status = AIRuntimeStatus(None, None, False, None)
@@ -243,6 +314,20 @@ class AdminPanelView(discord.ui.LayoutView):
         else:
             statuses.append(("Steam 免費遊戲", "正常", ""))
 
+        activity_status = (
+            self.server_activity.get_runtime_status()
+            if self.server_activity is not None
+            else None
+        )
+        if activity_status is None:
+            statuses.append(("伺服器活動", "停用", "依設定停用"))
+        elif not activity_status.available:
+            statuses.append(("伺服器活動", "異常", "活動儲存空間不可用"))
+        elif activity_status.dropped_event_count:
+            statuses.append(("伺服器活動", "異常", "有活動紀錄因佇列已滿而遺失"))
+        else:
+            statuses.append(("伺服器活動", "正常", ""))
+
         normal_count = sum(status == "正常" for _name, status, _detail in statuses)
         pending_count = sum(status == "待設定" for _name, status, _detail in statuses)
         error_count = sum(status == "異常" for _name, status, _detail in statuses)
@@ -252,8 +337,10 @@ class AdminPanelView(discord.ui.LayoutView):
             disabled_features.append("臨時語音")
         if not self.steam_free_games_enabled:
             disabled_features.append("Steam 自動通知")
-        if len(disabled_features) == 2:
-            disabled_text = f"{disabled_features[0]}與 {disabled_features[1]}依設定停用"
+        if self.server_activity is None:
+            disabled_features.append("伺服器活動")
+        if len(disabled_features) > 1:
+            disabled_text = f"{'、'.join(disabled_features[:-1])}與 {disabled_features[-1]}依設定停用"
         elif disabled_features:
             disabled_text = f"{disabled_features[0]}依設定停用"
         else:
@@ -270,7 +357,7 @@ class AdminPanelView(discord.ui.LayoutView):
                 health_text = (
                     "## 系統狀態\n"
                     "**全部正常**\n"
-                    "-# AI 助手、臨時語音與 Steam 免費遊戲皆可用"
+                    "-# AI 助手、臨時語音、Steam 免費遊戲與伺服器活動皆可用"
                 )
         else:
             disabled_suffix = f" · {disabled_count} 個停用" if disabled_count else ""
@@ -345,6 +432,92 @@ class AdminPanelView(discord.ui.LayoutView):
             )
         )
         self._set_container(*children)
+
+    def _render_activity(self) -> None:
+        self.page = "activity"
+        status: ServerActivityStatus | None = (
+            self.server_activity.get_runtime_status()
+            if self.server_activity is not None
+            else None
+        )
+        children: list[discord.ui.Item] = [
+            self._title("伺服器活動", "活動監聽與稽核紀錄"),
+            discord.ui.Separator(spacing=discord.SeparatorSpacing.large),
+            self._main_select("activity"),
+            discord.ui.ActionRow(_ActivityFilterSelect(self.activity_filter)),
+            discord.ui.Separator(),
+        ]
+        if status is None:
+            state_text = "## 目前狀態\n**依設定停用**\n-# 不會讀取活動資料 · 保存期限 30 天"
+        elif self._activity_error or not status.available:
+            state_text = "## 目前狀態\n**目前無法取得伺服器活動**\n-# 請稍後重新整理 · 保存期限 30 天"
+        else:
+            state_text = (
+                "## 目前狀態\n"
+                "**活動監聽正常**\n"
+                f"-# 30 天保存 · 佇列 {status.queue_size} / {status.queue_capacity} · "
+                f"已遺失 {status.dropped_event_count} 筆"
+            )
+        children.append(discord.ui.TextDisplay(state_text))
+
+        if status is not None and status.available and not self._activity_error:
+            summary = self._activity_summary or ActivitySummary()
+            children.extend(
+                (
+                    self._gap(),
+                    discord.ui.TextDisplay(
+                        "## 最近 24 小時\n"
+                        f"**總計 {summary.total}**　管理 {summary.admin}　成員 {summary.member}　"
+                        f"訊息 {summary.message}　語音 {summary.voice}　其他 {summary.other}"
+                    ),
+                    self._gap(),
+                    discord.ui.TextDisplay("## 最近活動"),
+                )
+            )
+            if not self._activity_recent:
+                children.append(discord.ui.TextDisplay("-# 尚無活動紀錄。"))
+            else:
+                for event in self._activity_recent[:10]:
+                    ids = " ".join(
+                        f"{name}={value}"
+                        for name, value in (
+                            ("actor", event.actor_id),
+                            ("target", event.target_id),
+                            ("channel", event.channel_id),
+                            ("message", event.message_id),
+                        )
+                        if value is not None
+                    )
+                    event_type = discord.utils.escape_markdown(event.event_type)
+                    suffix = f" · {ids}" if ids else ""
+                    children.append(
+                        discord.ui.TextDisplay(
+                            f"<t:{event.occurred_at}:f> · **{event_type}**{suffix}"
+                        )
+                    )
+        children.append(self._row(_PanelButton("refresh", "重新整理"), self._close_button()))
+        self._set_container(*children)
+
+    async def _refresh_activity(self) -> None:
+        if self.server_activity is None:
+            self._activity_summary = None
+            self._activity_recent = ()
+            self._activity_error = False
+            return
+        try:
+            summary = await self.server_activity.get_summary(self.guild_id)
+            recent = await self.server_activity.get_recent_events(
+                self.guild_id, self.activity_filter, limit=10
+            )
+        except Exception:
+            logging.error("管理控制台讀取伺服器活動失敗。")
+            self._activity_summary = None
+            self._activity_recent = ()
+            self._activity_error = True
+        else:
+            self._activity_summary = summary
+            self._activity_recent = tuple(recent[:10])
+            self._activity_error = False
 
     def _render_ai(self) -> None:
         self.page = "ai"
@@ -450,15 +623,18 @@ class AdminPanelView(discord.ui.LayoutView):
         result: SteamFetchResult | None = None,
         *,
         error: str | None = None,
+        notice: str | None = None,
     ) -> None:
         self.page = "steam"
         status = self.steam_free_games.get_guild_status(self.guild_id)
         if not self.steam_free_games_enabled:
             state = "自動通知依設定停用"
             channel = "手動查詢仍可使用"
+            role_status = "身分組通知依設定停用"
         elif not status.state_available:
             state = "狀態檔不可用"
             channel = "通知頻道無法讀取"
+            role_status = "身分組設定不可用"
         else:
             state = "狀態檔正常"
             channel = (
@@ -466,8 +642,16 @@ class AdminPanelView(discord.ui.LayoutView):
                 if status.channel_id
                 else "尚未綁定通知頻道"
             )
+            role_status = (
+                "通知身分組 " + " ".join(f"<@&{role_id}>" for role_id in status.role_ids)
+                if status.role_ids
+                else "未設定通知身分組"
+            )
+        role_controls_disabled = (
+            not self.steam_free_games_enabled or not status.state_available
+        )
         children: list[discord.ui.Item] = [
-            self._title("Steam 限時免費", "只查詢目前的 100% 折扣，不會發送公開通知"),
+            self._title("Steam 限時免費", "管理自動通知與手動查詢"),
             discord.ui.Separator(spacing=discord.SeparatorSpacing.large),
             self._main_select("modules"),
             self._module_select("steam"),
@@ -475,10 +659,23 @@ class AdminPanelView(discord.ui.LayoutView):
             discord.ui.TextDisplay(
                 "## 通知狀態\n"
                 f"**{status.active_app_count} 款活動中**\n"
-                f"-# {channel} · 每 {int(status.poll_interval_seconds // 60)} 分鐘檢查 · {state}"
+                f"-# {channel} · {role_status} · 每 {int(status.poll_interval_seconds // 60)} 分鐘檢查 · {state}"
+            ),
+            discord.ui.ActionRow(
+                _SteamRoleSelect(
+                    disabled=role_controls_disabled,
+                    configured=bool(status.role_ids),
+                )
             ),
             self._gap(),
         ]
+
+        if notice:
+            children.append(
+                discord.ui.TextDisplay(
+                    f"## 最近操作\n-# {discord.utils.escape_markdown(notice)}"
+                )
+            )
 
         if error:
             children.append(
@@ -512,6 +709,11 @@ class AdminPanelView(discord.ui.LayoutView):
 
         children.append(
             self._row(
+                _PanelButton(
+                    "steam_role_clear",
+                    "取消身分組通知",
+                    disabled=role_controls_disabled or not status.role_ids,
+                ),
                 _PanelButton("steam_query", "重新查詢", style=discord.ButtonStyle.primary),
                 self._close_button(),
             )
@@ -535,13 +737,55 @@ class AdminPanelView(discord.ui.LayoutView):
             self._render_voice()
         elif page == "steam":
             self._render_steam()
+        elif page == "activity":
+            self._render_activity()
         else:
             self._render_overview()
 
     async def _edit(self, interaction: discord.Interaction) -> None:
-        await interaction.response.edit_message(view=self)
+        await interaction.response.edit_message(
+            view=self,
+            allowed_mentions=discord.AllowedMentions.none(),
+        )
+
+    async def handle_steam_role_select(
+        self,
+        interaction: discord.Interaction,
+        roles: tuple[discord.Role, ...],
+    ) -> None:
+        await interaction.response.defer()
+        if not self.steam_free_games_enabled:
+            self._render_steam(notice="Steam 自動通知已停用，未修改身分組設定。")
+        elif interaction.guild is None:
+            self._render_steam(notice="無法取得目前伺服器。")
+        else:
+            try:
+                await self.steam_free_games.set_notification_roles(interaction.guild, roles)
+            except SteamConfigurationError as exc:
+                self._render_steam(notice=str(exc))
+            else:
+                self._render_steam(
+                    notice=f"已更新 Steam 免費遊戲通知身分組，共 {len(roles)} 個。"
+                )
+        await interaction.edit_original_response(
+            view=self,
+            allowed_mentions=discord.AllowedMentions.none(),
+        )
 
     async def handle_action(self, interaction: discord.Interaction, action: str) -> None:
+        if action == "activity" or action.startswith("activity_filter:"):
+            if action.startswith("activity_filter:"):
+                requested_filter = action.partition(":")[2]
+                if requested_filter in {"all", "admin", "member", "message", "voice"}:
+                    self.activity_filter = requested_filter
+            await interaction.response.defer()
+            await self._refresh_activity()
+            self._render_activity()
+            await interaction.edit_original_response(
+                view=self,
+                allowed_mentions=discord.AllowedMentions.none(),
+            )
+            return
         if action in ("overview", "modules", "voice", "steam"):
             self._render_page(action)
             await self._edit(interaction)
@@ -550,15 +794,30 @@ class AdminPanelView(discord.ui.LayoutView):
             await interaction.response.defer()
             await self._refresh_ai_status()
             self._render_ai()
-            await interaction.edit_original_response(view=self)
+            await interaction.edit_original_response(
+                view=self,
+                allowed_mentions=discord.AllowedMentions.none(),
+            )
             return
         if action == "refresh":
             await interaction.response.defer()
-            await self._refresh_ai_status()
+            if self.page == "activity":
+                await self._refresh_activity()
+                self._render_activity()
+                await interaction.edit_original_response(
+                    view=self,
+                    allowed_mentions=discord.AllowedMentions.none(),
+                )
+                return
+            if self.page in ("overview", "ai"):
+                await self._refresh_ai_status()
             if self.page == "overview":
                 self._overview_updated_at = int(time.time())
             self._render_page(self.page)
-            await interaction.edit_original_response(view=self)
+            await interaction.edit_original_response(
+                view=self,
+                allowed_mentions=discord.AllowedMentions.none(),
+            )
             return
         if action == "close":
             self._render_closed()
@@ -569,7 +828,10 @@ class AdminPanelView(discord.ui.LayoutView):
             await interaction.response.defer()
             if not self.temp_voice_enabled:
                 self._render_voice("功能已停用，未執行同步。")
-                await interaction.edit_original_response(view=self)
+                await interaction.edit_original_response(
+                    view=self,
+                    allowed_mentions=discord.AllowedMentions.none(),
+                )
                 return
             guild = interaction.guild
             if guild is None:
@@ -582,7 +844,35 @@ class AdminPanelView(discord.ui.LayoutView):
                     self._render_voice("重新同步失敗，請查看 Bot 紀錄。")
                 else:
                     self._render_voice("已重新執行同步流程。")
-            await interaction.edit_original_response(view=self)
+            await interaction.edit_original_response(
+                view=self,
+                allowed_mentions=discord.AllowedMentions.none(),
+            )
+            return
+
+        if action == "steam_role_clear":
+            await interaction.response.defer()
+            if not self.steam_free_games_enabled:
+                self._render_steam(notice="Steam 自動通知已停用，未修改身分組設定。")
+            else:
+                try:
+                    removed = await self.steam_free_games.clear_notification_roles(
+                        self.guild_id
+                    )
+                except SteamConfigurationError as exc:
+                    self._render_steam(notice=str(exc))
+                else:
+                    self._render_steam(
+                        notice=(
+                            "已取消 Steam 免費遊戲通知身分組。"
+                            if removed
+                            else "目前沒有設定 Steam 通知身分組。"
+                        )
+                    )
+            await interaction.edit_original_response(
+                view=self,
+                allowed_mentions=discord.AllowedMentions.none(),
+            )
             return
 
         if action == "steam_query":
@@ -597,4 +887,7 @@ class AdminPanelView(discord.ui.LayoutView):
                     self._render_steam(error="目前無法取得 Steam 資料。")
                 else:
                     self._render_steam(result)
-            await interaction.edit_original_response(view=self)
+            await interaction.edit_original_response(
+                view=self,
+                allowed_mentions=discord.AllowedMentions.none(),
+            )

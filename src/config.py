@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import os
 
 _TRUE_VALUES = {"1", "true", "yes", "on"}
@@ -44,9 +44,9 @@ def positive_int_env(name: str, *, default: int) -> int:
 
 @dataclass(frozen=True, slots=True)
 class AppConfig:
-    discord_token: str
+    discord_token: str = field(repr=False)
     ninerouter_url: str
-    ninerouter_api_key: str
+    ninerouter_api_key: str = field(repr=False)
     ninerouter_model: str
     web_search_provider: str
     image_search_provider: str
@@ -57,6 +57,7 @@ class AppConfig:
     temp_voice_enabled: bool
     steam_free_games_enabled: bool
     ai_text_display_enabled: bool
+    server_activity_enabled: bool
 
     @classmethod
     def from_env(cls) -> AppConfig:
@@ -108,5 +109,9 @@ class AppConfig:
             ai_text_display_enabled=env_flag(
                 "AI_TEXT_DISPLAY_ENABLED",
                 default=True,
+            ),
+            server_activity_enabled=env_flag(
+                "SERVER_ACTIVITY_ENABLED",
+                default=False,
             ),
         )

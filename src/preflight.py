@@ -19,6 +19,7 @@ def main() -> None:
         "temp_voice_enabled": config.temp_voice_enabled,
         "steam_free_games_enabled": config.steam_free_games_enabled,
         "ai_text_display_enabled": config.ai_text_display_enabled,
+        "server_activity_enabled": config.server_activity_enabled,
     }
     print(json.dumps(safe_summary, ensure_ascii=False, indent=2, sort_keys=True))
 

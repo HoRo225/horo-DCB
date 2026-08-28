@@ -51,6 +51,30 @@ class ConfigHelpersTest(unittest.TestCase):
 
 
 class AppConfigTest(unittest.TestCase):
+    def test_repr_hides_secrets(self):
+        config = AppConfig(
+            discord_token="distinctive-discord-token",
+            ninerouter_url="http://9router:20128/v1",
+            ninerouter_api_key="distinctive-9router-api-key",
+            ninerouter_model="configured-model",
+            web_search_provider="configured-search",
+            image_search_provider="configured-images",
+            web_fetch_provider="configured-fetch",
+            embedding_model="configured-embedding",
+            embedding_dimensions=768,
+            semantic_memory_enabled=True,
+            temp_voice_enabled=True,
+            steam_free_games_enabled=True,
+            ai_text_display_enabled=True,
+            server_activity_enabled=False,
+        )
+
+        config_repr = repr(config)
+
+        self.assertNotIn("distinctive-discord-token", config_repr)
+        self.assertNotIn("distinctive-9router-api-key", config_repr)
+        self.assertIn("ninerouter_url='http://9router:20128/v1'", config_repr)
+
     def test_defaults_preserve_existing_deployment_behavior(self):
         with (
             patch("src.config.required_env", return_value="configured"),
@@ -64,6 +88,7 @@ class AppConfigTest(unittest.TestCase):
         self.assertEqual(config.embedding_dimensions, 768)
         self.assertTrue(config.semantic_memory_enabled)
         self.assertTrue(config.ai_text_display_enabled)
+        self.assertFalse(config.server_activity_enabled)
 
     def test_optional_features_can_be_disabled_explicitly(self):
         with (
@@ -73,6 +98,7 @@ class AppConfigTest(unittest.TestCase):
                 {
                     "SEMANTIC_MEMORY_ENABLED": "0",
                     "AI_TEXT_DISPLAY_ENABLED": "false",
+                    "SERVER_ACTIVITY_ENABLED": "true",
                     "NINEROUTER_IMAGE_SEARCH_PROVIDER": "trusted-images",
                     "NINEROUTER_EMBEDDING_DIMENSIONS": "1536",
                 },
@@ -83,6 +109,7 @@ class AppConfigTest(unittest.TestCase):
 
         self.assertFalse(config.semantic_memory_enabled)
         self.assertFalse(config.ai_text_display_enabled)
+        self.assertTrue(config.server_activity_enabled)
         self.assertEqual(config.image_search_provider, "trusted-images")
         self.assertEqual(config.embedding_dimensions, 1536)
 

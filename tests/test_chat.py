@@ -22,15 +22,7 @@ from src.chat import (
 class FakeAIClient:
     def __init__(self, *responses):
         self.responses = list(responses) or [AIResponse("answer", ())]
-        self.started = False
-        self.closed = False
         self.calls = []
-
-    async def start(self):
-        self.started = True
-
-    async def close(self):
-        self.closed = True
 
     async def chat(self, messages, tools=None):
         self.calls.append(
@@ -172,15 +164,11 @@ class ChatManagerTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(MAX_TOTAL_TOOL_CALLS, 4)
         self.assertEqual(AGENT_TIMEOUT_SECONDS, 120)
 
-    async def test_lifecycle_is_owned_by_chat_manager(self):
-        ai_client = FakeAIClient()
-        chat = ChatManager(ai_client, FakeAgentTools())
+    def test_chat_manager_has_no_lifecycle_methods(self):
+        chat = ChatManager(FakeAIClient(), FakeAgentTools())
 
-        await chat.start()
-        await chat.close()
-
-        self.assertTrue(ai_client.started)
-        self.assertTrue(ai_client.closed)
+        self.assertFalse(hasattr(chat, "start"))
+        self.assertFalse(hasattr(chat, "close"))
 
     async def test_history_keeps_latest_50_messages(self):
         ai_client = FakeAIClient()

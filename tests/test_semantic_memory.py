@@ -4,6 +4,7 @@ from pathlib import Path
 import sqlite3
 import stat
 import tempfile
+import threading
 import unittest
 from unittest.mock import patch
 
@@ -72,19 +73,17 @@ class SemanticMemoryDatabaseTest(unittest.IsolatedAsyncioTestCase):
         self.addCleanup(self.tempdir.cleanup)
         self.db_path = Path(self.tempdir.name) / "semantic.sqlite3"
 
-    async def test_start_creates_schema_metadata_and_mode_600(self):
+    async def test_initialize_creates_schema_metadata_and_connection_pragmas(self):
         memory = SemanticMemory(
             FakeAIClient(),
             embedding_model="test-model",
             embedding_dimensions=4,
             db_path=self.db_path,
         )
-        await memory.start()
-        self.addAsyncCleanup(memory.close)
+        memory._initialize_db()
 
-        self.assertTrue(memory.available)
         self.assertEqual(stat.S_IMODE(self.db_path.stat().st_mode), 0o600)
-        with closing(sqlite3.connect(self.db_path)) as connection, connection:
+        with closing(memory._connect()) as connection, connection:
             metadata = dict(
                 connection.execute(
                     "SELECT key, value FROM semantic_memory_meta"
@@ -101,6 +100,7 @@ class SemanticMemoryDatabaseTest(unittest.IsolatedAsyncioTestCase):
                 )
             }
             journal_mode = connection.execute("PRAGMA journal_mode").fetchone()[0]
+            synchronous = connection.execute("PRAGMA synchronous").fetchone()[0]
             failure_table = connection.execute(
                 "SELECT 1 FROM sqlite_master WHERE type='table' "
                 "AND name='semantic_embedding_failures'"
@@ -109,6 +109,7 @@ class SemanticMemoryDatabaseTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(metadata["embedding_model"], "test-model")
         self.assertEqual(metadata["embedding_dimensions"], "4")
         self.assertEqual(journal_mode, "wal")
+        self.assertEqual(synchronous, 1)
         self.assertIsNotNone(failure_table)
         self.assertIn("idx_semantic_failure_retry", failure_indexes)
         self.assertIn("idx_semantic_channel_state", indexes)
@@ -353,6 +354,47 @@ class SemanticMemoryDatabaseTest(unittest.IsolatedAsyncioTestCase):
         with closing(sqlite3.connect(self.db_path)) as connection, connection:
             row = connection.execute(
                 "SELECT 1 FROM semantic_messages WHERE message_id=41"
+            ).fetchone()
+        self.assertIsNone(row)
+
+    async def test_later_delete_waits_for_earlier_capture_mutation(self):
+        memory = SemanticMemory(
+            FakeAIClient(),
+            embedding_model="test-model",
+            embedding_dimensions=4,
+            db_path=self.db_path,
+        )
+        memory._initialize_db()
+        memory.available = True
+        capture_entered = threading.Event()
+        release_capture = threading.Event()
+        original_capture_sync = memory._capture_sync
+
+        def blocking_capture_sync(*args):
+            capture_entered.set()
+            self.assertTrue(release_capture.wait(timeout=2.0))
+            original_capture_sync(*args)
+
+        with patch.object(memory, "_capture_sync", side_effect=blocking_capture_sync):
+            capture_task = asyncio.create_task(
+                memory.capture_message(
+                    message_id=42,
+                    guild_id=100,
+                    channel_id=200,
+                    author_name="Alice",
+                    content="earlier capture",
+                    created_at=1_700_000_000,
+                )
+            )
+            self.assertTrue(await asyncio.to_thread(capture_entered.wait, 2.0))
+            delete_task = asyncio.create_task(memory.delete_message(42))
+            await asyncio.sleep(0)
+            release_capture.set()
+            await asyncio.gather(capture_task, delete_task)
+
+        with closing(sqlite3.connect(self.db_path)) as connection:
+            row = connection.execute(
+                "SELECT 1 FROM semantic_messages WHERE message_id=42"
             ).fetchone()
         self.assertIsNone(row)
 

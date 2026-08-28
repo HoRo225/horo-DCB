@@ -118,6 +118,11 @@ class FakeTempVoice:
         if self.error is not None:
             raise self.error
 
+    async def delete_guild(self, guild_id):
+        self.deleted.append(guild_id)
+        if self.error is not None:
+            raise self.error
+
 
 def make_message(
     *,
@@ -262,6 +267,84 @@ class SemanticMemoryBotEventTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(temp_voice.deleted, [50])
         self.assertEqual(memory.deleted_channels, [50])
 
+    async def test_guild_remove_cleanup_is_independent_when_temp_voice_fails(self):
+        memory = FakeSemanticMemory()
+        chat = FakeChat()
+        temp_voice = FakeTempVoice(error=RuntimeError("voice failed"))
+        calendar = SimpleNamespace(delete_guild=unittest.mock.Mock())
+        bot = SimpleNamespace(
+            semantic_memory=memory,
+            temp_voice=temp_voice,
+            chat=chat,
+            calendar=calendar,
+        )
+        guild = SimpleNamespace(
+            id=20,
+            channels=[SimpleNamespace(id=50)],
+            threads=[SimpleNamespace(id=51)],
+        )
+
+        await HoroBot.on_guild_remove(bot, guild)
+
+        self.assertEqual(temp_voice.deleted, [20])
+        self.assertEqual(memory.deleted_guilds, [20])
+        self.assertEqual(chat.forgotten_channels, [50, 51])
+        calendar.delete_guild.assert_called_once_with(20)
+
+    async def test_guild_remove_activity_failure_does_not_block_other_cleanup(self):
+        memory = FakeSemanticMemory()
+        chat = FakeChat()
+        temp_voice = FakeTempVoice()
+        calendar = SimpleNamespace(delete_guild=unittest.mock.Mock())
+        activity = SimpleNamespace(
+            delete_guild=AsyncMock(side_effect=RuntimeError("activity failed"))
+        )
+        bot = SimpleNamespace(
+            semantic_memory=memory,
+            temp_voice=temp_voice,
+            chat=chat,
+            calendar=calendar,
+            server_activity=activity,
+        )
+        guild = SimpleNamespace(
+            id=20,
+            channels=[SimpleNamespace(id=50)],
+            threads=[SimpleNamespace(id=51)],
+        )
+
+        await HoroBot.on_guild_remove(bot, guild)
+
+        activity.delete_guild.assert_awaited_once_with(20)
+        calendar.delete_guild.assert_called_once_with(20)
+        self.assertEqual(temp_voice.deleted, [20])
+        self.assertEqual(memory.deleted_guilds, [20])
+        self.assertEqual(chat.forgotten_channels, [50, 51])
+
+    async def test_guild_remove_existing_cleanup_failures_are_independent(self):
+        memory = FakeSemanticMemory()
+        memory.delete_guild = AsyncMock(side_effect=RuntimeError("memory failed"))
+        temp_voice = FakeTempVoice()
+        chat = FakeChat()
+        chat.forget_channel = unittest.mock.Mock(side_effect=RuntimeError("chat failed"))
+        calendar = SimpleNamespace(
+            delete_guild=unittest.mock.Mock(side_effect=RuntimeError("calendar failed"))
+        )
+        bot = SimpleNamespace(
+            semantic_memory=memory,
+            temp_voice=temp_voice,
+            chat=chat,
+            calendar=calendar,
+        )
+
+        await HoroBot.on_guild_remove(
+            bot,
+            SimpleNamespace(id=20, channels=[SimpleNamespace(id=50)], threads=[]),
+        )
+
+        self.assertEqual(temp_voice.deleted, [20])
+        memory.delete_guild.assert_awaited_once_with(20)
+        calendar.delete_guild.assert_called_once_with(20)
+
     async def test_channel_cleanup_is_safe_when_semantic_memory_is_disabled(self):
         chat = FakeChat()
         temp_voice = FakeTempVoice()
@@ -286,7 +369,7 @@ class SemanticMemoryBotEventTest(unittest.IsolatedAsyncioTestCase):
         )
         await HoroBot.on_guild_remove(bot, SimpleNamespace(id=20))
 
-        self.assertEqual(temp_voice.deleted, [51])
+        self.assertEqual(temp_voice.deleted, [51, 20])
         self.assertEqual(chat.forgotten_channels, [51, 52])
 
     async def test_raw_edit_updates_only_existing_human_guild_message(self):

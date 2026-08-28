@@ -1,10 +1,11 @@
+import asyncio
 import json
 from datetime import datetime, timezone
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from types import SimpleNamespace
 import unittest
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, call, patch
 
 import discord
 
@@ -16,8 +17,10 @@ from src.calendar_events import (
     BOARD_EDIT_CUSTOM_ID,
     BOARD_REFRESH_CUSTOM_ID,
     CALENDAR_TZ,
+    CalendarAdminView,
     CalendarBinding,
     CalendarDraft,
+    CalendarDraftCreateModal,
     CalendarEditPickerView,
     CalendarManager,
     CalendarScope,
@@ -304,6 +307,55 @@ class CalendarBoardTest(unittest.IsolatedAsyncioTestCase):
         now = datetime(2026, 8, 24, 23, 30, tzinfo=CALENDAR_TZ)
         self.assertEqual(self.manager.seconds_until_next_midnight(now), 30 * 60)
 
+    async def test_midnight_loop_isolates_guild_refresh_errors(self):
+        first_guild = FakeGuild(1)
+        second_guild = FakeGuild(2)
+        self.manager._bindings = {
+            1: CalendarBinding(1, 10, 20),
+            2: CalendarBinding(2, 11, 21),
+        }
+        self.manager._client = SimpleNamespace(
+            wait_until_ready=AsyncMock(),
+            get_guild=lambda guild_id: {1: first_guild, 2: second_guild}.get(guild_id),
+        )
+        secret = "midnight-secret"
+        self.manager.refresh_guild = AsyncMock(
+            side_effect=[RuntimeError(secret), True]
+        )
+
+        with (
+            patch(
+                "src.calendar_events.asyncio.sleep",
+                new=AsyncMock(side_effect=[None, asyncio.CancelledError()]),
+            ) as sleep,
+            self.assertLogs(level="ERROR") as captured,
+        ):
+            with self.assertRaises(asyncio.CancelledError):
+                await self.manager._run_midnight_loop()
+
+        self.manager.refresh_guild.assert_has_awaits(
+            [call(first_guild), call(second_guild)]
+        )
+        self.assertEqual(sleep.await_count, 2)
+        self.assertEqual(captured.output, ["ERROR:root:行事曆午夜重新整理失敗。"])
+        self.assertNotIn(secret, "\n".join(captured.output))
+
+    async def test_midnight_guard_logs_task_error_without_detail(self):
+        secret = "task-secret"
+        self.manager._run_midnight_loop = AsyncMock(side_effect=RuntimeError(secret))
+
+        with self.assertLogs(level="ERROR") as captured:
+            await self.manager._guard_midnight_loop()
+
+        self.assertEqual(captured.output, ["ERROR:root:行事曆午夜背景工作異常終止。"])
+        self.assertNotIn(secret, "\n".join(captured.output))
+
+    async def test_midnight_guard_propagates_cancellation(self):
+        self.manager._run_midnight_loop = AsyncMock(side_effect=asyncio.CancelledError())
+
+        with self.assertRaises(asyncio.CancelledError):
+            await self.manager._guard_midnight_loop()
+
     async def test_bind_persists_message_and_unbind_removes_it(self):
         guild = FakeGuild()
         channel = FakeTextChannel()
@@ -519,6 +571,169 @@ class CalendarBoardTest(unittest.IsolatedAsyncioTestCase):
         self.manager.create_event.assert_not_awaited()
         interaction.followup.send.assert_awaited_once()
 
+    async def test_concurrent_confirm_calls_create_event_once(self):
+        self.manager._bindings[1] = CalendarBinding(1, 10, 20)
+        draft = CalendarDraft(
+            "create",
+            build_calendar_event_input(
+                name="團練",
+                start="2099-08-25 20:00",
+                duration_minutes=60,
+                location="Discord",
+            ),
+        )
+        started = asyncio.Event()
+        release = asyncio.Event()
+
+        async def create_event(*_args):
+            started.set()
+            await release.wait()
+            return make_event(event_id=900)
+
+        self.manager.create_event = AsyncMock(side_effect=create_event)
+        view = self.manager.confirmation_view(draft, user_id=7, guild_id=1)
+        button = next(child for child in view.children if child.label == "確認")
+
+        def interaction():
+            return SimpleNamespace(
+                guild=FakeGuild(),
+                guild_id=1,
+                user=SimpleNamespace(
+                    id=7,
+                    guild_permissions=SimpleNamespace(administrator=False, manage_events=True),
+                ),
+                response=SimpleNamespace(defer=AsyncMock()),
+                followup=SimpleNamespace(send=AsyncMock()),
+                message=None,
+            )
+
+        first = interaction()
+        second = interaction()
+        first_task = asyncio.create_task(button.callback(first))
+        await started.wait()
+        await button.callback(second)
+        release.set()
+        await first_task
+
+        self.manager.create_event.assert_awaited_once()
+        self.assertIn("正在處理或已完成", second.followup.send.await_args.args[0])
+
+    async def test_confirm_and_cancel_cannot_both_win(self):
+        self.manager._bindings[1] = CalendarBinding(1, 10, 20)
+        draft = CalendarDraft(
+            "create",
+            build_calendar_event_input(
+                name="團練",
+                start="2099-08-25 20:00",
+                duration_minutes=60,
+                location="Discord",
+            ),
+        )
+        started = asyncio.Event()
+        release = asyncio.Event()
+
+        async def create_event(*_args):
+            started.set()
+            await release.wait()
+            return make_event(event_id=900)
+
+        self.manager.create_event = AsyncMock(side_effect=create_event)
+        view = self.manager.confirmation_view(draft, user_id=7, guild_id=1)
+        confirm = next(child for child in view.children if child.label == "確認")
+        cancel = next(child for child in view.children if child.label == "取消")
+        confirm_interaction = SimpleNamespace(
+            guild=FakeGuild(), guild_id=1,
+            user=SimpleNamespace(
+                id=7,
+                guild_permissions=SimpleNamespace(administrator=False, manage_events=True),
+            ),
+            response=SimpleNamespace(defer=AsyncMock()),
+            followup=SimpleNamespace(send=AsyncMock()), message=None,
+        )
+        cancel_interaction = SimpleNamespace(
+            response=SimpleNamespace(edit_message=AsyncMock(), send_message=AsyncMock())
+        )
+
+        confirm_task = asyncio.create_task(confirm.callback(confirm_interaction))
+        await started.wait()
+        await cancel.callback(cancel_interaction)
+        release.set()
+        await confirm_task
+
+        self.manager.create_event.assert_awaited_once()
+        cancel_interaction.response.edit_message.assert_not_awaited()
+        self.assertIn(
+            "正在處理或已完成",
+            cancel_interaction.response.send_message.await_args.args[0],
+        )
+
+    async def test_completed_confirmation_modal_cannot_mutate(self):
+        draft = CalendarDraft(
+            "create",
+            build_calendar_event_input(
+                name="團練",
+                start="2099-08-25 20:00",
+                duration_minutes=60,
+                location="Discord",
+            ),
+        )
+        self.manager.create_event = AsyncMock()
+        view = self.manager.confirmation_view(draft, user_id=7, guild_id=1)
+        self.assertTrue(await view.begin_action())
+        await view.complete_action()
+        modal = CalendarDraftCreateModal(
+            self.manager,
+            draft,
+            source_message=None,
+            confirmation_view=view,
+        )
+        interaction = SimpleNamespace(
+            guild=FakeGuild(),
+            user=SimpleNamespace(id=7),
+            response=SimpleNamespace(defer=AsyncMock()),
+            followup=SimpleNamespace(send=AsyncMock()),
+        )
+
+        await modal.on_submit(interaction)
+
+        self.manager.create_event.assert_not_awaited()
+        self.assertIn("正在處理或已完成", interaction.followup.send.await_args.args[0])
+
+    async def test_confirmation_calendar_user_error_can_retry_successfully(self):
+        self.manager._bindings[1] = CalendarBinding(1, 10, 20)
+        draft = CalendarDraft(
+            "create",
+            build_calendar_event_input(
+                name="團練",
+                start="2099-08-25 20:00",
+                duration_minutes=60,
+                location="Discord",
+            ),
+        )
+        self.manager.create_event = AsyncMock(
+            side_effect=[CalendarUserError("暫時失敗"), make_event(event_id=900)]
+        )
+        view = self.manager.confirmation_view(draft, user_id=7, guild_id=1)
+        button = next(child for child in view.children if child.label == "確認")
+
+        def interaction():
+            return SimpleNamespace(
+                guild=FakeGuild(), guild_id=1,
+                user=SimpleNamespace(
+                    id=7,
+                    guild_permissions=SimpleNamespace(administrator=False, manage_events=True),
+                ),
+                response=SimpleNamespace(defer=AsyncMock()),
+                followup=SimpleNamespace(send=AsyncMock()), message=None,
+            )
+
+        await button.callback(interaction())
+        retry = interaction()
+        await button.callback(retry)
+
+        self.assertEqual(self.manager.create_event.await_count, 2)
+        self.assertIn("已建立活動", retry.followup.send.await_args.args[0])
+
     async def test_board_edit_uses_cache_and_responds_without_thinking(self):
         self.manager._bindings[1] = CalendarBinding(1, 10, 20)
         guild = FakeGuild()
@@ -596,6 +811,88 @@ class CalendarBoardTest(unittest.IsolatedAsyncioTestCase):
         interaction.response.edit_message.assert_awaited_once()
         interaction.followup.send.assert_not_awaited()
         self.assertEqual(guild.fetch_events_calls, 0)
+
+    async def test_admin_panel_channel_select_binds_with_silent_defer(self):
+        guild = FakeGuild()
+        channel = FakeTextChannel(10)
+        guild.add_channel(channel)
+        view = self.manager.admin_view(user_id=7, guild_id=guild.id)
+        channel_select = next(
+            item for item in view.children if isinstance(item, discord.ui.ChannelSelect)
+        )
+        channel_select._values = [SimpleNamespace(resolve=lambda: channel)]
+        interaction = SimpleNamespace(
+            guild=guild,
+            guild_id=guild.id,
+            user=SimpleNamespace(id=7),
+            permissions=SimpleNamespace(administrator=True),
+            response=SimpleNamespace(defer=AsyncMock()),
+            edit_original_response=AsyncMock(),
+        )
+
+        await channel_select.callback(interaction)
+
+        interaction.response.defer.assert_awaited_once_with()
+        interaction.edit_original_response.assert_awaited_once()
+        binding = self.manager.get_binding(guild.id)
+        self.assertIsNotNone(binding)
+        self.assertEqual(binding.channel_id, channel.id)
+        self.assertEqual(len(channel.sent), 1)
+        self.assertIn("已將行事曆看板綁定", interaction.edit_original_response.await_args.kwargs["content"])
+        buttons = [item for item in view.children if isinstance(item, discord.ui.Button)]
+        self.assertTrue(all(not item.disabled for item in buttons))
+
+    async def test_admin_panel_refresh_and_unbind_are_buttons_with_silent_defer(self):
+        guild = FakeGuild()
+        channel = FakeTextChannel(10)
+        guild.add_channel(channel)
+        await self.manager.bind(guild, channel, actor_id=7)
+        view = self.manager.admin_view(user_id=7, guild_id=guild.id)
+
+        refresh_button = next(item for item in view.children if getattr(item, "label", None) == "重新整理看板")
+        refresh_interaction = SimpleNamespace(
+            guild=guild,
+            guild_id=guild.id,
+            user=SimpleNamespace(id=7),
+            permissions=SimpleNamespace(administrator=True),
+            response=SimpleNamespace(defer=AsyncMock()),
+            edit_original_response=AsyncMock(),
+        )
+        await refresh_button.callback(refresh_interaction)
+
+        refresh_interaction.response.defer.assert_awaited_once_with()
+        refresh_interaction.edit_original_response.assert_awaited_once()
+        self.assertIn("已重新整理", refresh_interaction.edit_original_response.await_args.kwargs["content"])
+
+        unbind_button = next(item for item in view.children if getattr(item, "label", None) == "解除綁定")
+        unbind_interaction = SimpleNamespace(
+            guild=guild,
+            guild_id=guild.id,
+            user=SimpleNamespace(id=7),
+            permissions=SimpleNamespace(administrator=True),
+            response=SimpleNamespace(defer=AsyncMock()),
+            edit_original_response=AsyncMock(),
+        )
+        await unbind_button.callback(unbind_interaction)
+
+        unbind_interaction.response.defer.assert_awaited_once_with()
+        unbind_interaction.edit_original_response.assert_awaited_once()
+        self.assertIsNone(self.manager.get_binding(guild.id))
+        self.assertIn("已解除", unbind_interaction.edit_original_response.await_args.kwargs["content"])
+        buttons = [item for item in view.children if isinstance(item, discord.ui.Button)]
+        self.assertTrue(all(item.disabled for item in buttons))
+
+    async def test_admin_panel_rejects_other_user_or_revoked_admin(self):
+        view = self.manager.admin_view(user_id=7, guild_id=1)
+        for user_id, administrator in ((8, True), (7, False)):
+            interaction = SimpleNamespace(
+                guild_id=1,
+                user=SimpleNamespace(id=user_id),
+                permissions=SimpleNamespace(administrator=administrator),
+                response=SimpleNamespace(send_message=AsyncMock()),
+            )
+            self.assertFalse(await view.interaction_check(interaction))
+            interaction.response.send_message.assert_awaited_once()
 
 
 class CalendarAgentToolsTest(unittest.IsolatedAsyncioTestCase):
@@ -825,7 +1122,7 @@ class CalendarChatIntegrationTest(unittest.IsolatedAsyncioTestCase):
 
 
 class CalendarBotIntegrationTest(unittest.IsolatedAsyncioTestCase):
-    def test_calendar_group_and_scheduled_event_intent_are_registered(self):
+    def test_calendar_is_single_admin_command_and_scheduled_event_intent_is_registered(self):
         with TemporaryDirectory() as temp_dir:
             manager = CalendarManager(Path(temp_dir) / "calendar_board.json")
             bot = HoroBot(
@@ -833,48 +1130,48 @@ class CalendarBotIntegrationTest(unittest.IsolatedAsyncioTestCase):
                 SimpleNamespace(),
                 SimpleNamespace(),
                 calendar=manager,
+                ai_client=SimpleNamespace(),
             )
 
-            group = bot.tree.get_command("行事曆")
-            self.assertIsNotNone(group)
+            command = bot.tree.get_command("行事曆")
+            self.assertIsNotNone(command)
+            self.assertEqual(command.description, "開啟行事曆管理")
+            self.assertTrue(command.guild_only)
+            self.assertIsNotNone(command.default_permissions)
+            self.assertTrue(command.default_permissions.administrator)
+            self.assertFalse(hasattr(command, "commands"))
             self.assertTrue(bot.intents.guild_scheduled_events)
-            self.assertEqual(
-                {command.name for command in group.commands},
-                {"綁定", "解除綁定", "重新整理"},
+
+    async def test_calendar_command_opens_ephemeral_admin_panel(self):
+        with TemporaryDirectory() as temp_dir:
+            manager = CalendarManager(Path(temp_dir) / "calendar_board.json")
+            bot = HoroBot(
+                SimpleNamespace(),
+                SimpleNamespace(),
+                SimpleNamespace(),
+                calendar=manager,
+                ai_client=SimpleNamespace(),
+            )
+            interaction = SimpleNamespace(
+                guild=SimpleNamespace(id=1),
+                permissions=SimpleNamespace(administrator=True),
+                user=SimpleNamespace(id=7),
+                response=SimpleNamespace(send_message=AsyncMock()),
             )
 
-    async def test_bind_command_defers_before_calendar_api_and_uses_followup(self):
-        response = SimpleNamespace(defer=AsyncMock(), send_message=AsyncMock())
+            command = bot.tree.get_command("行事曆")
+            await command.callback(interaction)
 
-        async def bind_after_defer(_guild, channel, *, actor_id):
-            self.assertEqual(response.defer.await_count, 1)
-            self.assertEqual(actor_id, 7)
-            return CalendarBinding(1, channel.id, 99)
-
-        calendar = SimpleNamespace(bind=AsyncMock(side_effect=bind_after_defer))
-        bot = HoroBot(
-            SimpleNamespace(),
-            SimpleNamespace(),
-            SimpleNamespace(),
-            calendar=calendar,
-        )
-        group = bot.tree.get_command("行事曆")
-        command = next(item for item in group.commands if item.name == "綁定")
-        channel = SimpleNamespace(id=10)
-        interaction = SimpleNamespace(
-            guild=SimpleNamespace(id=1),
-            permissions=SimpleNamespace(administrator=True),
-            user=SimpleNamespace(id=7),
-            response=response,
-            followup=SimpleNamespace(send=AsyncMock()),
-        )
-
-        await command.callback(interaction, channel)
-
-        response.defer.assert_awaited_once_with(ephemeral=True, thinking=True)
-        response.send_message.assert_not_awaited()
-        calendar.bind.assert_awaited_once()
-        interaction.followup.send.assert_awaited_once()
+            interaction.response.send_message.assert_awaited_once()
+            args = interaction.response.send_message.await_args.args
+            kwargs = interaction.response.send_message.await_args.kwargs
+            self.assertIn("目前尚未綁定", args[0])
+            self.assertTrue(kwargs["ephemeral"])
+            self.assertIsInstance(kwargs["view"], CalendarAdminView)
+            channel_select = next(
+                item for item in kwargs["view"].children if isinstance(item, discord.ui.ChannelSelect)
+            )
+            self.assertEqual(channel_select.channel_types, [discord.ChannelType.text])
 
     async def test_scheduled_event_gateway_refreshes_current_binding(self):
         guild = SimpleNamespace(id=1)

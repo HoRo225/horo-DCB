@@ -100,6 +100,7 @@ class SemanticMemory:
         self.available = False
         self._worker_task: asyncio.Task[None] | None = None
         self._wake_event = asyncio.Event()
+        self._mutation_lock = asyncio.Lock()
         self._closing = False
 
     async def start(self) -> None:
@@ -138,6 +139,7 @@ class SemanticMemory:
         connection.row_factory = sqlite3.Row
         connection.execute("PRAGMA foreign_keys=ON")
         connection.execute("PRAGMA busy_timeout=5000")
+        connection.execute("PRAGMA synchronous=NORMAL")
         return connection
 
     def _initialize_db(self) -> None:
@@ -146,7 +148,6 @@ class SemanticMemory:
             journal_mode = connection.execute("PRAGMA journal_mode=WAL").fetchone()[0]
             if str(journal_mode).lower() != "wal":
                 raise SemanticMemoryError("semantic memory WAL mode unavailable")
-            connection.execute("PRAGMA synchronous=NORMAL")
             connection.execute(
                 "CREATE TABLE IF NOT EXISTS semantic_memory_meta ("
                 "key TEXT PRIMARY KEY, value TEXT NOT NULL)"
@@ -221,15 +222,16 @@ class SemanticMemory:
         if not normalized:
             return
         timestamp = int(time.time()) if created_at is None else int(created_at)
-        await asyncio.to_thread(
-            self._capture_sync,
-            message_id,
-            guild_id,
-            channel_id,
-            author_name[:80] or "unknown",
-            normalized,
-            timestamp,
-        )
+        async with self._mutation_lock:
+            await asyncio.to_thread(
+                self._capture_sync,
+                message_id,
+                guild_id,
+                channel_id,
+                author_name[:80] or "unknown",
+                normalized,
+                timestamp,
+            )
         self._wake_event.set()
 
     def _capture_sync(
@@ -295,14 +297,15 @@ class SemanticMemory:
         if not self.available:
             return False
         normalized = content.strip()
-        updated = await asyncio.to_thread(
-            self._update_existing_sync,
-            message_id,
-            guild_id,
-            channel_id,
-            author_name[:80] or "unknown",
-            normalized,
-        )
+        async with self._mutation_lock:
+            updated = await asyncio.to_thread(
+                self._update_existing_sync,
+                message_id,
+                guild_id,
+                channel_id,
+                author_name[:80] or "unknown",
+                normalized,
+            )
         if updated and normalized:
             self._wake_event.set()
         return updated
@@ -350,7 +353,8 @@ class SemanticMemory:
 
     async def delete_message(self, message_id: int) -> None:
         if self.db_path.is_file():
-            await asyncio.to_thread(self._delete_message_sync, message_id)
+            async with self._mutation_lock:
+                await asyncio.to_thread(self._delete_message_sync, message_id)
 
     def _delete_message_sync(self, message_id: int) -> None:
         with closing(self._connect()) as connection, connection:
@@ -362,7 +366,8 @@ class SemanticMemory:
     async def delete_messages(self, message_ids: set[int] | list[int]) -> None:
         if not message_ids or not self.db_path.is_file():
             return
-        await asyncio.to_thread(self._delete_messages_sync, list(message_ids))
+        async with self._mutation_lock:
+            await asyncio.to_thread(self._delete_messages_sync, list(message_ids))
 
     def _delete_messages_sync(self, message_ids: list[int]) -> None:
         with closing(self._connect()) as connection, connection:
@@ -373,11 +378,21 @@ class SemanticMemory:
 
     async def delete_channel(self, channel_id: int) -> None:
         if self.db_path.is_file():
-            await asyncio.to_thread(self._delete_scope_sync, "channel_id", channel_id)
+            async with self._mutation_lock:
+                await asyncio.to_thread(
+                    self._delete_scope_sync,
+                    "channel_id",
+                    channel_id,
+                )
 
     async def delete_guild(self, guild_id: int) -> None:
         if self.db_path.is_file():
-            await asyncio.to_thread(self._delete_scope_sync, "guild_id", guild_id)
+            async with self._mutation_lock:
+                await asyncio.to_thread(
+                    self._delete_scope_sync,
+                    "guild_id",
+                    guild_id,
+                )
 
     def _delete_scope_sync(self, column: str, value: int) -> None:
         if column not in {"channel_id", "guild_id"}:

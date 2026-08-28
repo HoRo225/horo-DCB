@@ -33,6 +33,33 @@ class AIRuntimeStatus:
     router_version: str | None
 
 
+@dataclass(frozen=True, slots=True)
+class WebSearchResult:
+    title: str | None
+    url: str | None
+    snippet: str | None
+    published_at: str | None
+    image_url: str | None
+
+
+@dataclass(frozen=True, slots=True)
+class WebSearchImage:
+    url: str | None
+    description: str | None
+
+
+@dataclass(frozen=True, slots=True)
+class WebSearchResponse:
+    results: tuple[WebSearchResult, ...]
+    images: tuple[WebSearchImage, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class WebFetchResponse:
+    title: str | None
+    content: str
+
+
 class AIClient:
     def __init__(
         self,
@@ -331,7 +358,7 @@ class AIClient:
         provider: str,
         search_type: str = "web",
         include_images: bool = False,
-    ) -> dict[str, object]:
+    ) -> WebSearchResponse:
         payload: dict[str, object] = {
             "provider": provider,
             "query": query,
@@ -349,7 +376,32 @@ class AIClient:
             not isinstance(result, dict) for result in results
         ):
             raise AIClientError("9Router returned an invalid response")
-        return data
+        normalized_results = []
+        for result in results:
+            metadata = result.get("metadata")
+            normalized_results.append(
+                WebSearchResult(
+                    title=result.get("title") if isinstance(result.get("title"), str) else None,
+                    url=result.get("url") if isinstance(result.get("url"), str) else None,
+                    snippet=result.get("snippet") if isinstance(result.get("snippet"), str) else None,
+                    published_at=(result.get("published_at") if isinstance(result.get("published_at"), str) else None),
+                    image_url=(metadata.get("image_url") if isinstance(metadata, dict) and isinstance(metadata.get("image_url"), str) else None),
+                )
+            )
+        normalized_images = []
+        images = data.get("images")
+        if isinstance(images, list):
+            for image in images:
+                if isinstance(image, str):
+                    normalized_images.append(WebSearchImage(image, None))
+                elif isinstance(image, dict):
+                    url = image.get("url")
+                    description = image.get("description")
+                    normalized_images.append(WebSearchImage(
+                        url if isinstance(url, str) else None,
+                        description if isinstance(description, str) else None,
+                    ))
+        return WebSearchResponse(tuple(normalized_results), tuple(normalized_images))
 
     async def web_fetch(
         self,
@@ -358,7 +410,7 @@ class AIClient:
         provider: str,
         content_format: str = "markdown",
         max_characters: int = 15000,
-    ) -> dict[str, object]:
+    ) -> WebFetchResponse:
         if content_format not in {"markdown", "html"}:
             raise ValueError("content_format must be markdown or html")
         if type(max_characters) is not int or max_characters <= 0:
@@ -375,7 +427,11 @@ class AIClient:
         content = data.get("content")
         if not isinstance(content, dict) or not isinstance(content.get("text"), str):
             raise AIClientError("9Router returned an invalid response")
-        return data
+        title = data.get("title")
+        return WebFetchResponse(
+            title=title if isinstance(title, str) else None,
+            content=content["text"],
+        )
 
     async def _web_request(
         self,

@@ -3,7 +3,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from types import SimpleNamespace
 import unittest
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, Mock, patch
 
 import discord
 
@@ -196,6 +196,27 @@ class TempVoiceManagerTest(unittest.IsolatedAsyncioTestCase):
         state = self.read_state()
         self.assertEqual(state["parents"], [{"guild_id": 1, "channel_id": 10}])
         self.assertEqual(state["children"], [])
+
+    async def test_delete_guild_removes_only_target_and_persists_once(self):
+        manager = TempVoiceManager(self.state_path)
+        manager._parents = {1: 10, 2: 20}
+        manager._children = {30: (1, 100), 31: (1, 101), 40: (2, 200)}
+        manager._persist_state = Mock()
+
+        await manager.delete_guild(1)
+        await manager.delete_guild(1)
+
+        self.assertEqual(manager._parents, {2: 20})
+        self.assertEqual(manager._children, {40: (2, 200)})
+        manager._persist_state.assert_called_once_with()
+
+    async def test_delete_guild_is_noop_when_state_is_unavailable(self):
+        with patch.object(TempVoiceManager, "_load_state", side_effect=OSError):
+            manager = TempVoiceManager(self.state_path)
+
+        await manager.delete_guild(1)
+
+        self.assertFalse(self.state_path.exists())
 
     async def test_join_entry_creates_child_grants_owner_controls_and_moves_member(self):
         guild = FakeGuild()

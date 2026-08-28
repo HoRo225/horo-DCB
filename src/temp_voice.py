@@ -354,6 +354,20 @@ class TempVoiceManager:
             if changed:
                 self._persist_or_disable()
 
+    async def delete_guild(self, guild_id: int) -> None:
+        if not self._state_available:
+            return
+
+        async with self._lock:
+            changed = self._parents.pop(guild_id, None) is not None
+            for channel_id, (child_guild_id, _owner_id) in list(self._children.items()):
+                if child_guild_id == guild_id:
+                    self._children.pop(channel_id, None)
+                    changed = True
+
+            if changed:
+                self._persist_or_disable()
+
     async def _resolve_parent_channel(
         self,
         guild: discord.Guild,

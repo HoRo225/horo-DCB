@@ -14,7 +14,7 @@ from src.calendar_events import CALENDAR_TZ, CalendarDraft, CalendarManager, Cal
 from src.steam_free_games import SteamFreeGamesNotifier, SteamOffer
 
 if TYPE_CHECKING:
-    from src.ai_client import AIClient
+    from src.ai_client import AIClient, WebSearchResponse
     from src.semantic_memory import MemoryScope, SemanticMemory
 
 
@@ -622,12 +622,7 @@ class AgentTools:
                     content_format="html",
                     max_characters=_MAX_IMAGE_FETCH_CHARACTERS,
                 )
-                content_data = response.get("content")
-                if not isinstance(content_data, dict):
-                    raise TypeError
-                page_text = content_data.get("text")
-                if not isinstance(page_text, str):
-                    raise TypeError
+                page_text = response.content
             except Exception:
                 logging.info("Image fallback page fetch failed.")
                 continue
@@ -696,8 +691,7 @@ class AgentTools:
         if include_images and selected_provider != self._search_provider:
             providers.append(self._search_provider)
 
-        response: dict[str, object] | None = None
-        raw_results: list[object] | None = None
+        response: WebSearchResponse | None = None
         for index, provider in enumerate(providers):
             try:
                 candidate = await self._ai_client.web_search(
@@ -706,9 +700,6 @@ class AgentTools:
                     search_type=search_type,
                     include_images=include_images,
                 )
-                candidate_results = candidate.get("results")
-                if not isinstance(candidate_results, list):
-                    raise TypeError
             except Exception:
                 if index + 1 < len(providers):
                     logging.info(
@@ -718,30 +709,26 @@ class AgentTools:
                 logging.error("Web search tool request failed.")
                 return self._json({"ok": False, "error": "web_search_unavailable"})
             response = candidate
-            raw_results = candidate_results
             break
 
-        if response is None or raw_results is None:
+        if response is None:
             return self._json({"ok": False, "error": "web_search_unavailable"})
 
         new_sources = []
         new_source_objects: list[ResearchSource] = []
-        for result in raw_results[:5]:
-            if not isinstance(result, dict):
-                continue
-            url = result.get("url")
+        for result in response.results[:5]:
+            url = result.url
             if not self._is_safe_web_url(url):
                 continue
 
-            published_at = result.get("published_at")
             source = ResearchSource(
                 source_id=len(research_context.sources) + 1,
-                title=self._bounded_text(result.get("title"), 200),
+                title=self._bounded_text(result.title, 200),
                 url=url,
-                snippet=self._bounded_text(result.get("snippet"), 1000),
+                snippet=self._bounded_text(result.snippet, 1000),
                 published_at=(
-                    self._bounded_text(published_at, 100)
-                    if isinstance(published_at, str)
+                    self._bounded_text(result.published_at, 100)
+                    if result.published_at is not None
                     else None
                 ),
             )
@@ -751,7 +738,7 @@ class AgentTools:
             new_sources.append(self._serialize_source(source))
 
             if include_images and len(research_context.reply_images) < 4:
-                image_url = result.get("metadata", {}).get("image_url") if isinstance(result.get("metadata"), dict) else None
+                image_url = result.image_url
                 if self._is_safe_web_url(image_url) and all(
                     image.url != image_url for image in research_context.reply_images
                 ):
@@ -759,22 +746,17 @@ class AgentTools:
                         ResearchImage(image_url, source.title)
                     )
 
-        if include_images and isinstance(response.get("images"), list):
-            for image in response["images"]:
+        if include_images:
+            for image in response.images:
                 if len(research_context.reply_images) >= 4:
                     break
-                image_url = image if isinstance(image, str) else (
-                    image.get("url") if isinstance(image, dict) else None
-                )
+                image_url = image.url
                 if not self._is_safe_web_url(image_url) or any(
                     existing.url == image_url
                     for existing in research_context.reply_images
                 ):
                     continue
-                provider_description = (
-                    image.get("description") if isinstance(image, dict) else None
-                )
-                description = self._bounded_text(provider_description, 200) or query[:200]
+                description = self._bounded_text(image.description, 200) or query[:200]
                 research_context.reply_images.append(
                     ResearchImage(image_url, description)
                 )
@@ -819,20 +801,14 @@ class AgentTools:
                 url,
                 provider=self._fetch_provider,
             )
-            content_data = response.get("content")
-            if not isinstance(content_data, dict):
-                raise TypeError
-            content = content_data.get("text")
-            if not isinstance(content, str):
-                raise TypeError
+            content = response.content
         except Exception:
             logging.error("Web fetch tool request failed.")
             return self._json({"ok": False, "error": "web_fetch_unavailable"})
 
-        response_title = response.get("title")
         title = (
-            self._bounded_text(response_title, 200)
-            if isinstance(response_title, str)
+            self._bounded_text(response.title, 200)
+            if response.title is not None
             else source.title
         )
         truncated = len(content) > _MAX_FETCH_CHARACTERS
@@ -990,38 +966,38 @@ class AgentTools:
         if not isinstance(parsed_arguments, dict):
             return self._json({"ok": False, "error": "invalid_arguments"})
 
-        if name == "web_search":
-            return await self._execute_web_search(parsed_arguments, research_context)
-        if name == "web_fetch":
-            return await self._execute_web_fetch(parsed_arguments, research_context)
-        if name == "search_channel_memory":
-            return await self._execute_memory_search(
-                parsed_arguments,
-                research_context,
-                memory_scope,
-            )
-        if name == "calendar_get_events":
-            return await self._execute_calendar_get_events(
-                parsed_arguments,
-                research_context,
-                calendar_scope,
-            )
-        if name == "calendar_propose_create":
-            return self._execute_calendar_propose_create(
-                parsed_arguments,
-                research_context,
-                calendar_scope,
-            )
-        if name == "calendar_propose_edit":
-            return await self._execute_calendar_propose_edit(
-                parsed_arguments,
-                research_context,
-                calendar_scope,
-            )
-        if parsed_arguments:
-            return self._json({"ok": False, "error": "invalid_arguments"})
-
         try:
+            if name == "web_search":
+                return await self._execute_web_search(parsed_arguments, research_context)
+            if name == "web_fetch":
+                return await self._execute_web_fetch(parsed_arguments, research_context)
+            if name == "search_channel_memory":
+                return await self._execute_memory_search(
+                    parsed_arguments,
+                    research_context,
+                    memory_scope,
+                )
+            if name == "calendar_get_events":
+                return await self._execute_calendar_get_events(
+                    parsed_arguments,
+                    research_context,
+                    calendar_scope,
+                )
+            if name == "calendar_propose_create":
+                return self._execute_calendar_propose_create(
+                    parsed_arguments,
+                    research_context,
+                    calendar_scope,
+                )
+            if name == "calendar_propose_edit":
+                return await self._execute_calendar_propose_edit(
+                    parsed_arguments,
+                    research_context,
+                    calendar_scope,
+                )
+            if parsed_arguments:
+                return self._json({"ok": False, "error": "invalid_arguments"})
+
             if name == "get_current_channel_info":
                 return self._json(
                     {

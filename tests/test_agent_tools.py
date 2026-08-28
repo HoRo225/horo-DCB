@@ -1,6 +1,8 @@
+import asyncio
 import json
 from dataclasses import FrozenInstanceError
 import unittest
+from unittest.mock import AsyncMock
 
 from src.agent_tools import (
     AgentTools,
@@ -9,7 +11,31 @@ from src.agent_tools import (
     ResearchSource,
     ToolContext,
 )
+from src.ai_client import (
+    WebFetchResponse,
+    WebSearchImage,
+    WebSearchResponse,
+    WebSearchResult,
+)
 from src.steam_free_games import SteamFetchResult, SteamOffer
+
+
+def search_result(
+    title=None,
+    url=None,
+    snippet=None,
+    published_at=None,
+    image_url=None,
+):
+    return WebSearchResult(title, url, snippet, published_at, image_url)
+
+
+def search_response(results=(), images=()):
+    return WebSearchResponse(tuple(results), tuple(images))
+
+
+def fetch_response(content="Fetched content", title="Fetched title"):
+    return WebFetchResponse(title, content)
 
 
 class StubNotifier:
@@ -24,11 +50,8 @@ class StubNotifier:
 
 class StubAIClient:
     def __init__(self):
-        self.search_response = {"results": []}
-        self.fetch_response = {
-            "title": "Fetched title",
-            "content": {"text": "Fetched content"},
-        }
+        self.search_response = search_response()
+        self.fetch_response = fetch_response()
         self.search_error = None
         self.fetch_error = None
         self.search_calls = []
@@ -305,17 +328,53 @@ class AgentToolsTest(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn(secret_detail, raw)
         self.assertNotIn(secret_detail, "\n".join(captured.output))
 
+    async def test_dispatched_tool_failure_does_not_leak_exception_detail(self):
+        secret_detail = "dispatched-handler-secret"
+        dispatched_tools = (
+            ("web_search", "_execute_web_search", '{"query":"topic","search_type":"web"}'),
+            ("search_channel_memory", "_execute_memory_search", '{"query":"topic"}'),
+            ("calendar_get_events", "_execute_calendar_get_events", "{}"),
+        )
+
+        for name, handler_name, arguments in dispatched_tools:
+            with self.subTest(name=name):
+                handler = AsyncMock(side_effect=RuntimeError(secret_detail))
+                setattr(self.tools, handler_name, handler)
+                with self.assertLogs(level="ERROR") as captured:
+                    raw = await self.tools.execute(
+                        name, arguments, self.context, ResearchContext()
+                    )
+
+                self.assertEqual(
+                    json.loads(raw), {"ok": False, "error": "tool_failed"}
+                )
+                self.assertNotIn(secret_detail, raw)
+                self.assertNotIn(secret_detail, "\n".join(captured.output))
+
+    async def test_dispatched_tool_cancellation_propagates(self):
+        self.tools._execute_web_search = AsyncMock(
+            side_effect=asyncio.CancelledError()
+        )
+
+        with self.assertRaises(asyncio.CancelledError):
+            await self.tools.execute(
+                "web_search",
+                '{"query":"topic","search_type":"web"}',
+                self.context,
+                self.research_context,
+            )
+
     async def test_web_search_uses_validated_arguments_and_trusted_provider(self):
-        self.ai_client.search_response = {
-            "results": [
-                {
-                    "title": "Current result",
-                    "url": "https://example.com/current",
-                    "snippet": "Current summary",
-                    "published_at": "2026-08-19",
-                }
+        self.ai_client.search_response = search_response(
+            [
+                search_result(
+                    "Current result",
+                    "https://example.com/current",
+                    "Current summary",
+                    "2026-08-19",
+                )
             ]
-        }
+        )
 
         payload = json.loads(
             await self.tools.execute(
@@ -384,17 +443,12 @@ class AgentToolsTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_web_search_limits_and_bounds_normalized_results(self):
         urls = [f"https://example.com/result/{index}" for index in range(6)]
-        self.ai_client.search_response = {
-            "results": [
-                {
-                    "title": "T" * 201,
-                    "url": url,
-                    "snippet": "S" * 1001,
-                    "published_at": "2026-08-19",
-                }
+        self.ai_client.search_response = search_response(
+            [
+                search_result("T" * 201, url, "S" * 1001, "2026-08-19")
                 for url in urls
             ]
-        }
+        )
 
         payload = json.loads(
             await self.tools.execute(
@@ -422,7 +476,6 @@ class AgentToolsTest(unittest.IsolatedAsyncioTestCase):
     async def test_web_search_skips_unsafe_or_malformed_result_urls(self):
         bad_urls = (
             None,
-            123,
             "",
             "not-a-url",
             "http:///missing-host",
@@ -434,16 +487,9 @@ class AgentToolsTest(unittest.IsolatedAsyncioTestCase):
         for bad_url in bad_urls:
             with self.subTest(url=bad_url):
                 research_context = ResearchContext()
-                self.ai_client.search_response = {
-                    "results": [
-                        {
-                            "title": "Unsafe",
-                            "url": bad_url,
-                            "snippet": "Ignored",
-                            "published_at": None,
-                        }
-                    ]
-                }
+                self.ai_client.search_response = search_response(
+                    [search_result("Unsafe", bad_url, "Ignored")]
+                )
 
                 payload = json.loads(
                     await self.tools.execute(
@@ -459,13 +505,13 @@ class AgentToolsTest(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(research_context.allowed_fetch_urls, set())
 
     async def test_image_search_collects_safe_unique_images_without_fetch_allowlist(self):
-        self.ai_client.search_response = {
-            "results": [
-                {
-                    "title": str(index),
-                    "url": f"https://example.com/{index}",
-                    "metadata": {"image_url": image_url},
-                }
+        self.ai_client.search_response = search_response(
+            [
+                search_result(
+                    str(index),
+                    f"https://example.com/{index}",
+                    image_url=image_url,
+                )
                 for index, image_url in enumerate(
                     (
                         "https://images.example.com/1.jpg",
@@ -478,7 +524,7 @@ class AgentToolsTest(unittest.IsolatedAsyncioTestCase):
                     )
                 )
             ]
-        }
+        )
 
         await self.tools.execute(
             "web_search",
@@ -530,17 +576,15 @@ class AgentToolsTest(unittest.IsolatedAsyncioTestCase):
                 )
                 if provider == "trusted-images":
                     raise RuntimeError("image provider unavailable")
-                return {
-                    "results": [
-                        {
-                            "title": "Fallback source",
-                            "url": "https://example.com/fallback",
-                            "metadata": {
-                                "image_url": "https://images.example.com/fallback.jpg"
-                            },
-                        }
+                return search_response(
+                    [
+                        search_result(
+                            "Fallback source",
+                            "https://example.com/fallback",
+                            image_url="https://images.example.com/fallback.jpg",
+                        )
                     ]
-                }
+                )
 
         ai_client = FailingImageProviderClient()
         tools = AgentTools(
@@ -580,24 +624,15 @@ class AgentToolsTest(unittest.IsolatedAsyncioTestCase):
     async def test_image_search_falls_back_to_allowed_html_page(self):
         source_url = "https://example.com/gallery"
         image_url = "https://cdn.example.com/dish.jpg?width=1200&height=800"
-        self.ai_client.search_response = {
-            "results": [
-                {
-                    "title": "Official gallery",
-                    "url": source_url,
-                    "snippet": "Gallery",
-                }
-            ]
-        }
-        self.ai_client.fetch_response = {
-            "content": {
-                "text": (
-                    f'<meta property="og:image" content="{image_url}">'
-                    f'<img src="{image_url}">'
-                    '<img src="http://127.0.0.1/private.jpg">'
-                )
-            }
-        }
+        self.ai_client.search_response = search_response(
+            [search_result("Official gallery", source_url, "Gallery")]
+        )
+        self.ai_client.fetch_response = fetch_response(
+            f'<meta property="og:image" content="{image_url}">'
+            f'<img src="{image_url}">'
+            '<img src="http://127.0.0.1/private.jpg">',
+            title=None,
+        )
 
         payload = json.loads(
             await self.tools.execute(
@@ -636,12 +671,10 @@ class AgentToolsTest(unittest.IsolatedAsyncioTestCase):
             def __init__(self):
                 super().__init__()
                 self.fetch_responses = [
-                    {"content": {"text": "No image on the first source"}},
-                    {
-                        "content": {
-                            "text": "https://cdn.example.com/second-source.jpg"
-                        }
-                    },
+                    fetch_response("No image on the first source", title=None),
+                    fetch_response(
+                        "https://cdn.example.com/second-source.jpg", title=None
+                    ),
                 ]
 
             async def web_fetch(
@@ -663,12 +696,12 @@ class AgentToolsTest(unittest.IsolatedAsyncioTestCase):
                 return self.fetch_responses.pop(0)
 
         ai_client = SequentialFetchClient()
-        ai_client.search_response = {
-            "results": [
-                {"title": "First", "url": "https://example.com/first"},
-                {"title": "Second", "url": "https://example.com/second"},
+        ai_client.search_response = search_response(
+            [
+                search_result("First", "https://example.com/first"),
+                search_result("Second", "https://example.com/second"),
             ]
-        }
+        )
         tools = AgentTools(
             self.notifier,
             ai_client,
@@ -714,35 +747,31 @@ class AgentToolsTest(unittest.IsolatedAsyncioTestCase):
                     }
                 )
                 if url == social_url:
-                    return {
-                        "content": {
-                            "text": (
-                                "![highlight story picture]"
-                                "(https://images.example.com/highlight.jpg)"
-                            )
-                        }
-                    }
-                return {
-                    "content": {
-                        "text": "".join(
-                            (
-                                "![EZTABLE Logo](https://images.example.com/logo.png)",
-                                "![台北信義店 訂位](https://images.example.com/xinyi.webp)",
-                                "![台北京站店 訂位](https://images.example.com/q-square.webp)",
-                                "![新北板橋店 訂位](https://images.example.com/banqiao.webp)",
-                                "![林口三井店 訂位](https://images.example.com/linkou.webp)",
-                            )
+                    return fetch_response(
+                        "![highlight story picture]"
+                        "(https://images.example.com/highlight.jpg)",
+                        title=None,
+                    )
+                return fetch_response(
+                    "".join(
+                        (
+                            "![EZTABLE Logo](https://images.example.com/logo.png)",
+                            "![台北信義店 訂位](https://images.example.com/xinyi.webp)",
+                            "![台北京站店 訂位](https://images.example.com/q-square.webp)",
+                            "![新北板橋店 訂位](https://images.example.com/banqiao.webp)",
+                            "![林口三井店 訂位](https://images.example.com/linkou.webp)",
                         )
-                    }
-                }
+                    ),
+                    title=None,
+                )
 
         ai_client = SourceAwareFetchClient()
-        ai_client.search_response = {
-            "results": [
-                {"title": "Official Instagram", "url": social_url},
-                {"title": "饗食天堂訂位", "url": content_url},
+        ai_client.search_response = search_response(
+            [
+                search_result("Official Instagram", social_url),
+                search_result("饗食天堂訂位", content_url),
             ]
-        }
+        )
         tools = AgentTools(
             self.notifier,
             ai_client,
@@ -804,17 +833,14 @@ class AgentToolsTest(unittest.IsolatedAsyncioTestCase):
         source_url = "https://example.com/gallery"
         hero_url = "https://cdn.example.com/hero.jpg"
         logo_url = "https://cdn.example.com/logo.png"
-        self.ai_client.search_response = {
-            "results": [{"title": "Gallery", "url": source_url}]
-        }
-        self.ai_client.fetch_response = {
-            "content": {
-                "text": (
-                    f'<img src="{logo_url}">'
-                    f'<meta property="og:image" content="{hero_url}">'
-                )
-            }
-        }
+        self.ai_client.search_response = search_response(
+            [search_result("Gallery", source_url)]
+        )
+        self.ai_client.fetch_response = fetch_response(
+            f'<img src="{logo_url}">'
+            f'<meta property="og:image" content="{hero_url}">',
+            title=None,
+        )
 
         await self.tools.execute(
             "web_search",
@@ -863,16 +889,16 @@ class AgentToolsTest(unittest.IsolatedAsyncioTestCase):
         )
 
     async def test_image_search_caps_first_five_results_at_four_images(self):
-        self.ai_client.search_response = {
-            "results": [
-                {
-                    "title": "T" * 300,
-                    "url": f"https://example.com/{index}",
-                    "metadata": {"image_url": f"https://images.example.com/{index}.jpg"},
-                }
+        self.ai_client.search_response = search_response(
+            [
+                search_result(
+                    "T" * 300,
+                    f"https://example.com/{index}",
+                    image_url=f"https://images.example.com/{index}.jpg",
+                )
                 for index in range(6)
             ]
-        }
+        )
 
         await self.tools.execute(
             "web_search",
@@ -891,27 +917,18 @@ class AgentToolsTest(unittest.IsolatedAsyncioTestCase):
         )
 
     async def test_image_search_collects_safe_top_level_images_with_bounded_descriptions(self):
-        self.ai_client.search_response = {
-            "results": [
-                {
-                    "title": "Source",
-                    "url": "https://example.com/source",
-                }
+        self.ai_client.search_response = search_response(
+            [search_result("Source", "https://example.com/source")],
+            [
+                WebSearchImage("https://images.example.com/1.jpg", None),
+                WebSearchImage("https://images.example.com/1.jpg", None),
+                WebSearchImage("https://images.example.com/2.jpg", "D" * 300),
+                WebSearchImage("http://127.0.0.1/private.jpg", "Unsafe"),
+                WebSearchImage("https://images.example.com/3.jpg", None),
+                WebSearchImage("https://images.example.com/4.jpg", None),
+                WebSearchImage("https://images.example.com/5.jpg", None),
             ],
-            "images": [
-                "https://images.example.com/1.jpg",
-                "https://images.example.com/1.jpg",
-                {
-                    "url": "https://images.example.com/2.jpg",
-                    "description": "D" * 300,
-                },
-                {"url": 123, "description": "Malformed"},
-                {"url": "http://127.0.0.1/private.jpg", "description": "Unsafe"},
-                {"url": "https://images.example.com/3.jpg", "description": 123},
-                "https://images.example.com/4.jpg",
-                "https://images.example.com/5.jpg",
-            ],
-        }
+        )
 
         payload = json.loads(
             await self.tools.execute(
@@ -939,19 +956,19 @@ class AgentToolsTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_image_search_dedupes_result_and_top_level_images(self):
         shared_url = "https://images.example.com/shared.jpg"
-        self.ai_client.search_response = {
-            "results": [
-                {
-                    "title": "Result description",
-                    "url": "https://example.com/source",
-                    "metadata": {"image_url": shared_url},
-                }
+        self.ai_client.search_response = search_response(
+            [
+                search_result(
+                    "Result description",
+                    "https://example.com/source",
+                    image_url=shared_url,
+                )
             ],
-            "images": [
-                {"url": shared_url, "description": "Provider description"},
-                {"url": "https://images.example.com/top-level.jpg"},
+            [
+                WebSearchImage(shared_url, "Provider description"),
+                WebSearchImage("https://images.example.com/top-level.jpg", None),
             ],
-        }
+        )
 
         await self.tools.execute(
             "web_search",
@@ -994,20 +1011,10 @@ class AgentToolsTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_web_fetch_exact_searched_url_truncates(self):
         url = "https://example.com/article"
-        self.ai_client.search_response = {
-            "results": [
-                {
-                    "title": "Search title",
-                    "url": url,
-                    "snippet": "Summary",
-                    "published_at": None,
-                }
-            ]
-        }
-        self.ai_client.fetch_response = {
-            "title": "Fetched title",
-            "content": {"text": "文" * 15001},
-        }
+        self.ai_client.search_response = search_response(
+            [search_result("Search title", url, "Summary")]
+        )
+        self.ai_client.fetch_response = fetch_response("文" * 15001)
         await self.tools.execute(
             "web_search",
             '{"query":"topic","search_type":"web"}',

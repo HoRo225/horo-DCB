@@ -73,6 +73,7 @@ Setup files are ready.
 6. Validate: sh scripts/check-env.sh
 7. Start the full stack: docker compose up -d --build
 
-Semantic Memory is disabled in a fresh setup. Review the README privacy section
-before setting SEMANTIC_MEMORY_ENABLED=1.
+Semantic Memory and Server Activity are disabled in a fresh setup. Review the
+README privacy and Discord prerequisites before setting SEMANTIC_MEMORY_ENABLED=1
+or SERVER_ACTIVITY_ENABLED=1.
 EOF

@@ -20,6 +20,7 @@ services:
       TEMP_VOICE_ENABLED: ${TEMP_VOICE_ENABLED:-1}
       STEAM_FREE_GAMES_ENABLED: ${STEAM_FREE_GAMES_ENABLED:-1}
       AI_TEXT_DISPLAY_ENABLED: ${AI_TEXT_DISPLAY_ENABLED:-1}
+      SERVER_ACTIVITY_ENABLED: ${SERVER_ACTIVITY_ENABLED:-0}
     depends_on:
       9router:
         condition: service_healthy

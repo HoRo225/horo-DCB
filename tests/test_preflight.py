@@ -23,6 +23,7 @@ class PreflightTest(unittest.TestCase):
             temp_voice_enabled=False,
             steam_free_games_enabled=False,
             ai_text_display_enabled=True,
+            server_activity_enabled=True,
         )
         output = io.StringIO()
 
@@ -42,6 +43,7 @@ class PreflightTest(unittest.TestCase):
         self.assertFalse(payload["temp_voice_enabled"])
         self.assertFalse(payload["steam_free_games_enabled"])
         self.assertTrue(payload["ai_text_display_enabled"])
+        self.assertTrue(payload["server_activity_enabled"])
 
 
 if __name__ == "__main__":

@@ -10,7 +10,7 @@ from src.admin_panel import AdminPanelView
 from src.agent_tools import AgentTools, ToolContext
 from src.ai_client import AIClient, AIClientError, AIRuntimeStatus
 from src.chat import ChatManager, ChatReply
-from src.calendar_events import CalendarManager, CalendarUserError
+from src.calendar_events import CalendarManager
 from src.config import AppConfig
 from src.discord_images import (
     ImageAttachmentError,
@@ -23,6 +23,7 @@ from src.discord_output import (
     split_discord_text_display,
 )
 from src.semantic_memory import MemoryScope, MemoryVerification, SemanticMemory
+from src.server_activity import ServerActivityMonitor
 from src.steam_free_games import SteamFreeGamesNotifier
 from src.temp_voice import TempVoiceManager
 
@@ -41,13 +42,6 @@ def clean_bot_mention(content: str, bot_user_id: int) -> str:
 
 def message_mentions_bot(message: Any, bot_user_id: int) -> bool:
     return any(getattr(user, "id", None) == bot_user_id for user in message.mentions)
-
-
-def resolved_reply_targets_bot(message: Any, bot_user_id: int) -> bool:
-    reference = getattr(message, "reference", None)
-    resolved = getattr(reference, "resolved", None)
-    author = getattr(resolved, "author", None)
-    return getattr(author, "id", None) == bot_user_id
 
 
 def build_tool_context(message: Any) -> ToolContext:
@@ -135,17 +129,6 @@ async def get_referenced_message(message: Any) -> Any | None:
         return None
 
 
-async def reply_targets_bot(message: Any, bot_user_id: int) -> bool:
-    referenced = await get_referenced_message(message)
-    return getattr(getattr(referenced, "author", None), "id", None) == bot_user_id
-
-
-async def should_trigger_ai(message: Any, bot_user_id: int) -> bool:
-    if message_mentions_bot(message, bot_user_id):
-        return True
-    return await reply_targets_bot(message, bot_user_id)
-
-
 async def _send_native_ai_chunks(
     message: discord.Message,
     chunks: list[str],
@@ -190,7 +173,9 @@ class HoroBot(discord.Client):
         steam_free_games: SteamFreeGamesNotifier,
         semantic_memory: SemanticMemory | None = None,
         calendar: CalendarManager | None = None,
+        server_activity: ServerActivityMonitor | None = None,
         *,
+        ai_client: AIClient,
         ai_text_display_enabled: bool = AI_TEXT_DISPLAY_ENABLED,
         temp_voice_enabled: bool = TEMP_VOICE_ENABLED,
         steam_free_games_enabled: bool = STEAM_FREE_GAMES_ENABLED,
@@ -198,15 +183,19 @@ class HoroBot(discord.Client):
         intents = discord.Intents.default()
         intents.message_content = True
         intents.guild_scheduled_events = True
+        intents.members = server_activity is not None
+        intents.presences = False
         super().__init__(
             intents=intents,
             allowed_mentions=discord.AllowedMentions.none(),
         )
         self.chat = chat
+        self.ai_client = ai_client
         self.temp_voice = temp_voice
         self.steam_free_games = steam_free_games
         self.semantic_memory = semantic_memory
         self.calendar = calendar
+        self.server_activity = server_activity
         self.ai_text_display_enabled = ai_text_display_enabled
         self.temp_voice_enabled = temp_voice_enabled
         self.steam_free_games_enabled = steam_free_games_enabled
@@ -224,7 +213,7 @@ class HoroBot(discord.Client):
                 )
                 return
             try:
-                ai_status = await self.chat.ai_client.get_runtime_status()
+                ai_status = await self.ai_client.get_runtime_status()
             except Exception:
                 logging.exception("管理控制台讀取 9Router 狀態失敗。")
                 ai_status = AIRuntimeStatus(None, None, False, None)
@@ -233,9 +222,11 @@ class HoroBot(discord.Client):
                     user_id=interaction.user.id,
                     guild_id=interaction.guild.id,
                     chat=self.chat,
+                    ai_client=self.ai_client,
                     ai_status=ai_status,
                     temp_voice=self.temp_voice,
                     steam_free_games=self.steam_free_games,
+                    server_activity=self.server_activity,
                     temp_voice_enabled=self.temp_voice_enabled,
                     steam_free_games_enabled=self.steam_free_games_enabled,
                 ),
@@ -244,90 +235,34 @@ class HoroBot(discord.Client):
             )
 
         if self.calendar is not None:
-            calendar_group = app_commands.Group(name="行事曆", description="管理 Discord 行事曆看板")
-
-            async def require_calendar_admin(
-                interaction: discord.Interaction,
-            ) -> bool:
-                if interaction.guild is not None and interaction.permissions.administrator:
-                    return True
+            @self.tree.command(name="行事曆", description="開啟行事曆管理")
+            @app_commands.guild_only()
+            @app_commands.default_permissions(administrator=True)
+            async def calendar_panel(interaction: discord.Interaction) -> None:
+                if interaction.guild is None or not interaction.permissions.administrator:
+                    await interaction.response.send_message(
+                        "此指令僅限伺服器管理員使用。",
+                        ephemeral=True,
+                        allowed_mentions=discord.AllowedMentions.none(),
+                    )
+                    return
                 await interaction.response.send_message(
-                    "此操作僅限伺服器管理員使用。",
+                    self.calendar.admin_panel_text(interaction.guild),
+                    view=self.calendar.admin_view(
+                        user_id=interaction.user.id,
+                        guild_id=interaction.guild.id,
+                    ),
                     ephemeral=True,
                     allowed_mentions=discord.AllowedMentions.none(),
                 )
-                return False
-
-            @calendar_group.command(name="綁定", description="將行事曆看板綁定到文字頻道")
-            @app_commands.describe(channel="顯示持久行事曆看板的文字頻道")
-            async def bind_calendar(
-                interaction: discord.Interaction,
-                channel: discord.TextChannel,
-            ) -> None:
-                if not await require_calendar_admin(interaction):
-                    return
-                assert interaction.guild is not None
-                await interaction.response.defer(ephemeral=True, thinking=True)
-                try:
-                    binding = await self.calendar.bind(
-                        interaction.guild,
-                        channel,
-                        actor_id=interaction.user.id,
-                    )
-                except CalendarUserError as exc:
-                    await interaction.followup.send(
-                        str(exc),
-                        ephemeral=True,
-                        allowed_mentions=discord.AllowedMentions.none(),
-                    )
-                    return
-                await interaction.followup.send(
-                    f"已將行事曆看板綁定到 <#{binding.channel_id}>。",
-                    ephemeral=True,
-                    allowed_mentions=discord.AllowedMentions.none(),
-                )
-
-            @calendar_group.command(name="解除綁定", description="解除目前的行事曆看板")
-            async def unbind_calendar(interaction: discord.Interaction) -> None:
-                if not await require_calendar_admin(interaction):
-                    return
-                assert interaction.guild is not None
-                await interaction.response.defer(ephemeral=True, thinking=True)
-                try:
-                    removed = await self.calendar.unbind(
-                        interaction.guild,
-                        actor_id=interaction.user.id,
-                    )
-                except CalendarUserError as exc:
-                    await interaction.followup.send(
-                        str(exc),
-                        ephemeral=True,
-                        allowed_mentions=discord.AllowedMentions.none(),
-                    )
-                    return
-                await interaction.followup.send(
-                    "已解除行事曆看板。" if removed else "此伺服器目前沒有綁定行事曆看板。",
-                    ephemeral=True,
-                    allowed_mentions=discord.AllowedMentions.none(),
-                )
-
-            @calendar_group.command(name="重新整理", description="重新整理目前的行事曆看板")
-            async def refresh_calendar(interaction: discord.Interaction) -> None:
-                if not await require_calendar_admin(interaction):
-                    return
-                assert interaction.guild is not None
-                await interaction.response.defer(ephemeral=True, thinking=True)
-                ok = await self.calendar.refresh_guild(interaction.guild)
-                await interaction.followup.send(
-                    "行事曆看板已重新整理。" if ok else "行事曆看板目前無法重新整理。",
-                    ephemeral=True,
-                    allowed_mentions=discord.AllowedMentions.none(),
-                )
-
-            self.tree.add_command(calendar_group)
 
     async def setup_hook(self) -> None:
-        await self.chat.start()
+        await self.ai_client.start()
+        if self.server_activity is not None:
+            try:
+                await self.server_activity.start()
+            except Exception:
+                logging.error("Server activity event handling failed.")
         if self.semantic_memory is not None:
             await self.semantic_memory.start()
         if self.calendar is not None:
@@ -341,13 +276,32 @@ class HoroBot(discord.Client):
             logging.exception("Discord Slash Command 同步失敗；Bot 其他功能繼續啟動。")
 
     async def close(self) -> None:
-        await self.steam_free_games.close()
-        if self.calendar is not None:
-            await self.calendar.close()
-        if self.semantic_memory is not None:
-            await self.semantic_memory.close()
-        await self.chat.close()
-        await super().close()
+        async def close_service(service: Any) -> None:
+            try:
+                await service.close()
+            except Exception:
+                logging.error("Bot service shutdown failed.")
+
+        try:
+            await close_service(self.steam_free_games)
+            if self.calendar is not None:
+                await close_service(self.calendar)
+            if self.semantic_memory is not None:
+                await close_service(self.semantic_memory)
+            await close_service(self.ai_client)
+            if self.server_activity is not None:
+                await close_service(self.server_activity)
+        finally:
+            await super().close()
+
+    def _record_server_activity(self, method_name: str, *args: Any) -> None:
+        monitor = getattr(self, "server_activity", None)
+        if monitor is None:
+            return
+        try:
+            getattr(monitor, method_name)(*args)
+        except Exception:
+            logging.error("Server activity event handling failed.")
 
     async def on_ready(self) -> None:
         logging.info("Discord Bot 已登入：%s", self.user)
@@ -358,12 +312,31 @@ class HoroBot(discord.Client):
         if getattr(self, "temp_voice_enabled", True):
             await self.temp_voice.reconcile(self.guilds)
 
+    async def on_guild_join(self, guild: discord.Guild) -> None:
+        server_activity = getattr(self, "server_activity", None)
+        if server_activity is not None:
+            try:
+                await server_activity.enable_guild(guild.id)
+            except Exception:
+                logging.error("Server activity guild enable failed.")
+
+        if not getattr(self, "temp_voice_enabled", True):
+            return
+        temp_voice = getattr(self, "temp_voice", None)
+        if temp_voice is None:
+            return
+        try:
+            await temp_voice.reconcile([guild], prune_absent=False)
+        except Exception:
+            logging.error("Temp voice guild join handling failed.")
+
     async def on_voice_state_update(
         self,
         member: discord.Member,
         before: discord.VoiceState,
         after: discord.VoiceState,
     ) -> None:
+        HoroBot._record_server_activity(self, "record_voice", member, before, after)
         if getattr(self, "temp_voice_enabled", True):
             await self.temp_voice.handle_voice_state_update(member, before, after)
 
@@ -417,6 +390,7 @@ class HoroBot(discord.Client):
                 logging.error("Semantic memory channel cleanup failed.")
 
     async def on_raw_message_delete(self, payload: discord.RawMessageDeleteEvent) -> None:
+        HoroBot._record_server_activity(self, "record_message", "message_delete", payload)
         calendar = getattr(self, "calendar", None)
         if payload.guild_id is not None and calendar is not None:
             await calendar.handle_board_message_delete(
@@ -436,6 +410,7 @@ class HoroBot(discord.Client):
         self,
         payload: discord.RawBulkMessageDeleteEvent,
     ) -> None:
+        HoroBot._record_server_activity(self, "record_bulk_message_delete", payload)
         semantic_memory = getattr(self, "semantic_memory", None)
         if payload.guild_id is None or semantic_memory is None:
             return
@@ -445,6 +420,7 @@ class HoroBot(discord.Client):
             logging.error("Semantic memory bulk delete failed.")
 
     async def on_raw_message_edit(self, payload: discord.RawMessageUpdateEvent) -> None:
+        HoroBot._record_server_activity(self, "record_message", "message_edit", payload)
         semantic_memory = getattr(self, "semantic_memory", None)
         if payload.guild_id is None or semantic_memory is None:
             return
@@ -478,6 +454,7 @@ class HoroBot(discord.Client):
             logging.error("Semantic memory message edit failed.")
 
     async def on_raw_thread_delete(self, payload: discord.RawThreadDeleteEvent) -> None:
+        HoroBot._record_server_activity(self, "record_thread", "thread_delete", payload)
         forget_channel = getattr(getattr(self, "chat", None), "forget_channel", None)
         if callable(forget_channel):
             forget_channel(payload.thread_id)
@@ -490,15 +467,39 @@ class HoroBot(discord.Client):
                 logging.error("Semantic memory thread cleanup failed.")
 
     async def on_guild_remove(self, guild: discord.Guild) -> None:
+        server_activity = getattr(self, "server_activity", None)
+        if server_activity is not None:
+            try:
+                await server_activity.delete_guild(guild.id)
+            except Exception:
+                logging.error("Server activity guild cleanup failed.")
+
         calendar = getattr(self, "calendar", None)
         if calendar is not None:
-            calendar.delete_guild(guild.id)
+            try:
+                calendar.delete_guild(guild.id)
+            except Exception:
+                logging.error("Calendar guild cleanup failed.")
+
+        temp_voice = getattr(self, "temp_voice", None)
+        if getattr(self, "temp_voice_enabled", True) and temp_voice is not None:
+            try:
+                await temp_voice.delete_guild(guild.id)
+            except Exception:
+                logging.error("Temp voice guild cleanup failed.")
+
         forget_channel = getattr(getattr(self, "chat", None), "forget_channel", None)
         if callable(forget_channel):
-            for channel in (*getattr(guild, "channels", ()), *getattr(guild, "threads", ())):
-                channel_id = getattr(channel, "id", None)
-                if isinstance(channel_id, int):
-                    forget_channel(channel_id)
+            try:
+                for channel in (
+                    *getattr(guild, "channels", ()),
+                    *getattr(guild, "threads", ()),
+                ):
+                    channel_id = getattr(channel, "id", None)
+                    if isinstance(channel_id, int):
+                        forget_channel(channel_id)
+            except Exception:
+                logging.error("Chat guild cleanup failed.")
 
         semantic_memory = getattr(self, "semantic_memory", None)
         if semantic_memory is not None:
@@ -609,6 +610,12 @@ class HoroBot(discord.Client):
             )
 
     async def on_message(self, message: discord.Message) -> None:
+        if (
+            getattr(message, "guild", None) is not None
+            and not getattr(message.author, "bot", False)
+            and getattr(message, "webhook_id", None) is None
+        ):
+            HoroBot._record_server_activity(self, "record_message", "message_create", message)
         if message.author.bot or message.webhook_id is not None:
             return
         if self.user is None:
@@ -783,6 +790,51 @@ class HoroBot(discord.Client):
 
             await self._send_ai_answer(message, answer)
 
+    async def on_audit_log_entry_create(self, entry: discord.AuditLogEntry) -> None:
+        HoroBot._record_server_activity(self, "record_audit", entry)
+
+    async def on_member_join(self, member: discord.Member) -> None:
+        HoroBot._record_server_activity(self, "record_member", "member_join", member)
+
+    async def on_raw_member_remove(self, payload: discord.RawMemberRemoveEvent) -> None:
+        HoroBot._record_server_activity(self, "record_raw_member_remove", payload)
+
+    async def on_member_update(self, before: discord.Member, after: discord.Member) -> None:
+        HoroBot._record_server_activity(self, "record_member", "member_update", before, after)
+
+    async def on_raw_reaction_add(self, payload: discord.RawReactionActionEvent) -> None:
+        HoroBot._record_server_activity(self, "record_reaction", "reaction_add", payload)
+
+    async def on_raw_reaction_remove(self, payload: discord.RawReactionActionEvent) -> None:
+        HoroBot._record_server_activity(self, "record_reaction", "reaction_remove", payload)
+
+    async def on_raw_reaction_clear(self, payload: discord.RawReactionClearEvent) -> None:
+        HoroBot._record_server_activity(self, "record_reaction", "reaction_clear", payload)
+
+    async def on_raw_reaction_clear_emoji(self, payload: discord.RawReactionClearEmojiEvent) -> None:
+        HoroBot._record_server_activity(self, "record_reaction", "reaction_clear_emoji", payload)
+
+    async def on_raw_poll_vote_add(self, payload: discord.RawPollVoteActionEvent) -> None:
+        HoroBot._record_server_activity(self, "record_poll_vote", "poll_vote_add", payload)
+
+    async def on_raw_poll_vote_remove(self, payload: discord.RawPollVoteActionEvent) -> None:
+        HoroBot._record_server_activity(self, "record_poll_vote", "poll_vote_remove", payload)
+
+    async def on_thread_create(self, thread: discord.Thread) -> None:
+        HoroBot._record_server_activity(self, "record_thread", "thread_create", thread)
+
+    async def on_thread_update(self, before: discord.Thread, after: discord.Thread) -> None:
+        HoroBot._record_server_activity(self, "record_thread", "thread_update", after)
+
+    async def on_scheduled_event_user_add(self, event: discord.ScheduledEvent, user: discord.User) -> None:
+        HoroBot._record_server_activity(self, "record_scheduled_subscriber", "scheduled_event_user_add", event, user)
+
+    async def on_scheduled_event_user_remove(self, event: discord.ScheduledEvent, user: discord.User) -> None:
+        HoroBot._record_server_activity(self, "record_scheduled_subscriber", "scheduled_event_user_remove", event, user)
+
+    async def on_automod_action(self, execution: discord.AutoModAction) -> None:
+        HoroBot._record_server_activity(self, "record_automod", execution)
+
 
 def main() -> None:
     logging.basicConfig(
@@ -798,6 +850,9 @@ def main() -> None:
     embedding_model = config.embedding_model
     embedding_dimensions = config.embedding_dimensions
     semantic_memory_enabled = config.semantic_memory_enabled
+    server_activity = (
+        ServerActivityMonitor() if config.server_activity_enabled else None
+    )
 
     ai_client = AIClient(
         config.ninerouter_url,
@@ -830,6 +885,8 @@ def main() -> None:
         steam_free_games,
         semantic_memory=semantic_memory,
         calendar=calendar,
+        server_activity=server_activity,
+        ai_client=ai_client,
         ai_text_display_enabled=config.ai_text_display_enabled,
         temp_voice_enabled=config.temp_voice_enabled,
         steam_free_games_enabled=config.steam_free_games_enabled,
