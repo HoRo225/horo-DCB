@@ -42,18 +42,56 @@ def positive_int_env(name: str, *, default: int) -> int:
     return value
 
 
+def _optional_positive_int_env(name: str) -> int | None:
+    raw = os.environ.get(name, "").strip()
+    if not raw:
+        return None
+    try:
+        value = int(raw)
+    except ValueError as exc:
+        raise RuntimeError(f"{name} 必須是正整數") from exc
+    if value <= 0:
+        raise RuntimeError(f"{name} 必須是正整數")
+    return value
+
+
+def _positive_int_set_env(name: str) -> frozenset[int]:
+    raw = os.environ.get(name, "").strip()
+    if not raw:
+        return frozenset()
+    values: list[int] = []
+    for item in raw.split(","):
+        cleaned = item.strip()
+        try:
+            value = int(cleaned)
+        except ValueError as exc:
+            raise RuntimeError(f"{name} 必須是逗號分隔的正整數") from exc
+        if value <= 0:
+            raise RuntimeError(f"{name} 必須是逗號分隔的正整數")
+        values.append(value)
+    if len(values) != len(set(values)):
+        raise RuntimeError(f"{name} 不得包含重複值")
+    return frozenset(values)
+
+
+def _bridge_token_env() -> str:
+    token = os.environ.get("CODEX_BRIDGE_TOKEN", "").strip()
+    if token and (
+        len(token) != 64
+        or any(character not in "0123456789abcdef" for character in token)
+    ):
+        raise RuntimeError("CODEX_BRIDGE_TOKEN 必須是 64 個小寫十六進位字元")
+    return token
+
+
 @dataclass(frozen=True, slots=True)
 class AppConfig:
     discord_token: str = field(repr=False)
-    ninerouter_url: str
-    ninerouter_api_key: str = field(repr=False)
-    ninerouter_model: str
-    web_search_provider: str
-    image_search_provider: str
-    web_fetch_provider: str
-    embedding_model: str
-    embedding_dimensions: int
-    semantic_memory_enabled: bool
+    codex_enabled: bool
+    codex_allowed_guild_id: int | None
+    codex_allowed_channel_id: int | None
+    codex_allowed_user_ids: frozenset[int]
+    codex_bridge_token: str = field(repr=False)
     temp_voice_enabled: bool
     steam_free_games_enabled: bool
     ai_text_display_enabled: bool
@@ -61,43 +99,28 @@ class AppConfig:
 
     @classmethod
     def from_env(cls) -> AppConfig:
-        embedding_model = os.environ.get(
-            "NINEROUTER_EMBEDDING_MODEL",
-            "gemini/gemini-embedding-2",
-        ).strip()
-        if not embedding_model:
-            raise RuntimeError("NINEROUTER_EMBEDDING_MODEL 不得為空")
-
-        ninerouter_url = os.environ.get(
-            "NINEROUTER_URL",
-            "http://9router:20128/v1",
-        ).strip()
-        if not ninerouter_url:
-            raise RuntimeError("NINEROUTER_URL 不得為空")
-
-        web_search_provider = required_env("NINEROUTER_WEB_SEARCH_PROVIDER")
-        image_search_provider = os.environ.get(
-            "NINEROUTER_IMAGE_SEARCH_PROVIDER",
-            "",
-        ).strip() or web_search_provider
+        codex_enabled = env_flag("CODEX_ENABLED", default=False)
+        guild_id = _optional_positive_int_env("CODEX_ALLOWED_GUILD_ID")
+        channel_id = _optional_positive_int_env("CODEX_ALLOWED_CHANNEL_ID")
+        user_ids = _positive_int_set_env("CODEX_ALLOWED_USER_IDS")
+        bridge_token = _bridge_token_env()
+        if codex_enabled:
+            for name, value in (
+                ("CODEX_ALLOWED_GUILD_ID", guild_id),
+                ("CODEX_ALLOWED_CHANNEL_ID", channel_id),
+                ("CODEX_ALLOWED_USER_IDS", user_ids),
+                ("CODEX_BRIDGE_TOKEN", bridge_token),
+            ):
+                if not value:
+                    raise RuntimeError(f"{name} 必須在 CODEX_ENABLED=1 時設定")
 
         return cls(
             discord_token=required_env("DISCORD_TOKEN"),
-            ninerouter_url=ninerouter_url,
-            ninerouter_api_key=required_env("NINEROUTER_API_KEY"),
-            ninerouter_model=required_env("NINEROUTER_MODEL"),
-            web_search_provider=web_search_provider,
-            image_search_provider=image_search_provider,
-            web_fetch_provider=required_env("NINEROUTER_WEB_FETCH_PROVIDER"),
-            embedding_model=embedding_model,
-            embedding_dimensions=positive_int_env(
-                "NINEROUTER_EMBEDDING_DIMENSIONS",
-                default=768,
-            ),
-            semantic_memory_enabled=env_flag(
-                "SEMANTIC_MEMORY_ENABLED",
-                default=True,
-            ),
+            codex_enabled=codex_enabled,
+            codex_allowed_guild_id=guild_id,
+            codex_allowed_channel_id=channel_id,
+            codex_allowed_user_ids=user_ids,
+            codex_bridge_token=bridge_token,
             temp_voice_enabled=env_flag(
                 "TEMP_VOICE_ENABLED",
                 default=True,
