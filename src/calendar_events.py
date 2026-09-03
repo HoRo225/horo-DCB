@@ -9,7 +9,7 @@ import json
 import logging
 import os
 from pathlib import Path
-from typing import Any, Literal
+from typing import Literal
 
 import discord
 
@@ -19,7 +19,6 @@ DEFAULT_STATE_PATH = Path("/app/data/calendar_board.json")
 MAX_UPCOMING_SHOWN = 8
 EVENTS_PER_PAGE = 25
 BROWSE_EVENTS_PER_PAGE = 8
-CONFIRMATION_TIMEOUT_SECONDS = 10 * 60
 BOARD_CREATE_CUSTOM_ID = "horo:calendar:create"
 BOARD_EDIT_CUSTOM_ID = "horo:calendar:edit"
 BOARD_BROWSE_CUSTOM_ID = "horo:calendar:browse"
@@ -36,14 +35,6 @@ class CalendarBinding:
     guild_id: int
     channel_id: int
     message_id: int
-
-
-@dataclass(frozen=True, slots=True)
-class CalendarScope:
-    guild_id: int
-    user_id: int
-    can_manage_events: bool
-    now: datetime
 
 
 @dataclass(frozen=True, slots=True)
@@ -64,16 +55,6 @@ class CalendarDraft:
     action: Literal["create", "edit"]
     event: CalendarEventInput
     event_id: int | None = None
-
-    def to_ai_payload(self) -> dict[str, object]:
-        return {
-            "action": self.action,
-            "name": self.event.name,
-            "start": self.event.start_time.astimezone(CALENDAR_TZ).strftime("%Y-%m-%d %H:%M"),
-            "duration_minutes": self.event.duration_minutes,
-            "location": self.event.location,
-            "description": self.event.description or "",
-        }
 
 
 @dataclass(frozen=True, slots=True)
@@ -230,14 +211,6 @@ class CalendarManager:
 
     def get_binding(self, guild_id: int) -> CalendarBinding | None:
         return self._bindings.get(guild_id) if self._state_available else None
-
-    def make_scope(self, guild_id: int, user_id: int, *, can_manage_events: bool) -> CalendarScope:
-        return CalendarScope(
-            guild_id=guild_id,
-            user_id=user_id,
-            can_manage_events=can_manage_events,
-            now=calendar_now(),
-        )
 
     def _load_state(self) -> dict[int, CalendarBinding]:
         if not self._state_path.exists():
@@ -852,124 +825,6 @@ class CalendarManager:
             raise CalendarUserError("Discord 暫時無法修改活動，請稍後再試。")
         return updated
 
-    def build_create_draft(
-        self,
-        scope: CalendarScope,
-        arguments: dict[str, Any],
-    ) -> CalendarDraft:
-        if not self.has_binding(scope.guild_id):
-            raise CalendarUserError("此伺服器尚未啟用行事曆看板。")
-        if not scope.can_manage_events:
-            raise CalendarUserError("你需要「管理活動」權限才能新增活動。")
-        expected = {"name", "start", "duration_minutes", "location", "description"}
-        if set(arguments) - expected:
-            raise CalendarUserError("活動參數格式不正確。")
-        required = {"name", "start", "duration_minutes", "location"}
-        if not required.issubset(arguments):
-            raise CalendarUserError("活動資料不完整。")
-        event = build_calendar_event_input(
-            name=arguments.get("name"),
-            start=arguments.get("start"),
-            duration_minutes=arguments.get("duration_minutes"),
-            location=arguments.get("location"),
-            description=arguments.get("description", ""),
-            now=scope.now,
-        )
-        return CalendarDraft("create", event)
-
-    async def build_edit_draft(
-        self,
-        scope: CalendarScope,
-        event_id: int,
-        arguments: dict[str, Any],
-    ) -> CalendarDraft:
-        if not self.has_binding(scope.guild_id):
-            raise CalendarUserError("此伺服器尚未啟用行事曆看板。")
-        if not scope.can_manage_events:
-            raise CalendarUserError("你需要「管理活動」權限才能修改活動。")
-        allowed = {"name", "start", "duration_minutes", "location", "description"}
-        if not arguments or set(arguments) - allowed:
-            raise CalendarUserError("活動修改參數格式不正確。")
-        guild = self._client.get_guild(scope.guild_id) if self._client is not None else None
-        if guild is None:
-            raise CalendarUserError("目前無法取得伺服器行事曆。")
-        event = self.get_editable_event(guild, event_id)
-        current = self.event_to_input(event)
-        start_text = (
-            arguments["start"]
-            if "start" in arguments
-            else current.start_time.astimezone(CALENDAR_TZ).strftime("%Y-%m-%d %H:%M")
-        )
-        duration = arguments.get("duration_minutes", current.duration_minutes)
-        event_input = build_calendar_event_input(
-            name=arguments.get("name", current.name),
-            start=start_text,
-            duration_minutes=duration,
-            location=arguments.get("location", current.location),
-            description=arguments.get("description", current.description or ""),
-            now=scope.now,
-        )
-        return CalendarDraft("edit", event_input, event_id=event_id)
-
-    async def get_events_for_ai(
-        self,
-        scope: CalendarScope,
-        query: str | None = None,
-    ) -> list[discord.ScheduledEvent]:
-        if not self.has_binding(scope.guild_id):
-            raise CalendarUserError("此伺服器尚未啟用行事曆看板。")
-        guild = self._client.get_guild(scope.guild_id) if self._client is not None else None
-        if guild is None:
-            raise CalendarUserError("目前無法取得伺服器行事曆。")
-        events = self._cached_events(guild)
-        if query:
-            needle = query.strip().casefold()
-            if not 1 <= len(needle) <= 100:
-                raise CalendarUserError("活動查詢長度必須介於 1 到 100 個字元。")
-            filtered = []
-            for event in events:
-                haystack = " ".join(
-                    value
-                    for value in (
-                        getattr(event, "name", ""),
-                        getattr(event, "location", "") or "",
-                        getattr(event, "description", "") or "",
-                    )
-                    if isinstance(value, str)
-                ).casefold()
-                if needle in haystack:
-                    filtered.append(event)
-            events = filtered
-        return events[:EVENTS_PER_PAGE]
-
-    @staticmethod
-    def draft_summary(draft: CalendarDraft) -> str:
-        action = "新增" if draft.action == "create" else "修改"
-        start = draft.event.start_time.astimezone(CALENDAR_TZ)
-        end = draft.event.end_time.astimezone(CALENDAR_TZ)
-        safe_name = discord.utils.escape_markdown(draft.event.name)
-        safe_location = discord.utils.escape_markdown(draft.event.location)
-        lines = [
-            f"## 準備{action}活動",
-            f"**{safe_name}**",
-            f"開始：{start:%Y-%m-%d %H:%M}（UTC+8）",
-            f"結束：{end:%Y-%m-%d %H:%M}（UTC+8）",
-            f"地點：{safe_location}",
-        ]
-        if draft.event.description:
-            lines.append(f"說明：{discord.utils.escape_markdown(draft.event.description)}")
-        lines.append("-# 只有按下確認後，才會修改 Discord 活動。")
-        return "\n".join(lines)
-
-    def confirmation_view(
-        self,
-        draft: CalendarDraft,
-        *,
-        user_id: int,
-        guild_id: int,
-    ) -> CalendarConfirmationView:
-        return CalendarConfirmationView(self, draft, user_id=user_id, guild_id=guild_id)
-
 
 class _CalendarAdminChannelSelect(discord.ui.ChannelSelect):
     def __init__(self) -> None:
@@ -1236,15 +1091,10 @@ class CalendarEditModal(discord.ui.Modal):
         manager: CalendarManager,
         event_id: int,
         event_input: CalendarEventInput,
-        *,
-        source_message: discord.Message | None = None,
-        confirmation_view: CalendarConfirmationView | None = None,
     ) -> None:
         super().__init__(title="編輯活動", timeout=5 * 60)
         self.manager = manager
         self.event_id = event_id
-        self.source_message = source_message
-        self.confirmation_view = confirmation_view
         self.name_input = discord.ui.TextInput(
             label="活動名稱",
             min_length=1,
@@ -1306,13 +1156,6 @@ class CalendarEditModal(discord.ui.Modal):
         except CalendarUserError as exc:
             await interaction.followup.send(str(exc), ephemeral=True)
             return
-        if self.confirmation_view is not None:
-            if not await self.confirmation_view.begin_action():
-                await interaction.followup.send(
-                    "此操作正在處理或已完成。",
-                    ephemeral=True,
-                )
-                return
         try:
             event = await self.manager.edit_event(
                 interaction.guild,
@@ -1320,17 +1163,8 @@ class CalendarEditModal(discord.ui.Modal):
                 interaction.user,
             )
         except CalendarUserError as exc:
-            if self.confirmation_view is not None:
-                await self.confirmation_view.reset_action()
             await interaction.followup.send(str(exc), ephemeral=True)
             return
-        if self.confirmation_view is not None:
-            await self.confirmation_view.complete_action()
-        if self.confirmation_view is not None and self.source_message is not None:
-            try:
-                await self.source_message.edit(view=self.confirmation_view)
-            except (discord.Forbidden, discord.HTTPException):
-                logging.exception("AI 行事曆確認訊息無法停用按鈕。")
         await interaction.followup.send(
             f"已修改活動：{event.url}",
             ephemeral=True,
@@ -1493,203 +1327,3 @@ class CalendarBrowseView(discord.ui.View):
                 line += f" · [開啟]({url})"
             lines.append(line)
         return "\n".join(lines)
-
-
-class CalendarConfirmationView(discord.ui.View):
-    def __init__(
-        self,
-        manager: CalendarManager,
-        draft: CalendarDraft,
-        *,
-        user_id: int,
-        guild_id: int,
-    ) -> None:
-        super().__init__(timeout=CONFIRMATION_TIMEOUT_SECONDS)
-        self.manager = manager
-        self.draft = draft
-        self.user_id = user_id
-        self.guild_id = guild_id
-        self._action_lock = asyncio.Lock()
-        self._action_state: Literal["pending", "in_progress", "completed"] = "pending"
-
-    async def begin_action(self) -> bool:
-        async with self._action_lock:
-            if self._action_state != "pending":
-                return False
-            self._action_state = "in_progress"
-            return True
-
-    async def reset_action(self) -> None:
-        async with self._action_lock:
-            if self._action_state == "in_progress":
-                self._action_state = "pending"
-
-    async def complete_action(self) -> None:
-        async with self._action_lock:
-            self._action_state = "completed"
-            self.disable_all()
-
-    async def interaction_check(self, interaction: discord.Interaction, /) -> bool:
-        if interaction.user.id == self.user_id and interaction.guild_id == self.guild_id:
-            return True
-        await interaction.response.send_message("只有原發問者可以確認這個行事曆操作。", ephemeral=True)
-        return False
-
-    def disable_all(self) -> None:
-        for child in self.children:
-            if isinstance(child, discord.ui.Button):
-                child.disabled = True
-        self.stop()
-
-    @discord.ui.button(label="確認", style=discord.ButtonStyle.success)
-    async def confirm(
-        self,
-        interaction: discord.Interaction,
-        _button: discord.ui.Button,
-    ) -> None:
-        await interaction.response.defer(ephemeral=True, thinking=True)
-        if interaction.guild is None:
-            await interaction.followup.send("行事曆只能在伺服器中使用。", ephemeral=True)
-            return
-        if not self.manager.has_binding(interaction.guild.id):
-            await interaction.followup.send("此伺服器目前沒有有效的行事曆看板。", ephemeral=True)
-            return
-        try:
-            self.manager._assert_user_can_manage(interaction.user)
-        except CalendarUserError as exc:
-            await interaction.followup.send(str(exc), ephemeral=True)
-            return
-        if not await self.begin_action():
-            await interaction.followup.send(
-                "此操作正在處理或已完成。",
-                ephemeral=True,
-            )
-            return
-        try:
-            if self.draft.action == "create":
-                event = await self.manager.create_event(interaction.guild, self.draft, interaction.user)
-            else:
-                event = await self.manager.edit_event(interaction.guild, self.draft, interaction.user)
-        except CalendarUserError as exc:
-            await self.reset_action()
-            await interaction.followup.send(str(exc), ephemeral=True)
-            return
-        await self.complete_action()
-        if interaction.message is not None:
-            try:
-                await interaction.message.edit(view=self)
-            except (discord.Forbidden, discord.HTTPException):
-                logging.exception("AI 行事曆確認訊息無法停用按鈕。")
-        verb = "建立" if self.draft.action == "create" else "修改"
-        await interaction.followup.send(
-            f"已{verb}活動：{event.url}",
-            ephemeral=True,
-            allowed_mentions=discord.AllowedMentions.none(),
-        )
-
-    @discord.ui.button(label="修改內容", style=discord.ButtonStyle.primary)
-    async def modify(
-        self,
-        interaction: discord.Interaction,
-        _button: discord.ui.Button,
-    ) -> None:
-        if self.draft.action == "create":
-            modal: discord.ui.Modal = CalendarDraftCreateModal(
-                self.manager,
-                self.draft,
-                source_message=interaction.message,
-                confirmation_view=self,
-            )
-        else:
-            if self.draft.event_id is None:
-                await interaction.response.send_message("活動草稿已失效。", ephemeral=True)
-                return
-            modal = CalendarEditModal(
-                self.manager,
-                self.draft.event_id,
-                self.draft.event,
-                source_message=interaction.message,
-                confirmation_view=self,
-            )
-        await interaction.response.send_modal(modal)
-
-    @discord.ui.button(label="取消", style=discord.ButtonStyle.danger)
-    async def cancel(
-        self,
-        interaction: discord.Interaction,
-        _button: discord.ui.Button,
-    ) -> None:
-        if not await self.begin_action():
-            await interaction.response.send_message(
-                "此操作正在處理或已完成。",
-                ephemeral=True,
-            )
-            return
-        await self.complete_action()
-        await interaction.response.edit_message(view=self)
-
-
-class CalendarDraftCreateModal(CalendarCreateModal):
-    def __init__(
-        self,
-        manager: CalendarManager,
-        draft: CalendarDraft,
-        *,
-        source_message: discord.Message | None,
-        confirmation_view: CalendarConfirmationView | None,
-    ) -> None:
-        super().__init__(manager, draft=draft)
-        self.title = "修改後新增活動"
-        self.source_message = source_message
-        self.confirmation_view = confirmation_view
-
-    async def on_submit(self, interaction: discord.Interaction) -> None:
-        await interaction.response.defer(ephemeral=True, thinking=True)
-        if interaction.guild is None:
-            await interaction.followup.send("行事曆只能在伺服器中使用。", ephemeral=True)
-            return
-        try:
-            duration = int(str(self.duration_input.value).strip())
-            event_input = build_calendar_event_input(
-                name=str(self.name_input.value),
-                start=str(self.start_input.value),
-                duration_minutes=duration,
-                location=str(self.location_input.value),
-                description=str(self.description_input.value or ""),
-            )
-        except ValueError:
-            await interaction.followup.send("活動長度必須是整數分鐘。", ephemeral=True)
-            return
-        except CalendarUserError as exc:
-            await interaction.followup.send(str(exc), ephemeral=True)
-            return
-        if self.confirmation_view is not None:
-            if not await self.confirmation_view.begin_action():
-                await interaction.followup.send(
-                    "此操作正在處理或已完成。",
-                    ephemeral=True,
-                )
-                return
-        try:
-            event = await self.manager.create_event(
-                interaction.guild,
-                CalendarDraft("create", event_input),
-                interaction.user,
-            )
-        except CalendarUserError as exc:
-            if self.confirmation_view is not None:
-                await self.confirmation_view.reset_action()
-            await interaction.followup.send(str(exc), ephemeral=True)
-            return
-        if self.confirmation_view is not None:
-            await self.confirmation_view.complete_action()
-        if self.confirmation_view is not None and self.source_message is not None:
-            try:
-                await self.source_message.edit(view=self.confirmation_view)
-            except (discord.Forbidden, discord.HTTPException):
-                logging.exception("AI 行事曆確認訊息無法停用按鈕。")
-        await interaction.followup.send(
-            f"已建立活動：{event.url}",
-            ephemeral=True,
-            allowed_mentions=discord.AllowedMentions.none(),
-        )

@@ -8,14 +8,13 @@ from src.config import AppConfig
 def main() -> None:
     config = AppConfig.from_env()
     safe_summary = {
-        "ninerouter_url": config.ninerouter_url,
-        "model": config.ninerouter_model,
-        "web_search_provider": config.web_search_provider,
-        "image_search_provider": config.image_search_provider,
-        "web_fetch_provider": config.web_fetch_provider,
-        "embedding_model": config.embedding_model,
-        "embedding_dimensions": config.embedding_dimensions,
-        "semantic_memory_enabled": config.semantic_memory_enabled,
+        "codex_enabled": config.codex_enabled,
+        "codex_allowlist_configured": bool(
+            config.codex_allowed_guild_id
+            and config.codex_allowed_channel_id
+            and config.codex_allowed_user_ids
+        ),
+        "codex_allowed_user_count": len(config.codex_allowed_user_ids),
         "temp_voice_enabled": config.temp_voice_enabled,
         "steam_free_games_enabled": config.steam_free_games_enabled,
         "ai_text_display_enabled": config.ai_text_display_enabled,

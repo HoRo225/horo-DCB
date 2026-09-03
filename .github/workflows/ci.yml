@@ -30,88 +30,64 @@ jobs:
           set -eu
           sh scripts/setup.sh
           test "$(stat -c '%a' .env)" = "600"
-          grep -qx 'NINEROUTER_IMAGE_SEARCH_PROVIDER=' .env
+          token=$(sed -n 's/^CODEX_BRIDGE_TOKEN=//p' .env)
+          test "${#token}" -eq 64
+          test -z "$(printf '%s' "$token" | tr -d '0-9a-f')"
+
           before=$(sha256sum .env)
           sh scripts/setup.sh
-          after=$(sha256sum .env)
-          test "$before" = "$after"
+          test "$before" = "$(sha256sum .env)"
+
           if sh scripts/check-env.sh; then
-            echo "check-env unexpectedly accepted credential placeholders" >&2
+            echo "check-env unexpectedly accepted the Discord token placeholder" >&2
             exit 1
           fi
-          sed -i 's/\[REDACTED_SECRET\]/configured-for-ci/g' .env
+          sed -i 's/DISCORD_TOKEN=\[REDACTED_SECRET\]/DISCORD_TOKEN=configured-for-ci/' .env
           sh scripts/check-env.sh
 
-          configured_env=$(mktemp)
-          trap 'rm -f "$configured_env"' EXIT
-          cp .env "$configured_env"
-          for key in \
-            SEMANTIC_MEMORY_ENABLED TEMP_VOICE_ENABLED \
-            STEAM_FREE_GAMES_ENABLED AI_TEXT_DISPLAY_ENABLED \
-            SERVER_ACTIVITY_ENABLED \
-            NINEROUTER_EMBEDDING_MODEL NINEROUTER_EMBEDDING_DIMENSIONS
-          do
-            sed -i "/^${key}=/d" .env
-          done
+          sed -i             -e 's/^CODEX_ENABLED=.*/CODEX_ENABLED=1/'             -e 's/^CODEX_ALLOWED_GUILD_ID=.*/CODEX_ALLOWED_GUILD_ID=1/'             -e 's/^CODEX_ALLOWED_CHANNEL_ID=.*/CODEX_ALLOWED_CHANNEL_ID=2/'             -e 's/^CODEX_ALLOWED_USER_IDS=.*/CODEX_ALLOWED_USER_IDS=3,4/'             .env
           sh scripts/check-env.sh
+          sed -i 's/^CODEX_ALLOWED_USER_IDS=.*/CODEX_ALLOWED_USER_IDS=3,3/' .env
+          if sh scripts/check-env.sh; then
+            echo "check-env unexpectedly accepted duplicate allowlist users" >&2
+            exit 1
+          fi
+          sed -i 's/^CODEX_ALLOWED_USER_IDS=.*/CODEX_ALLOWED_USER_IDS=3,4/' .env
 
-          for key in NINEROUTER_EMBEDDING_MODEL NINEROUTER_EMBEDDING_DIMENSIONS
-          do
-            cp "$configured_env" .env
-            sed -i "s/^${key}=.*/${key}=/" .env
-            if sh scripts/check-env.sh; then
-              echo "check-env unexpectedly accepted blank ${key}" >&2
-              exit 1
-            fi
-          done
-          cp "$configured_env" .env
-
-      - name: Validate Compose model
-        run: docker compose config --quiet
-
-      - name: Verify 9Router uses the unmodified upstream image
+      - name: Validate Compose isolation
         run: |
-          test -z "$(find 9router -maxdepth 1 -type f -name 'patch-*' -print -quit)"
-          test "$(wc -l < 9router/Dockerfile)" -eq 1
+          docker compose config --quiet
+          docker compose config --format json > /tmp/horo-compose.json
+          python - <<'PY'
+          import json
 
-      - name: Build both images from pinned inputs
-        run: docker compose build --pull bot 9router
+          with open("/tmp/horo-compose.json", encoding="utf-8") as source:
+              model = json.load(source)
+          bot = model["services"]["bot"]
+          codex = model["services"]["codex"]
+          assert bot["image"] == codex["image"]
+          assert "ports" not in codex
+          assert {item["target"] for item in bot["volumes"]} == {"/app/data"}
+          assert {item["target"] for item in codex["volumes"]} == {"/app/codex"}
+          assert "CODEX_HOME" not in bot["environment"]
+          assert set(codex["environment"]) == {"CODEX_HOME", "CODEX_BRIDGE_TOKEN"}
+          assert "DISCORD_TOKEN" not in codex["environment"]
+          assert "9router" not in json.dumps(model).lower()
+          PY
 
-      - name: Run Python regression suite
-        run: docker compose run --rm --no-deps bot python -m unittest discover -s tests -v
+      - name: Build shared image
+        run: docker compose build --pull bot
 
-      - name: Check runtime configuration and bytecode compilation
+      - name: Run regression suite
+        run: docker compose run --rm -T --no-deps bot python -m unittest discover -s tests -v
+
+      - name: Verify runtime
         run: |
-          if docker compose run --rm --no-deps bot python -m pip --version; then
+          if docker compose run --rm -T --no-deps bot python -m pip --version; then
             echo "runtime image unexpectedly contains pip" >&2
             exit 1
           fi
-          docker compose run --rm --no-deps bot python -m src.preflight
-          docker compose run --rm --no-deps -e PYTHONPYCACHEPREFIX=/tmp/pycache bot python -m compileall -q src tests
-
-      - name: Smoke-test 9Router readiness
-        shell: bash
-        run: |
-          set -euo pipefail
-          trap 'docker compose down -v --remove-orphans' EXIT
-          docker compose up -d 9router
-          container_id=$(docker compose ps -q 9router)
-          test -n "$container_id"
-
-          for attempt in $(seq 1 36); do
-            status=$(docker inspect --format '{{.State.Health.Status}}' "$container_id")
-            case "$status" in
-              healthy)
-                exit 0
-                ;;
-              unhealthy)
-                docker compose logs 9router
-                exit 1
-                ;;
-            esac
-            sleep 5
-          done
-
-          docker compose logs 9router
-          echo "9Router did not become healthy" >&2
-          exit 1
+          docker compose run --rm -T --no-deps bot python -m src.preflight
+          docker compose run --rm -T --no-deps -e PYTHONPYCACHEPREFIX=/tmp/pycache bot python -m compileall -q src tests
+          docker compose run --rm -T --no-deps bot python -c 'import openai_codex; assert openai_codex.__version__ == "0.147.0"'
+          docker compose run --rm -T --no-deps bot sh -c 'test "$(codex --version)" = "codex-cli 0.147.0"'

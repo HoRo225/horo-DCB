@@ -7,10 +7,14 @@ import discord
 from discord import app_commands
 
 from src.admin_panel import AdminPanelView
-from src.agent_tools import AgentTools, ToolContext
-from src.ai_client import AIClient, AIClientError, AIRuntimeStatus
-from src.chat import ChatManager, ChatReply
 from src.calendar_events import CalendarManager
+from src.codex_bridge_client import (
+    CodexAccess,
+    CodexBridgeClient,
+    CodexBridgeError,
+    CodexRuntimeStatus,
+    conversation_key,
+)
 from src.config import AppConfig
 from src.discord_images import (
     ImageAttachmentError,
@@ -22,7 +26,6 @@ from src.discord_output import (
     split_discord_message,
     split_discord_text_display,
 )
-from src.semantic_memory import MemoryScope, MemoryVerification, SemanticMemory
 from src.server_activity import ServerActivityMonitor
 from src.steam_free_games import SteamFreeGamesNotifier
 from src.temp_voice import TempVoiceManager
@@ -44,58 +47,56 @@ def message_mentions_bot(message: Any, bot_user_id: int) -> bool:
     return any(getattr(user, "id", None) == bot_user_id for user in message.mentions)
 
 
-def build_tool_context(message: Any) -> ToolContext:
-    guild_name = getattr(getattr(message, "guild", None), "name", None)
-    if not isinstance(guild_name, str):
-        guild_name = None
+_THREAD_CHANNEL_TYPES = {
+    "public_thread",
+    "private_thread",
+    "news_thread",
+}
 
-    channel = message.channel
-    channel_name = getattr(channel, "name", None)
-    if not isinstance(channel_name, str) or not channel_name:
-        channel_name = "direct-message"
 
-    channel_type = getattr(channel, "type", None)
-    return ToolContext(
-        guild_name=guild_name,
-        channel_name=channel_name,
-        channel_type=str(channel_type) if channel_type is not None else "unknown",
+def codex_conversation_key_for_message(
+    message: Any,
+    access: CodexAccess,
+) -> str | None:
+    guild_id = getattr(getattr(message, "guild", None), "id", None)
+    channel = getattr(message, "channel", None)
+    channel_id = getattr(channel, "id", None)
+    user_id = getattr(getattr(message, "author", None), "id", None)
+    if not all(type(value) is int and value > 0 for value in (
+        guild_id,
+        channel_id,
+        user_id,
+    )):
+        return None
+
+    is_thread = str(getattr(channel, "type", "")) in _THREAD_CHANNEL_TYPES
+    allowed_channel_id = (
+        getattr(channel, "parent_id", None) if is_thread else channel_id
+    )
+    if type(allowed_channel_id) is not int or not access.allows(
+        guild_id,
+        allowed_channel_id,
+        user_id,
+    ):
+        return None
+    return conversation_key(
+        guild_id,
+        channel_id,
+        user_id,
+        is_thread=is_thread,
     )
 
 
-def is_semantic_memory_channel(message: Any) -> bool:
-    if getattr(message, "guild", None) is None:
-        return False
-    channel_type = str(getattr(getattr(message, "channel", None), "type", ""))
-    return channel_type in {
-        "text",
-        "news",
-        "public_thread",
-        "private_thread",
-        "news_thread",
-    }
+def codex_error_text(code: str) -> str:
+    if code == "auth_required":
+        return "AI 尚未完成登入，請聯絡管理員。"
+    if code == "timeout":
+        return "AI 回覆逾時，請稍後再試。"
+    if code == "usage_limit_or_unavailable":
+        return "Codex 額度已用盡或服務暫時無法使用，請稍後再試。"
+    return "AI 服務暫時無法回覆，請稍後再試。"
 
 
-def build_memory_scope(message: Any) -> MemoryScope | None:
-    if not is_semantic_memory_channel(message):
-        return None
-    channel = message.channel
-
-    async def verify_message(message_id: int) -> MemoryVerification:
-        try:
-            current = await channel.fetch_message(message_id)
-        except discord.NotFound:
-            return MemoryVerification("deleted")
-        except (discord.Forbidden, discord.HTTPException):
-            return MemoryVerification("unavailable")
-        if current.author.bot or current.webhook_id is not None:
-            return MemoryVerification("deleted")
-        return MemoryVerification(
-            "current",
-            current.content,
-            current.author.display_name,
-        )
-
-    return MemoryScope(channel_id=channel.id, verify_message=verify_message)
 
 
 async def get_referenced_message(message: Any) -> Any | None:
@@ -168,14 +169,13 @@ async def _send_native_ai_chunks(
 class HoroBot(discord.Client):
     def __init__(
         self,
-        chat: ChatManager,
+        codex: CodexBridgeClient,
+        codex_access: CodexAccess,
         temp_voice: TempVoiceManager,
         steam_free_games: SteamFreeGamesNotifier,
-        semantic_memory: SemanticMemory | None = None,
         calendar: CalendarManager | None = None,
         server_activity: ServerActivityMonitor | None = None,
         *,
-        ai_client: AIClient,
         ai_text_display_enabled: bool = AI_TEXT_DISPLAY_ENABLED,
         temp_voice_enabled: bool = TEMP_VOICE_ENABLED,
         steam_free_games_enabled: bool = STEAM_FREE_GAMES_ENABLED,
@@ -189,11 +189,10 @@ class HoroBot(discord.Client):
             intents=intents,
             allowed_mentions=discord.AllowedMentions.none(),
         )
-        self.chat = chat
-        self.ai_client = ai_client
+        self.codex = codex
+        self.codex_access = codex_access
         self.temp_voice = temp_voice
         self.steam_free_games = steam_free_games
-        self.semantic_memory = semantic_memory
         self.calendar = calendar
         self.server_activity = server_activity
         self.ai_text_display_enabled = ai_text_display_enabled
@@ -213,17 +212,24 @@ class HoroBot(discord.Client):
                 )
                 return
             try:
-                ai_status = await self.ai_client.get_runtime_status()
+                codex_status = await self.codex.get_runtime_status()
             except Exception:
-                logging.exception("管理控制台讀取 9Router 狀態失敗。")
-                ai_status = AIRuntimeStatus(None, None, False, None)
+                logging.exception("管理控制台讀取 Codex 狀態失敗。")
+                codex_status = CodexRuntimeStatus(
+                    False,
+                    False,
+                    None,
+                    None,
+                    None,
+                    None,
+                    0,
+                )
             await interaction.response.send_message(
                 view=AdminPanelView(
                     user_id=interaction.user.id,
                     guild_id=interaction.guild.id,
-                    chat=self.chat,
-                    ai_client=self.ai_client,
-                    ai_status=ai_status,
+                    codex_client=self.codex,
+                    codex_status=codex_status,
                     temp_voice=self.temp_voice,
                     steam_free_games=self.steam_free_games,
                     server_activity=self.server_activity,
@@ -257,14 +263,12 @@ class HoroBot(discord.Client):
                 )
 
     async def setup_hook(self) -> None:
-        await self.ai_client.start()
+        await self.codex.start()
         if self.server_activity is not None:
             try:
                 await self.server_activity.start()
             except Exception:
                 logging.error("Server activity event handling failed.")
-        if self.semantic_memory is not None:
-            await self.semantic_memory.start()
         if self.calendar is not None:
             self.add_view(self.calendar.persistent_board_view())
             await self.calendar.start(self)
@@ -286,9 +290,7 @@ class HoroBot(discord.Client):
             await close_service(self.steam_free_games)
             if self.calendar is not None:
                 await close_service(self.calendar)
-            if self.semantic_memory is not None:
-                await close_service(self.semantic_memory)
-            await close_service(self.ai_client)
+            await close_service(self.codex)
             if self.server_activity is not None:
                 await close_service(self.server_activity)
         finally:
@@ -377,17 +379,10 @@ class HoroBot(discord.Client):
                 await self.temp_voice.handle_channel_delete(channel)
             except Exception:
                 logging.error("Temp voice channel delete handling failed.")
-
-        forget_channel = getattr(getattr(self, "chat", None), "forget_channel", None)
-        if callable(forget_channel):
-            forget_channel(channel.id)
-
-        semantic_memory = getattr(self, "semantic_memory", None)
-        if semantic_memory is not None:
-            try:
-                await semantic_memory.delete_channel(channel.id)
-            except Exception:
-                logging.error("Semantic memory channel cleanup failed.")
+        try:
+            await self.codex.archive_scope(channel.guild.id, channel.id)
+        except Exception:
+            logging.error("Codex channel archive failed.")
 
     async def on_raw_message_delete(self, payload: discord.RawMessageDeleteEvent) -> None:
         HoroBot._record_server_activity(self, "record_message", "message_delete", payload)
@@ -398,73 +393,23 @@ class HoroBot(discord.Client):
                 payload.channel_id,
                 payload.message_id,
             )
-        semantic_memory = getattr(self, "semantic_memory", None)
-        if payload.guild_id is None or semantic_memory is None:
-            return
-        try:
-            await semantic_memory.delete_message(payload.message_id)
-        except Exception:
-            logging.error("Semantic memory message delete failed.")
 
     async def on_raw_bulk_message_delete(
         self,
         payload: discord.RawBulkMessageDeleteEvent,
     ) -> None:
         HoroBot._record_server_activity(self, "record_bulk_message_delete", payload)
-        semantic_memory = getattr(self, "semantic_memory", None)
-        if payload.guild_id is None or semantic_memory is None:
-            return
-        try:
-            await semantic_memory.delete_messages(payload.message_ids)
-        except Exception:
-            logging.error("Semantic memory bulk delete failed.")
 
     async def on_raw_message_edit(self, payload: discord.RawMessageUpdateEvent) -> None:
         HoroBot._record_server_activity(self, "record_message", "message_edit", payload)
-        semantic_memory = getattr(self, "semantic_memory", None)
-        if payload.guild_id is None or semantic_memory is None:
-            return
-        try:
-            if not await semantic_memory.contains_message(payload.message_id):
-                return
-            channel = self.get_channel(payload.channel_id)
-            if channel is None or not hasattr(channel, "fetch_message"):
-                return
-            try:
-                current = await channel.fetch_message(payload.message_id)
-            except discord.NotFound:
-                await semantic_memory.delete_message(payload.message_id)
-                return
-            except (discord.Forbidden, discord.HTTPException):
-                return
-            if current.author.bot or current.webhook_id is not None:
-                await semantic_memory.delete_message(payload.message_id)
-                return
-            if not is_semantic_memory_channel(current):
-                await semantic_memory.delete_message(payload.message_id)
-                return
-            await semantic_memory.update_existing_message(
-                message_id=current.id,
-                guild_id=current.guild.id,
-                channel_id=current.channel.id,
-                author_name=current.author.display_name,
-                content=current.content,
-            )
-        except Exception:
-            logging.error("Semantic memory message edit failed.")
 
     async def on_raw_thread_delete(self, payload: discord.RawThreadDeleteEvent) -> None:
         HoroBot._record_server_activity(self, "record_thread", "thread_delete", payload)
-        forget_channel = getattr(getattr(self, "chat", None), "forget_channel", None)
-        if callable(forget_channel):
-            forget_channel(payload.thread_id)
-
-        semantic_memory = getattr(self, "semantic_memory", None)
-        if semantic_memory is not None:
+        if type(payload.guild_id) is int:
             try:
-                await semantic_memory.delete_channel(payload.thread_id)
+                await self.codex.archive_scope(payload.guild_id, payload.thread_id)
             except Exception:
-                logging.error("Semantic memory thread cleanup failed.")
+                logging.error("Codex thread archive failed.")
 
     async def on_guild_remove(self, guild: discord.Guild) -> None:
         server_activity = getattr(self, "server_activity", None)
@@ -488,125 +433,48 @@ class HoroBot(discord.Client):
             except Exception:
                 logging.error("Temp voice guild cleanup failed.")
 
-        forget_channel = getattr(getattr(self, "chat", None), "forget_channel", None)
-        if callable(forget_channel):
-            try:
-                for channel in (
-                    *getattr(guild, "channels", ()),
-                    *getattr(guild, "threads", ()),
-                ):
-                    channel_id = getattr(channel, "id", None)
-                    if isinstance(channel_id, int):
-                        forget_channel(channel_id)
-            except Exception:
-                logging.error("Chat guild cleanup failed.")
+        try:
+            await self.codex.archive_scope(guild.id)
+        except Exception:
+            logging.error("Codex guild archive failed.")
 
-        semantic_memory = getattr(self, "semantic_memory", None)
-        if semantic_memory is not None:
-            try:
-                await semantic_memory.delete_guild(guild.id)
-            except Exception:
-                logging.error("Semantic memory guild cleanup failed.")
-
-    async def _send_ai_answer(self, message: discord.Message, reply: ChatReply) -> None:
-        answer = reply.content
+    async def _send_ai_answer(self, message: discord.Message, answer: str) -> None:
         if not answer:
             return
-
-        sent_chunks: list[str]
-        calendar = getattr(self, "calendar", None)
-        if (
-            reply.calendar_draft is not None
-            and calendar is not None
-            and message.guild is not None
-        ):
-            confirmation_text = (
-                f"{calendar.draft_summary(reply.calendar_draft)}\n\n"
-                f"{answer.strip()}"
-            )
-            confirmation_view = calendar.confirmation_view(
-                reply.calendar_draft,
-                user_id=message.author.id,
-                guild_id=message.guild.id,
-            )
-            confirmation_chunks = split_discord_message(confirmation_text)
-            sent_chunks = await _send_native_ai_chunks(
-                message,
-                confirmation_chunks,
-                reply_first=True,
-                first_view=confirmation_view,
-            )
-            if not sent_chunks:
-                fallback_text = (
-                    f"{confirmation_text}\n\n"
-                    "⚠️ 確認按鈕無法顯示，本次草稿未執行；請重新提出行事曆需求。"
-                )
-                sent_chunks = await _send_native_ai_chunks(
-                    message,
-                    split_discord_message(fallback_text),
-                    reply_first=True,
-                )
-            if sent_chunks:
-                self.chat.record_assistant_message(
-                    message.channel.id,
-                    "".join(sent_chunks),
-                )
-            return
-
-        text_display_enabled = getattr(
-            self,
-            "ai_text_display_enabled",
-            AI_TEXT_DISPLAY_ENABLED,
-        )
-        if not text_display_enabled:
-            sent_chunks = await _send_native_ai_chunks(
+        if not getattr(self, "ai_text_display_enabled", AI_TEXT_DISPLAY_ENABLED):
+            await _send_native_ai_chunks(
                 message,
                 split_discord_message(answer),
                 reply_first=True,
             )
-        else:
-            display_chunks = split_discord_text_display(answer)
-            sent_chunks = []
-            try:
-                for index, chunk in enumerate(display_chunks):
-                    view = build_ai_text_display_view(
-                        chunk, reply.images if index == 0 else ()
-                    )
-                    if index == 0:
-                        await message.reply(
-                            view=view,
-                            mention_author=False,
-                            allowed_mentions=discord.AllowedMentions.none(),
-                        )
-                    else:
-                        await message.channel.send(
-                            view=view,
-                            allowed_mentions=discord.AllowedMentions.none(),
-                        )
-                    sent_chunks.append(chunk)
-            except discord.HTTPException:
-                logging.exception(
-                    "Discord AI TextDisplay 回覆送出失敗，改用原生文字。"
-                )
-                if sent_chunks:
-                    remaining = "".join(display_chunks[len(sent_chunks) :])
-                    sent_chunks.extend(
-                        await _send_native_ai_chunks(
-                            message,
-                            split_discord_message(remaining),
-                            reply_first=False,
-                        )
+            return
+
+        display_chunks = split_discord_text_display(answer)
+        sent_chunks: list[str] = []
+        try:
+            for index, chunk in enumerate(display_chunks):
+                view = build_ai_text_display_view(chunk)
+                if index == 0:
+                    await message.reply(
+                        view=view,
+                        mention_author=False,
+                        allowed_mentions=discord.AllowedMentions.none(),
                     )
                 else:
-                    sent_chunks = await _send_native_ai_chunks(
-                        message,
-                        split_discord_message(answer),
-                        reply_first=True,
+                    await message.channel.send(
+                        view=view,
+                        allowed_mentions=discord.AllowedMentions.none(),
                     )
-
-        if sent_chunks:
-            self.chat.record_assistant_message(
-                message.channel.id, "".join(sent_chunks)
+                sent_chunks.append(chunk)
+        except discord.HTTPException:
+            logging.exception(
+                "Discord AI TextDisplay 回覆送出失敗，改用原生文字。"
+            )
+            remaining = "".join(display_chunks[len(sent_chunks) :])
+            await _send_native_ai_chunks(
+                message,
+                split_discord_message(remaining or answer),
+                reply_first=not sent_chunks,
             )
 
     async def on_message(self, message: discord.Message) -> None:
@@ -615,10 +483,13 @@ class HoroBot(discord.Client):
             and not getattr(message.author, "bot", False)
             and getattr(message, "webhook_id", None) is None
         ):
-            HoroBot._record_server_activity(self, "record_message", "message_create", message)
-        if message.author.bot or message.webhook_id is not None:
-            return
-        if self.user is None:
+            HoroBot._record_server_activity(
+                self,
+                "record_message",
+                "message_create",
+                message,
+            )
+        if message.author.bot or message.webhook_id is not None or self.user is None:
             return
 
         content = message.content.strip()
@@ -626,50 +497,36 @@ class HoroBot(discord.Client):
         if not content and not attachments:
             return
 
-        semantic_memory = getattr(self, "semantic_memory", None)
-        if semantic_memory is not None and content and is_semantic_memory_channel(message):
-            try:
-                created_at_value = getattr(message, "created_at", None)
-                created_at = (
-                    int(created_at_value.timestamp())
-                    if created_at_value is not None
-                    else None
-                )
-                await semantic_memory.capture_message(
-                    message_id=message.id,
-                    guild_id=message.guild.id,
-                    channel_id=message.channel.id,
-                    author_name=message.author.display_name,
-                    content=content,
-                    created_at=created_at,
-                )
-            except Exception:
-                logging.error("Semantic memory message capture failed.")
-
         bot_user_id = self.user.id
-        cleaned_content = clean_bot_mention(content, bot_user_id)
         referenced_message = None
-        triggered_by_mention = message_mentions_bot(message, bot_user_id)
-        if not triggered_by_mention:
+        if not message_mentions_bot(message, bot_user_id):
             referenced_message = await get_referenced_message(message)
             if getattr(getattr(referenced_message, "author", None), "id", None) != bot_user_id:
-                if content:
-                    self.chat.record_user_message(
-                        message.channel.id,
-                        message.author.display_name,
-                        cleaned_content or content,
-                    )
                 return
 
+        key = codex_conversation_key_for_message(message, self.codex_access)
+        if key is None:
+            await message.reply(
+                "Codex 目前未對此帳號或頻道開放。",
+                mention_author=False,
+                allowed_mentions=discord.AllowedMentions.none(),
+            )
+            return
+
+        cleaned_content = clean_bot_mention(content, bot_user_id)
         try:
             image_attachments = select_image_attachments(attachments)
-        except ImageAttachmentError as exc:
-            if content:
-                self.chat.record_user_message(
-                    message.channel.id,
-                    message.author.display_name,
-                    cleaned_content or content,
+            if not image_attachments:
+                if referenced_message is None and getattr(message, "reference", None) is not None:
+                    referenced_message = await get_referenced_message(message)
+                image_attachments = select_image_attachments(
+                    list(
+                        getattr(referenced_message, "attachments", ())
+                        if referenced_message is not None
+                        else ()
+                    )
                 )
+        except ImageAttachmentError as exc:
             await message.reply(
                 str(exc),
                 mention_author=False,
@@ -677,52 +534,14 @@ class HoroBot(discord.Client):
             )
             return
 
-        image_marker = None
-        if image_attachments:
-            image_marker = f"[附帶 {len(image_attachments)} 張圖片]"
-        else:
-            if referenced_message is None and getattr(message, "reference", None) is not None:
-                referenced_message = await get_referenced_message(message)
-            referenced_attachments = list(
-                getattr(referenced_message, "attachments", ()) if referenced_message is not None else ()
-            )
-            try:
-                image_attachments = select_image_attachments(referenced_attachments)
-            except ImageAttachmentError as exc:
-                if content:
-                    self.chat.record_user_message(
-                        message.channel.id,
-                        message.author.display_name,
-                        cleaned_content or content,
-                    )
-                await message.reply(
-                    str(exc),
-                    mention_author=False,
-                    allowed_mentions=discord.AllowedMentions.none(),
-                )
-                return
-            if image_attachments:
-                image_marker = f"[引用訊息含 {len(image_attachments)} 張圖片]"
-
-        if not content and not image_attachments:
+        if not cleaned_content and not image_attachments:
             await message.reply(
-                "目前只支援 JPEG、PNG 與 WebP 圖片。",
+                "請輸入問題，或附上 JPEG、PNG、WebP 圖片。",
                 mention_author=False,
                 allowed_mentions=discord.AllowedMentions.none(),
             )
             return
-
-        history_content = cleaned_content or content
-        if image_marker is not None:
-            history_content = f"{image_marker} {history_content}".strip()
-        self.chat.record_user_message(
-            message.channel.id,
-            message.author.display_name,
-            history_content,
-        )
-        history_snapshot = self.chat.snapshot_history(message.channel.id)
-
-        if not self.chat.try_start_request(message.author.id):
+        if not self.codex.try_start_request(message.author.id):
             await message.reply(
                 "請稍候幾秒再試。",
                 mention_author=False,
@@ -730,46 +549,15 @@ class HoroBot(discord.Client):
             )
             return
 
-        calendar_scope = None
-        calendar = getattr(self, "calendar", None)
-        if (
-            calendar is not None
-            and message.guild is not None
-            and calendar.has_binding(message.guild.id)
-        ):
-            permissions = getattr(message.author, "guild_permissions", None)
-            can_manage_events = bool(
-                permissions is not None
-                and (
-                    getattr(permissions, "administrator", False)
-                    or getattr(permissions, "manage_events", False)
-                )
-            )
-            calendar_scope = calendar.make_scope(
-                message.guild.id,
-                message.author.id,
-                can_manage_events=can_manage_events,
-            )
-
-        async with self.chat.channel_lock(message.channel.id):
+        async with self.codex.conversation_lock(key):
             try:
                 async with message.channel.typing():
-                    image_data_urls = await read_image_attachments(image_attachments)
-                    generate_kwargs: dict[str, Any] = {
-                        "image_data_urls": image_data_urls,
-                        "memory_scope": (
-                            build_memory_scope(message)
-                            if semantic_memory is not None
-                            else None
-                        ),
-                        "history_snapshot": history_snapshot,
-                    }
-                    if calendar_scope is not None:
-                        generate_kwargs["calendar_scope"] = calendar_scope
-                    answer = await self.chat.generate_reply(
-                        message.channel.id,
-                        build_tool_context(message),
-                        **generate_kwargs,
+                    images = await read_image_attachments(image_attachments)
+                    answer = await self.codex.chat(
+                        key,
+                        message.author.display_name,
+                        cleaned_content,
+                        images,
                     )
             except ImageAttachmentError as exc:
                 logging.error("Discord 圖片附件處理失敗。")
@@ -779,16 +567,16 @@ class HoroBot(discord.Client):
                     allowed_mentions=discord.AllowedMentions.none(),
                 )
                 return
-            except AIClientError as exc:
-                logging.error("AI 呼叫失敗：%s", exc)
+            except CodexBridgeError as exc:
+                logging.error("Codex bridge request failed: %s", exc.code)
                 await message.reply(
-                    "AI 服務暫時無法回覆，請稍後再試。",
+                    codex_error_text(exc.code),
                     mention_author=False,
                     allowed_mentions=discord.AllowedMentions.none(),
                 )
                 return
 
-            await self._send_ai_answer(message, answer)
+        await self._send_ai_answer(message, answer)
 
     async def on_audit_log_entry_create(self, entry: discord.AuditLogEntry) -> None:
         HoroBot._record_server_activity(self, "record_audit", entry)
@@ -843,55 +631,34 @@ def main() -> None:
     )
 
     config = AppConfig.from_env()
-    discord_credential = config.discord_token
-    search_provider = config.web_search_provider
-    image_search_provider = config.image_search_provider
-    fetch_provider = config.web_fetch_provider
-    embedding_model = config.embedding_model
-    embedding_dimensions = config.embedding_dimensions
-    semantic_memory_enabled = config.semantic_memory_enabled
+    codex = CodexBridgeClient(
+        "http://codex:8765",
+        config.codex_bridge_token,
+    )
+    codex_access = CodexAccess(
+        config.codex_enabled,
+        config.codex_allowed_guild_id,
+        config.codex_allowed_channel_id,
+        config.codex_allowed_user_ids,
+    )
     server_activity = (
         ServerActivityMonitor() if config.server_activity_enabled else None
     )
-
-    ai_client = AIClient(
-        config.ninerouter_url,
-        config.ninerouter_api_key,
-        config.ninerouter_model,
-    )
-    semantic_memory = None
-    if semantic_memory_enabled:
-        semantic_memory = SemanticMemory(
-            ai_client,
-            embedding_model=embedding_model,
-            embedding_dimensions=embedding_dimensions,
-        )
     temp_voice = TempVoiceManager()
     steam_free_games = SteamFreeGamesNotifier()
     calendar = CalendarManager()
-    agent_tools = AgentTools(
-        steam_free_games,
-        ai_client,
-        semantic_memory=semantic_memory,
-        calendar=calendar,
-        search_provider=search_provider,
-        image_search_provider=image_search_provider,
-        fetch_provider=fetch_provider,
-    )
-    chat = ChatManager(ai_client, agent_tools)
     HoroBot(
-        chat,
+        codex,
+        codex_access,
         temp_voice,
         steam_free_games,
-        semantic_memory=semantic_memory,
         calendar=calendar,
         server_activity=server_activity,
-        ai_client=ai_client,
         ai_text_display_enabled=config.ai_text_display_enabled,
         temp_voice_enabled=config.temp_voice_enabled,
         steam_free_games_enabled=config.steam_free_games_enabled,
     ).run(
-        discord_credential,
+        config.discord_token,
         log_handler=None,
     )
 

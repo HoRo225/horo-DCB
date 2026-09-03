@@ -142,21 +142,7 @@ def split_discord_text_display(text: str) -> list[str]:
     )
 
 
-def build_ai_text_display_view(
-    content: str, images: tuple[object, ...] = ()
-) -> discord.ui.LayoutView:
+def build_ai_text_display_view(content: str) -> discord.ui.LayoutView:
     view = discord.ui.LayoutView(timeout=None)
     view.add_item(discord.ui.TextDisplay(content))
-    if images:
-        view.add_item(
-            discord.ui.MediaGallery(
-                *[
-                    discord.MediaGalleryItem(
-                        media=image.url,
-                        description=image.description,
-                    )
-                    for image in images
-                ]
-            )
-        )
     return view

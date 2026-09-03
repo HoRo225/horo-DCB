@@ -46,10 +46,9 @@ def _optional_positive_int_env(name: str) -> int | None:
     raw = os.environ.get(name, "").strip()
     if not raw:
         return None
-    try:
-        value = int(raw)
-    except ValueError as exc:
-        raise RuntimeError(f"{name} 必須是正整數") from exc
+    if raw[0] == "0" or any(character not in "0123456789" for character in raw):
+        raise RuntimeError(f"{name} 必須是正整數")
+    value = int(raw)
     if value <= 0:
         raise RuntimeError(f"{name} 必須是正整數")
     return value
@@ -62,10 +61,13 @@ def _positive_int_set_env(name: str) -> frozenset[int]:
     values: list[int] = []
     for item in raw.split(","):
         cleaned = item.strip()
-        try:
-            value = int(cleaned)
-        except ValueError as exc:
-            raise RuntimeError(f"{name} 必須是逗號分隔的正整數") from exc
+        if (
+            not cleaned
+            or cleaned[0] == "0"
+            or any(character not in "0123456789" for character in cleaned)
+        ):
+            raise RuntimeError(f"{name} 必須是逗號分隔的正整數")
+        value = int(cleaned)
         if value <= 0:
             raise RuntimeError(f"{name} 必須是逗號分隔的正整數")
         values.append(value)

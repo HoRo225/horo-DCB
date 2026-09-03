@@ -11,14 +11,6 @@ report_error() {
     errors=$((errors + 1))
 }
 
-has_env_key() {
-    key=$1
-    awk -v key="$key" '
-        index($0, key "=") == 1 { found = 1 }
-        END { exit !found }
-    ' .env
-}
-
 read_env_value() {
     key=$1
     awk -v key="$key" '
@@ -44,27 +36,41 @@ require_configured() {
     esac
 }
 
+is_true() {
+    normalized=$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]')
+    case "$normalized" in
+        1|true|yes|on) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
+validate_positive_id() {
+    key=$1
+    value=$(read_env_value "$key")
+    case "$value" in
+        ""|0*|*[!0-9]*) report_error "$key must be a positive integer." ;;
+    esac
+}
+
 [ -f .env ] || {
     printf '%s\n' "configuration error: .env is missing; run sh scripts/setup.sh first." >&2
     exit 1
 }
 
-for key in \
-    DISCORD_TOKEN \
-    NINEROUTER_API_KEY \
-    NINEROUTER_MODEL \
-    NINEROUTER_WEB_SEARCH_PROVIDER \
-    NINEROUTER_WEB_FETCH_PROVIDER \
-    JWT_SECRET \
-    INITIAL_PASSWORD \
-    API_KEY_SECRET \
-    MACHINE_ID_SALT
-do
-    require_configured "$key"
-done
+require_configured DISCORD_TOKEN
+require_configured CODEX_BRIDGE_TOKEN
+
+bridge_token=$(read_env_value CODEX_BRIDGE_TOKEN)
+if [ "${#bridge_token}" -ne 64 ]; then
+    report_error "CODEX_BRIDGE_TOKEN must contain 64 lowercase hexadecimal characters."
+else
+    case "$bridge_token" in
+        *[!0-9a-f]*) report_error "CODEX_BRIDGE_TOKEN must contain 64 lowercase hexadecimal characters." ;;
+    esac
+fi
 
 for key in \
-    SEMANTIC_MEMORY_ENABLED \
+    CODEX_ENABLED \
     TEMP_VOICE_ENABLED \
     STEAM_FREE_GAMES_ENABLED \
     AI_TEXT_DISPLAY_ENABLED \
@@ -78,18 +84,25 @@ do
     esac
 done
 
-if has_env_key NINEROUTER_EMBEDDING_MODEL; then
-    embedding_model=$(read_env_value NINEROUTER_EMBEDDING_MODEL)
-    [ -n "$embedding_model" ] || report_error "NINEROUTER_EMBEDDING_MODEL is empty."
-fi
-
-if has_env_key NINEROUTER_EMBEDDING_DIMENSIONS; then
-    dimensions=$(read_env_value NINEROUTER_EMBEDDING_DIMENSIONS)
-    case "$dimensions" in
-        ""|0|*[!0-9]*)
-            report_error "NINEROUTER_EMBEDDING_DIMENSIONS must be a positive integer."
-            ;;
-    esac
+if is_true "$(read_env_value CODEX_ENABLED)"; then
+    validate_positive_id CODEX_ALLOWED_GUILD_ID
+    validate_positive_id CODEX_ALLOWED_CHANNEL_ID
+    users=$(read_env_value CODEX_ALLOWED_USER_IDS)
+    if ! printf '%s\n' "$users" | awk -F, '
+        NF == 0 { exit 1 }
+        {
+            delete seen
+            for (field = 1; field <= NF; field++) {
+                value = $field
+                gsub(/^[[:space:]]+|[[:space:]]+$/, "", value)
+                if (value !~ /^[1-9][0-9]*$/ || seen[value]++) {
+                    exit 1
+                }
+            }
+        }
+    '; then
+        report_error "CODEX_ALLOWED_USER_IDS must be unique comma-separated positive integers."
+    fi
 fi
 
 if [ "$errors" -ne 0 ]; then

@@ -5,8 +5,7 @@ import time
 
 import discord
 
-from src.ai_client import AIClient, AIRuntimeStatus
-from src.chat import MAX_AGENT_TURNS, MAX_TOTAL_TOOL_CALLS, ChatManager
+from src.codex_bridge_client import CodexBridgeClient, CodexRuntimeStatus
 from src.server_activity import (
     ActivitySummary,
     ServerActivityMonitor,
@@ -26,7 +25,7 @@ PANEL_ACCENT_COLOUR = discord.Colour.from_rgb(88, 101, 242)
 
 MAIN_PAGES = (
     ("overview", "總覽", "控制台首頁"),
-    ("ai", "AI 助手", "模型、對話與 Agent 設定"),
+    ("ai", "AI 助手", "Codex OAuth 與對話"),
     ("modules", "功能模組", "臨時語音與 Steam 免費遊戲"),
     ("activity", "伺服器活動", "活動監聽與稽核紀錄"),
 )
@@ -129,9 +128,8 @@ class AdminPanelView(discord.ui.LayoutView):
         *,
         user_id: int,
         guild_id: int,
-        chat: ChatManager,
-        ai_client: AIClient,
-        ai_status: AIRuntimeStatus,
+        codex_client: CodexBridgeClient,
+        codex_status: CodexRuntimeStatus,
         temp_voice: TempVoiceManager,
         steam_free_games: SteamFreeGamesNotifier,
         temp_voice_enabled: bool = True,
@@ -141,9 +139,8 @@ class AdminPanelView(discord.ui.LayoutView):
         super().__init__(timeout=15 * 60)
         self.user_id = user_id
         self.guild_id = guild_id
-        self.chat = chat
-        self.ai_client = ai_client
-        self.ai_status = ai_status
+        self.codex_client = codex_client
+        self.codex_status = codex_status
         self.temp_voice = temp_voice
         self.steam_free_games = steam_free_games
         self.temp_voice_enabled = temp_voice_enabled
@@ -207,40 +204,23 @@ class AdminPanelView(discord.ui.LayoutView):
     def _gap() -> discord.ui.Separator:
         return discord.ui.Separator(visible=False)
 
-    @staticmethod
-    def _effort_label(effort: str | None) -> str:
-        if not effort:
-            return "無法取得"
-        normalized = effort.strip().lower()
-        labels = {
-            "auto": "Auto",
-            "none": "None",
-            "minimal": "Minimal",
-            "low": "Low",
-            "medium": "Medium",
-            "high": "High",
-            "xhigh": "XHigh",
-            "max": "Max",
-        }
-        return labels.get(normalized, discord.utils.escape_markdown(effort.strip()))
-
     def _ai_display(self) -> tuple[str, str, str]:
-        model = (
-            discord.utils.escape_markdown(self.ai_status.model_name)
-            if self.ai_status.model_name
-            else "無法取得模型"
+        plan = (
+            self.codex_status.plan.replace("_", " ").title()
+            if self.codex_status.plan
+            else "Unknown"
         )
-        effort = self._effort_label(self.ai_status.effort)
-        if not self.ai_status.router_available:
-            router = "無法連線"
-        elif not self.ai_status.router_version:
-            router = "已連線 · 版本未知"
-        else:
-            version = discord.utils.escape_markdown(self.ai_status.router_version)
-            if not version.lower().startswith("v"):
-                version = f"v{version}"
-            router = f"已連線 · {version}"
-        return model, effort, router
+        runtime = (
+            discord.utils.escape_markdown(self.codex_status.runtime_version)
+            if self.codex_status.runtime_version
+            else "Unknown"
+        )
+        search = (
+            self.codex_status.web_search.title()
+            if self.codex_status.web_search
+            else "Unknown"
+        )
+        return plan, runtime, search
 
     def _voice_summary(self) -> str:
         if not self.temp_voice_enabled:
@@ -278,10 +258,18 @@ class AdminPanelView(discord.ui.LayoutView):
 
     async def _refresh_ai_status(self) -> None:
         try:
-            self.ai_status = await self.ai_client.get_runtime_status()
+            self.codex_status = await self.codex_client.get_runtime_status()
         except Exception:
-            logging.exception("管理控制台讀取 9Router 狀態失敗。")
-            self.ai_status = AIRuntimeStatus(None, None, False, None)
+            logging.exception("管理控制台讀取 Codex 狀態失敗。")
+            self.codex_status = CodexRuntimeStatus(
+                False,
+                False,
+                None,
+                None,
+                None,
+                None,
+                0,
+            )
 
     def _render_overview(self) -> None:
         self.page = "overview"
@@ -289,10 +277,10 @@ class AdminPanelView(discord.ui.LayoutView):
         steam_status = self.steam_free_games.get_guild_status(self.guild_id)
 
         statuses: list[tuple[str, str, str]] = []
-        if not self.ai_status.router_available:
-            statuses.append(("AI 助手", "異常", "9Router 無法連線"))
-        elif not self.ai_status.model_name:
-            statuses.append(("AI 助手", "異常", "模型資訊無法完整取得"))
+        if not self.codex_status.available:
+            statuses.append(("AI 助手", "異常", "Codex bridge 無法連線"))
+        elif not self.codex_status.authenticated:
+            statuses.append(("AI 助手", "待設定", "Codex 尚未登入"))
         else:
             statuses.append(("AI 助手", "正常", ""))
 
@@ -521,30 +509,30 @@ class AdminPanelView(discord.ui.LayoutView):
 
     def _render_ai(self) -> None:
         self.page = "ai"
-        model, effort, router = self._ai_display()
+        plan, runtime, search = self._ai_display()
+        sdk = self.codex_status.sdk_version or "Unknown"
+        authenticated = "已登入" if self.codex_status.authenticated else "未登入"
         self._set_container(
-            self._title("AI 助手", "由 9Router 即時提供模型與服務狀態"),
+            self._title("AI 助手", "官方 Codex OAuth 與持久對話"),
             discord.ui.Separator(spacing=discord.SeparatorSpacing.large),
             self._main_select("ai"),
             discord.ui.Separator(),
             discord.ui.TextDisplay(
-                "## 模型與服務\n"
-                f"**{model}**\n"
-                f"-# Effort {effort} · 9Router {router}"
+                "## 帳號與服務\n"
+                f"**{plan} · {authenticated}**\n"
+                f"-# Runtime {runtime} · SDK {sdk} · Web Search {search}"
             ),
             self._gap(),
             discord.ui.TextDisplay(
                 "## 對話\n"
-                f"**記憶**　{self.chat.history_limit} 則　"
-                f"**Context**　{self.chat.context_char_limit:,} 字元　"
-                f"**Cooldown**　{self.chat.cooldown_seconds:g} 秒"
+                f"**持久 Thread**　{self.codex_status.thread_count} 條\n"
+                "-# 只保存直接 @Bot 或 Reply Bot 的 allowlisted 對話"
             ),
             self._gap(),
             discord.ui.TextDisplay(
-                "## Agent\n"
-                f"**逾時**　{self.chat.agent_timeout_seconds:g} 秒　"
-                f"**模型回合**　{MAX_AGENT_TURNS}　"
-                f"**工具呼叫**　{MAX_TOTAL_TOOL_CALLS} 次"
+                "## 安全邊界\n"
+                "**Read-only · Deny-all**\n"
+                "-# Shell、MCP、Apps、Subagents 與全域 Memories 均停用"
             ),
             self._row(_PanelButton("refresh", "重新整理"), self._close_button()),
         )

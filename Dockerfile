@@ -12,6 +12,9 @@ RUN pip install --no-cache-dir -r requirements.txt \
     && python -m pip uninstall --yes pip \
     && rm -rf /usr/local/bin/pip* /usr/local/lib/python3.14/site-packages/pip*
 
+RUN ln -s "$(python -c 'from codex_cli_bin import bundled_codex_path; print(bundled_codex_path())')" \
+    /usr/local/bin/codex
+
 RUN groupadd --gid 10001 bot \
     && useradd --uid 10001 --gid 10001 --no-create-home \
         --home-dir /nonexistent --shell /usr/sbin/nologin bot \

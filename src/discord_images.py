@@ -21,7 +21,7 @@ class ImageAttachmentError(ValueError):
     pass
 
 
-def _image_signature_matches(content_type: str, data: bytes) -> bool:
+def image_signature_matches(content_type: str, data: bytes) -> bool:
     if content_type == "image/png":
         return data.startswith(b"\x89PNG\r\n\x1a\n")
     if content_type == "image/jpeg":
@@ -82,7 +82,7 @@ async def read_image_attachments(attachments: list[Any]) -> tuple[str, ...]:
         total_bytes += len(data)
         if total_bytes > MAX_IMAGE_TOTAL_BYTES:
             raise ImageAttachmentError("本次圖片總大小最多 16 MB。")
-        if not _image_signature_matches(content_type, data):
+        if not image_signature_matches(content_type, data):
             raise ImageAttachmentError("圖片格式驗證失敗，請重新上傳 JPEG、PNG 或 WebP。")
 
         encoded = base64.b64encode(data).decode("ascii")

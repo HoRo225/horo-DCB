@@ -48,12 +48,8 @@ if [ -e .env ]; then
 else
     [ -f .env.example ] || fail ".env.example is missing."
     cp .env.example .env
-    replace_env_value NINEROUTER_IMAGE_SEARCH_PROVIDER ""
-    replace_env_value JWT_SECRET "$(random_hex 32)"
-    replace_env_value INITIAL_PASSWORD "$(random_hex 16)"
-    replace_env_value API_KEY_SECRET "$(random_hex 32)"
-    replace_env_value MACHINE_ID_SALT "$(random_hex 32)"
-    printf '%s\n' "Created .env with locally generated 9Router secrets."
+    replace_env_value CODEX_BRIDGE_TOKEN "$(random_hex 32)"
+    printf '%s\n' "Created .env with a local Codex bridge token."
 fi
 chmod 600 .env
 
@@ -64,16 +60,14 @@ cat <<'EOF'
 Setup files are ready.
 
 1. Edit .env and replace [REDACTED_SECRET] for DISCORD_TOKEN.
-2. Start only 9Router: docker compose up -d --build 9router
-3. Open http://127.0.0.1:20128, sign in with INITIAL_PASSWORD from the local .env,
-   change that password, then configure AI, Search, Fetch providers, and aliases.
-4. Create a 9Router API key and replace NINEROUTER_API_KEY in .env.
-5. Optional image search: set NINEROUTER_IMAGE_SEARCH_PROVIDER to a provider alias
-   that returns image URLs. Blank reuses NINEROUTER_WEB_SEARCH_PROVIDER.
-6. Validate: sh scripts/check-env.sh
-7. Start the full stack: docker compose up -d --build
+2. Build the shared image: docker compose build bot
+3. Log in: docker compose run --rm --no-deps codex python -m src.codex_bridge login
+4. Set CODEX_ALLOWED_GUILD_ID, CODEX_ALLOWED_CHANNEL_ID, and
+   CODEX_ALLOWED_USER_IDS, then set CODEX_ENABLED=1.
+5. Validate: sh scripts/check-env.sh
+6. Start: docker compose up -d
 
-Semantic Memory and Server Activity are disabled in a fresh setup. Review the
-README privacy and Discord prerequisites before setting SEMANTIC_MEMORY_ENABLED=1
-or SERVER_ACTIVITY_ENABLED=1.
+Codex stores OAuth and persistent thread state only in codex_data. The Bot does
+not mount that volume. Fresh installs keep voice, Steam automation, and Server
+Activity disabled until their documented switches are enabled.
 EOF

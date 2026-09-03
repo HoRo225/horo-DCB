@@ -1,88 +1,58 @@
 # Contributing
 
-## Development setup
+## Development flow
 
-1. Install Docker Engine or Docker Desktop with Docker Compose v2.
-2. Run `sh scripts/setup.sh`.
-3. Replace the remaining `[REDACTED_SECRET]` values in `.env`.
-4. Run `sh scripts/check-env.sh`.
-5. Build with `docker compose build bot 9router`.
+Use an isolated branch or worktree. Keep the diff focused, preserve unrelated user changes, and write the smallest test that proves each non-trivial behavior before implementation.
 
-Do not commit `.env`, Docker volumes, SQLite files, Discord payloads, provider responses, or local `.ai-bridge` state.
+The supported build and test path is Docker; do not install project packages on the workstation:
 
-## Required checks
-
-Run the same checks as CI before opening a pull request:
-
-```sh
+~~~sh
+sh scripts/setup.sh
 docker compose config --quiet
-docker compose build bot 9router
-docker compose run --rm --no-deps bot python -m unittest discover -s tests -v
-docker compose run --rm --no-deps bot python -m src.preflight
+docker compose build bot
+docker compose run --rm -T --no-deps bot python -m unittest discover -s tests -v
 docker compose run --rm --no-deps -e PYTHONPYCACHEPREFIX=/tmp/pycache bot python -m compileall -q src tests
-```
+~~~
 
-The Bot image runs `pip check` during `docker compose build`; `pip` is then removed from the runtime image to reduce the executable and vulnerability surface.
-
-Do not restart or recreate an existing production stack as part of development verification. Use CI or an isolated Compose project for live smoke tests.
+Runtime code must continue to work as UID/GID 10001 with a read-only root filesystem and without pip.
 
 ## Architecture rules
 
-- `src/bot.py` owns Discord event routing and dependency composition, not provider protocol parsing, image validation, or Discord output formatting.
-- `src/discord_images.py` owns Discord attachment validation and conversion.
-- `src/discord_output.py` owns Discord response splitting and Components V2 output construction.
-- `src/chat.py` owns short-term conversation state and the bounded agent loop.
-- `src/agent_tools.py` owns tool schemas, argument validation, and safe tool execution.
-- `src/ai_client.py` is the sole 9Router HTTP boundary.
-- `src/semantic_memory.py` owns durable memory persistence, embedding retries, ranking, and deletion synchronization.
-- Optional dependencies such as Semantic Memory are wired explicitly by `src/bot.py::main()` through constructors; do not add two-stage attach methods or cross-object dependency discovery.
-- Feature modules must expose narrow public interfaces. Do not read another module's underscore-prefixed fields.
-- Discord callbacks must fail closed at external boundaries and must not expose exception details or credentials to users.
+- src/config.py is the only Bot environment parser.
+- src/codex_bridge_client.py is the only Bot-to-Codex HTTP boundary.
+- src/codex_bridge.py owns SDK lifecycle, OAuth readiness and persistent thread mapping.
+- Bridge URL remains internal and fixed; do not publish port 8765.
+- Bot must not mount codex_data or receive CODEX_HOME.
+- Sidecar must not mount bot_data or receive DISCORD_TOKEN.
+- Never log prompts, images, Bearer tokens, OAuth email or raw SDK/RPC errors.
+- Keep the Discord Guild／Channel／User allowlist fail closed.
+- Do not add API-key, 9Router or automatic retry fallback.
+- Do not add MCP, local memories, shell, write actions or extra agents without a separate reviewed design.
+- Calendar and Steam remain UI／scheduler features, not natural-language tools.
 
-Prefer a focused module change with direct tests over a cross-cutting rewrite. A new feature must document its Discord permissions, persisted data, external costs, and shutdown behavior.
+## Dependencies
+
+requirements.txt is the only Python dependency manifest. Direct and transitive packages are fully pinned; do not add a second requirements file or lock file.
+
+Changes to openai-codex, openai-codex-cli-bin, Python or the base-image digest require:
+
+1. official release and security review;
+2. a clean shared-image build and pip check;
+3. the full automated suite;
+4. SDK and bundled runtime version verification;
+5. a disposable ChatGPT device-login gate covering new turn, resume, restart resume, live Web Search and JPEG／PNG／WebP;
+6. Compose isolation checks.
+
+Never assume a ChatGPT plan supports a capability solely from documentation. If the target account gate fails, report the blocker.
 
 ## Tests
 
-Tests use the standard library `unittest` runner and must be deterministic. Network, Discord, Steam, web-search, and LLM interactions must be replaced by bounded fakes or mocks.
+Use fake SDK and aiohttp test servers in unit tests. CI must not contact OpenAI, Discord or Steam. Security-boundary tests should cover malformed input and verify that protected calls are not made.
 
-Add regression coverage for:
+When changing a non-AI feature, retain its focused regression tests. When deleting a runtime feature, delete its dead adapter and tests rather than leaving dormant abstractions.
 
-- malformed and oversized input;
-- permission and HTTP failures;
-- cancellation and shutdown;
-- restart recovery and stale persisted state;
-- duplicate events and retry behavior;
-- privacy and deletion synchronization;
-- any newly introduced feature flag.
+## Documentation and deployment
 
-## Dependency updates
+Update README.md, horo-DCB.md and SECURITY.md when trust boundaries, data retention, user-visible features or rollout steps change.
 
-`requirements.txt` is the single complete pinned runtime dependency manifest used by Docker builds, CI, GitHub dependency graph, and Dependabot. The direct runtime dependencies are currently `discord.py` and `aiohttp`; the remaining entries are pinned transitive dependencies. Dependabot's root `pip` configuration updates this same file. Manual dependency changes must keep the complete resolved set pinned and must include the full build and test result. Do not introduce a second parallel dependency manifest or lock file unless the dependency strategy is deliberately redesigned.
-
-The Python base image and 9Router image are pinned by digest. A digest update is not a formatting-only change: inspect upstream release notes and security advisories, rebuild both images, and rerun every test.
-
-## 9Router upstream updates
-
-`9router/Dockerfile` must directly inherit one official immutable digest. Do not add source rebuilds or patches against `.next`, minified strings, or Webpack modules.
-
-For an upstream update:
-
-1. inspect upstream release notes and security advisories;
-2. change only the official digest and Compose image tag;
-3. copy the current `9router_data` to a temporary Volume and boot the candidate image in isolation;
-4. verify health, version, `/v1/models`, Chat, Embedding, Search, and Fetch contracts;
-5. rebuild both project images and run the complete test suite plus the 9Router smoke test;
-6. document compatibility changes, provider limitations, and rollback evidence.
-
-## Pull request scope
-
-A pull request should state:
-
-- the user-visible behavior changed;
-- persistence or migration impact;
-- required Discord or provider configuration;
-- tests executed;
-- rollback procedure;
-- any unresolved risk.
-
-The repository owner must select and add an explicit license before accepting outside contributions or describing the repository as open source.
+Production horo-laptop is image-only. Source builds occur on horo-server, and images move as complete OCI archives. Do not deploy from an uncommitted tree, delete rollback artifacts inside the seven-day window, or clean old Volumes without a separate explicit confirmation.

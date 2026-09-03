@@ -5,7 +5,7 @@ from unittest.mock import AsyncMock, Mock, patch
 import discord
 
 from src.admin_panel import MAX_STEAM_OFFERS_SHOWN, AdminPanelView
-from src.ai_client import AIRuntimeStatus
+from src.codex_bridge_client import CodexRuntimeStatus
 from src.server_activity import ActivitySummary, ServerActivityStatus, StoredActivityEvent
 from src.steam_free_games import SteamFetchResult, SteamGuildStatus, SteamOffer
 from src.temp_voice import TempVoiceGuildStatus
@@ -105,17 +105,18 @@ class FakeActivity:
 
 class AdminPanelViewTest(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
-        self.ai_status = AIRuntimeStatus("GPT 5.6 Luna", "auto", True, "0.5.55")
-        self.ai_client = SimpleNamespace(
-            model="horo-main",
-            internal_value="SENSITIVE_VALUE",
-            get_runtime_status=AsyncMock(return_value=self.ai_status),
+        self.codex_status = CodexRuntimeStatus(
+            True,
+            True,
+            "free",
+            "0.147.0",
+            "0.147.0",
+            "live",
+            3,
         )
-        self.chat = SimpleNamespace(
-            history_limit=50,
-            context_char_limit=16_000,
-            cooldown_seconds=5.0,
-            agent_timeout_seconds=120.0,
+        self.codex_client = SimpleNamespace(
+            internal_value="SENSITIVE_VALUE",
+            get_runtime_status=AsyncMock(return_value=self.codex_status),
         )
         self.temp_voice = FakeTempVoice()
         self.steam = FakeSteam()
@@ -123,9 +124,8 @@ class AdminPanelViewTest(unittest.IsolatedAsyncioTestCase):
         self.view = AdminPanelView(
             user_id=1,
             guild_id=10,
-            chat=self.chat,
-            ai_client=self.ai_client,
-            ai_status=self.ai_status,
+            codex_client=self.codex_client,
+            codex_status=self.codex_status,
             temp_voice=self.temp_voice,
             steam_free_games=self.steam,
             server_activity=self.activity,
@@ -204,7 +204,7 @@ class AdminPanelViewTest(unittest.IsolatedAsyncioTestCase):
         )
 
     def test_overview_distinguishes_normal_pending_and_error(self):
-        self.view.ai_status = AIRuntimeStatus(None, None, False, None)
+        self.view.codex_status = CodexRuntimeStatus(False, False, None, "0.147.0", None, "live", 0)
         self.temp_voice.get_guild_status = lambda guild_id: TempVoiceGuildStatus(
             True, None, 0
         )
@@ -218,7 +218,7 @@ class AdminPanelViewTest(unittest.IsolatedAsyncioTestCase):
         self.assertIn("**2 個正常 · 1 個待設定 · 1 個異常**", text)
         self.assertIn("## 需要注意", text)
         self.assertIn("**AI 助手 · 異常**", text)
-        self.assertIn("9Router 無法連線", text)
+        self.assertIn("Codex bridge 無法連線", text)
         self.assertIn("**臨時語音 · 待設定**", text)
         self.assertIn("入口頻道尚未綁定", text)
         self.assertNotIn("**Steam 免費遊戲 · 正常**", text)
@@ -240,18 +240,21 @@ class AdminPanelViewTest(unittest.IsolatedAsyncioTestCase):
         self.assertIn("尚未完成：Steam 通知頻道", text)
         self.assertIn("Steam 通知目前追蹤 0 款活動", text)
 
-    def test_overview_reports_incomplete_ai_metadata_as_error(self):
-        self.view.ai_status = AIRuntimeStatus(None, "auto", True, "0.5.55")
+    def test_overview_reports_unauthenticated_codex_as_pending(self):
+        self.view.codex_status = CodexRuntimeStatus(
+            True, False, None, "0.147.0", "0.147.0", "live", 0
+        )
         self.view._render_overview()
         text = self.text(self.view)
 
-        self.assertIn("**AI 助手 · 異常**", text)
-        self.assertIn("模型資訊無法完整取得", text)
-        self.assertNotIn("horo-main", text)
+        self.assertIn("**AI 助手 · 待設定**", text)
+        self.assertIn("Codex 尚未登入", text)
         self.assertNotIn("SENSITIVE_VALUE", text)
 
-    def test_overview_treats_missing_optional_effort_as_normal(self):
-        self.view.ai_status = AIRuntimeStatus("horo-main", None, True, "0.5.55")
+    def test_overview_treats_missing_optional_runtime_as_normal(self):
+        self.view.codex_status = CodexRuntimeStatus(
+            True, True, "free", "0.147.0", None, "live", 0
+        )
 
         self.view._render_overview()
         text = self.text(self.view)
@@ -408,24 +411,21 @@ class AdminPanelViewTest(unittest.IsolatedAsyncioTestCase):
         interaction = FakeInteraction()
         await self.view.handle_action(interaction, "ai")
 
-        self.ai_client.get_runtime_status.assert_awaited_once_with()
+        self.codex_client.get_runtime_status.assert_awaited_once_with()
         self.assertEqual(interaction.response.defer_count, 1)
         self.assertEqual(interaction.response.edits, [])
         self.assertEqual(len(interaction.original_edits), 1)
         text = self.text(self.view)
         self.assertIn("AI 助手", text)
-        self.assertIn("由 9Router 即時提供模型與服務狀態", text)
-        self.assertIn("## 模型與服務", text)
+        self.assertIn("官方 Codex OAuth 與持久對話", text)
+        self.assertIn("## 帳號與服務", text)
         self.assertIn("## 對話", text)
-        self.assertIn("## Agent", text)
-        self.assertIn("GPT 5.6 Luna", text)
-        self.assertIn("Effort", text)
-        self.assertIn("Auto", text)
-        self.assertIn("v0.5.55", text)
-        self.assertNotIn("horo-main", text)
+        self.assertIn("## 安全邊界", text)
+        self.assertIn("Free", text)
+        self.assertIn("Runtime 0.147.0", text)
+        self.assertIn("Web Search Live", text)
+        self.assertNotIn("9Router", text)
         self.assertNotIn("SENSITIVE_VALUE", text)
-        self.assertNotIn("AI Runtime", text)
-        self.assertNotIn("Agent timeout", text)
 
     async def test_select_navigation_edits_the_same_message(self):
         interaction = FakeInteraction()
@@ -459,12 +459,14 @@ class AdminPanelViewTest(unittest.IsolatedAsyncioTestCase):
         self.assertIn("## 臨時語音\n**狀態檔不可用**", text)
         self.assertIn("## Steam 免費遊戲\n**狀態檔不可用**", text)
 
-    def test_router_failure_is_reported_in_the_main_value(self):
-        self.view.ai_status = AIRuntimeStatus(None, None, False, None)
+    def test_codex_failure_is_reported_in_the_main_value(self):
+        self.view.codex_status = CodexRuntimeStatus(
+            False, False, None, "0.147.0", None, "live", 0
+        )
         self.view._render_ai()
         text = self.text(self.view)
-        self.assertIn("**無法取得模型**", text)
-        self.assertIn("9Router 無法連線", text)
+        self.assertIn("**Unknown · 未登入**", text)
+        self.assertNotIn("9Router", text)
 
     def test_voice_note_is_markdown_escaped(self):
         self.view._render_voice("**粗體**")
@@ -593,12 +595,12 @@ class AdminPanelViewTest(unittest.IsolatedAsyncioTestCase):
         for page in ("modules", "voice", "steam"):
             with self.subTest(page=page):
                 await self.view.handle_action(FakeInteraction(), page)
-                self.ai_client.get_runtime_status.reset_mock()
+                self.codex_client.get_runtime_status.reset_mock()
 
                 interaction = FakeInteraction()
                 await self.view.handle_action(interaction, "refresh")
 
-                self.ai_client.get_runtime_status.assert_not_awaited()
+                self.codex_client.get_runtime_status.assert_not_awaited()
                 self.assertEqual(self.view.page, page)
                 self.assertEqual(interaction.response.defer_count, 1)
                 self.assertEqual(len(interaction.original_edits), 1)
@@ -607,11 +609,11 @@ class AdminPanelViewTest(unittest.IsolatedAsyncioTestCase):
         for page in ("overview", "ai"):
             with self.subTest(page=page):
                 await self.view.handle_action(FakeInteraction(), page)
-                self.ai_client.get_runtime_status.reset_mock()
+                self.codex_client.get_runtime_status.reset_mock()
 
                 await self.view.handle_action(FakeInteraction(), "refresh")
 
-                self.ai_client.get_runtime_status.assert_awaited_once_with()
+                self.codex_client.get_runtime_status.assert_awaited_once_with()
 
     async def test_close_renders_a_dead_panel_in_the_same_message(self):
         interaction = FakeInteraction()
@@ -639,9 +641,8 @@ class AdminPanelViewTest(unittest.IsolatedAsyncioTestCase):
         view = AdminPanelView(
             user_id=1,
             guild_id=10,
-            chat=self.chat,
-            ai_client=self.ai_client,
-            ai_status=self.ai_status,
+            codex_client=self.codex_client,
+            codex_status=self.codex_status,
             temp_voice=self.temp_voice,
             steam_free_games=self.steam,
             temp_voice_enabled=False,
@@ -662,9 +663,8 @@ class AdminPanelViewTest(unittest.IsolatedAsyncioTestCase):
         view = AdminPanelView(
             user_id=1,
             guild_id=10,
-            chat=self.chat,
-            ai_client=self.ai_client,
-            ai_status=self.ai_status,
+            codex_client=self.codex_client,
+            codex_status=self.codex_status,
             temp_voice=self.temp_voice,
             steam_free_games=self.steam,
             temp_voice_enabled=False,
@@ -703,8 +703,10 @@ class AdminPanelViewTest(unittest.IsolatedAsyncioTestCase):
         self.assertIn("**全部正常**", self.text(self.view))
 
         disabled = AdminPanelView(
-            user_id=1, guild_id=10, chat=self.chat, ai_client=self.ai_client,
-            ai_status=self.ai_status, temp_voice=self.temp_voice,
+            user_id=1,
+            guild_id=10,
+            codex_client=self.codex_client,
+            codex_status=self.codex_status, temp_voice=self.temp_voice,
             steam_free_games=self.steam,
         )
         disabled_text = self.text(disabled)
@@ -760,8 +762,10 @@ class AdminPanelViewTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_disabled_activity_page_does_not_query_database(self):
         view = AdminPanelView(
-            user_id=1, guild_id=10, chat=self.chat, ai_client=self.ai_client,
-            ai_status=self.ai_status, temp_voice=self.temp_voice,
+            user_id=1,
+            guild_id=10,
+            codex_client=self.codex_client,
+            codex_status=self.codex_status, temp_voice=self.temp_voice,
             steam_free_games=self.steam, server_activity=None,
         )
         interaction = FakeInteraction()

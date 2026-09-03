@@ -72,7 +72,7 @@ class CodexConfigTest(unittest.TestCase):
         invalid = {
             "CODEX_ALLOWED_GUILD_ID": "",
             "CODEX_ALLOWED_CHANNEL_ID": "0",
-            "CODEX_ALLOWED_USER_IDS": "303,303",
+            "CODEX_ALLOWED_USER_IDS": "+303",
             "CODEX_BRIDGE_TOKEN": "not-hex",
         }
         for key, value in invalid.items():
@@ -83,6 +83,16 @@ class CodexConfigTest(unittest.TestCase):
                     clear=True,
                 ):
                     with self.assertRaisesRegex(RuntimeError, key):
+                        AppConfig.from_env()
+
+        for users, message in (("303,303", "不得包含重複值"), ("0303", "正整數")):
+            with self.subTest(users=users):
+                with patch.dict(
+                    "src.config.os.environ",
+                    {**base, "CODEX_ALLOWED_USER_IDS": users},
+                    clear=True,
+                ):
+                    with self.assertRaisesRegex(RuntimeError, message):
                         AppConfig.from_env()
 
 
