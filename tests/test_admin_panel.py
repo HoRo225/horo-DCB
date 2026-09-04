@@ -219,7 +219,7 @@ class AdminPanelViewTest(unittest.IsolatedAsyncioTestCase):
         self.assertIn("## 系統狀態\n**全部正常**", text)
         self.assertIn("伺服器活動皆可用", text)
         self.assertNotIn("## 需要注意", text)
-        self.assertIn("## 設定\n**2 / 2 已設定**", text)
+        self.assertIn("## 設定\n**3 / 3 已設定**", text)
         self.assertIn("Steam 通知目前追蹤 1 款活動", text)
         self.assertRegex(text, r"狀態更新 <t:\d+:R>")
         self.assertNotIn("GPT 5.6 Luna", text)
@@ -255,7 +255,7 @@ class AdminPanelViewTest(unittest.IsolatedAsyncioTestCase):
         self.assertIn("**臨時語音 · 待設定**", text)
         self.assertIn("入口頻道尚未綁定", text)
         self.assertNotIn("**Steam 免費遊戲 · 正常**", text)
-        self.assertIn("## 設定\n**1 / 2 已設定**", text)
+        self.assertIn("## 設定\n**2 / 3 已設定**", text)
         self.assertIn("尚未完成：臨時語音入口", text)
 
     def test_overview_reports_steam_unconfigured_as_pending(self):
@@ -269,9 +269,64 @@ class AdminPanelViewTest(unittest.IsolatedAsyncioTestCase):
         self.assertIn("**3 個正常 · 1 個待設定 · 0 個異常**", text)
         self.assertIn("**Steam 免費遊戲 · 待設定**", text)
         self.assertIn("通知頻道尚未綁定", text)
-        self.assertIn("## 設定\n**1 / 2 已設定**", text)
+        self.assertIn("## 設定\n**2 / 3 已設定**", text)
         self.assertIn("尚未完成：Steam 通知頻道", text)
         self.assertIn("Steam 通知目前追蹤 0 款活動", text)
+
+    def test_overview_reports_disabled_unconfigured_and_corrupt_ai_access(self):
+        corrupt = CodexAccess(True, 10, 20, frozenset({1}))
+        corrupt.state_available = False
+        cases = (
+            (
+                "disabled",
+                CodexAccess(False, 10, 20, frozenset({1})),
+                "**AI 助手 · 停用**",
+                "AI 對話目前依設定停用",
+            ),
+            (
+                "other_guild",
+                CodexAccess(True, 11, 20, frozenset({1})),
+                "**AI 助手 · 停用**",
+                "此伺服器不在 AI 白名單",
+            ),
+            (
+                "missing_channels",
+                CodexAccess(True, 10, None, frozenset({1})),
+                "**AI 助手 · 待設定**",
+                "白名單頻道尚未設定",
+            ),
+            (
+                "missing_mode",
+                CodexAccess(True, 10, 20, frozenset()),
+                "**AI 助手 · 待設定**",
+                "白名單身分組或舊使用者尚未設定",
+            ),
+            (
+                "corrupt",
+                corrupt,
+                "**AI 助手 · 異常**",
+                "白名單狀態檔不可用",
+            ),
+        )
+
+        for name, access, heading, detail in cases:
+            with self.subTest(name=name):
+                view = AdminPanelView(
+                    user_id=1,
+                    guild_id=10,
+                    codex_client=self.codex_client,
+                    codex_access=access,
+                    codex_status=self.codex_status,
+                    temp_voice=self.temp_voice,
+                    steam_free_games=self.steam,
+                    server_activity=self.activity,
+                )
+                text = self.text(view)
+                self.assertIn(heading, text)
+                self.assertIn(detail, text)
+                if "待設定" in heading or "異常" in heading:
+                    self.assertIn("AI 白名單", text)
+                    self.assertNotIn("## 系統狀態\n**全部正常**", text)
 
     def test_overview_reports_unauthenticated_codex_as_pending(self):
         self.view.codex_status = CodexRuntimeStatus(
@@ -309,7 +364,7 @@ class AdminPanelViewTest(unittest.IsolatedAsyncioTestCase):
         self.assertIn("**2 個正常 · 0 個待設定 · 2 個異常**", text)
         self.assertIn("臨時語音功能已停用", text)
         self.assertIn("通知功能已停用", text)
-        self.assertIn("## 設定\n**0 / 2 已設定**", text)
+        self.assertIn("## 設定\n**1 / 3 已設定**", text)
         self.assertIn("尚未完成：臨時語音入口 · Steam 通知頻道", text)
         self.assertIn("Steam 通知活動追蹤狀態無法取得", text)
 
@@ -916,7 +971,7 @@ class AdminPanelViewTest(unittest.IsolatedAsyncioTestCase):
         text = self.text(view)
         self.assertIn("已啟用功能正常", text)
         self.assertIn("臨時語音與 Steam 自動通知依設定停用", text)
-        self.assertIn("## 設定\n**無需設定**", text)
+        self.assertIn("## 設定\n**1 / 1 已設定**", text)
         self.assertNotIn("## 需要注意", text)
 
     async def test_steam_query_only_fetches_and_edits_original_response(self):

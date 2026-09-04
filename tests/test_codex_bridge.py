@@ -716,6 +716,54 @@ class FakeBridgeService:
         self.archive_calls.append((guild_id, channel_id))
 
 
+class RecordingStatusSession:
+    closed = False
+
+    def __init__(self):
+        self.timeout = None
+
+    def request(self, _method, _url, **kwargs):
+        self.timeout = kwargs.get("timeout")
+        return self
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, _exc_type, _exc, _traceback):
+        return None
+
+    async def json(self):
+        return {
+            "available": True,
+            "authenticated": True,
+            "plan": "free",
+            "sdk_version": "0.147.0",
+            "runtime_version": "0.147.0",
+            "web_search": "live",
+            "thread_count": 1,
+        }
+
+    status = 200
+
+
+class CodexBridgeClientStatusTest(unittest.IsolatedAsyncioTestCase):
+    async def test_status_uses_three_second_timeout_separate_from_chat_timeout(self):
+        client = CodexBridgeClient(
+            "http://codex:8765",
+            "d" * 64,
+            timeout_seconds=125,
+        )
+        session = RecordingStatusSession()
+        client._session = session
+
+        status = await client.get_runtime_status()
+
+        self.assertTrue(status.available)
+        self.assertIsNotNone(session.timeout)
+        self.assertEqual(session.timeout.total, 3)
+        self.assertEqual(client.timeout_seconds, 125)
+
+
 class BridgeHttpTest(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         self.token = "d" * 64
