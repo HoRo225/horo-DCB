@@ -17,7 +17,6 @@ from src.calendar_events import (
     CALENDAR_TZ,
     CalendarAdminView,
     CalendarBinding,
-    CalendarDraft,
     CalendarEditPickerView,
     CalendarManager,
     CalendarUserError,
@@ -403,7 +402,7 @@ class CalendarBoardTest(unittest.IsolatedAsyncioTestCase):
         )
         event = await self.manager.create_event(
             guild,
-            CalendarDraft("create", event_input),
+            event_input,
             actor,
         )
         self.assertEqual(event.id, 900)
@@ -504,7 +503,8 @@ class CalendarBoardTest(unittest.IsolatedAsyncioTestCase):
 
         result = await self.manager.edit_event(
             guild,
-            CalendarDraft("edit", draft_input, event_id=5),
+            5,
+            draft_input,
             actor,
         )
 

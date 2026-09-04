@@ -9,7 +9,6 @@ import json
 import logging
 import os
 from pathlib import Path
-from typing import Literal
 
 import discord
 
@@ -48,20 +47,6 @@ class CalendarEventInput:
     @property
     def duration_minutes(self) -> int:
         return max(1, int((self.end_time - self.start_time).total_seconds() // 60))
-
-
-@dataclass(frozen=True, slots=True)
-class CalendarDraft:
-    action: Literal["create", "edit"]
-    event: CalendarEventInput
-    event_id: int | None = None
-
-
-@dataclass(frozen=True, slots=True)
-class CalendarGuildStatus:
-    state_available: bool
-    channel_id: int | None
-    message_id: int | None
 
 
 def calendar_now() -> datetime:
@@ -197,14 +182,6 @@ class CalendarManager:
     @property
     def state_available(self) -> bool:
         return self._state_available
-
-    def get_guild_status(self, guild_id: int) -> CalendarGuildStatus:
-        binding = self._bindings.get(guild_id)
-        return CalendarGuildStatus(
-            state_available=self._state_available,
-            channel_id=binding.channel_id if binding else None,
-            message_id=binding.message_id if binding else None,
-        )
 
     def has_binding(self, guild_id: int) -> bool:
         return self._state_available and guild_id in self._bindings
@@ -760,19 +737,17 @@ class CalendarManager:
     async def create_event(
         self,
         guild: discord.Guild,
-        draft: CalendarDraft,
+        event_input: CalendarEventInput,
         actor: discord.Member | discord.User,
     ) -> discord.ScheduledEvent:
         self._assert_user_can_manage(actor)
         self._binding_channel(guild)
-        if draft.action != "create":
-            raise CalendarUserError("活動草稿類型不正確。")
         data = build_calendar_event_input(
-            name=draft.event.name,
-            start=draft.event.start_time.astimezone(CALENDAR_TZ).strftime("%Y-%m-%d %H:%M"),
-            duration_minutes=draft.event.duration_minutes,
-            location=draft.event.location,
-            description=draft.event.description or "",
+            name=event_input.name,
+            start=event_input.start_time.astimezone(CALENDAR_TZ).strftime("%Y-%m-%d %H:%M"),
+            duration_minutes=event_input.duration_minutes,
+            location=event_input.location,
+            description=event_input.description or "",
         )
         kwargs: dict[str, object] = {
             "name": data.name,
@@ -795,20 +770,21 @@ class CalendarManager:
     async def edit_event(
         self,
         guild: discord.Guild,
-        draft: CalendarDraft,
+        event_id: int,
+        event_input: CalendarEventInput,
         actor: discord.Member | discord.User,
     ) -> discord.ScheduledEvent:
         self._assert_user_can_manage(actor)
         self._binding_channel(guild)
-        if draft.action != "edit" or type(draft.event_id) is not int or draft.event_id <= 0:
+        if type(event_id) is not int or event_id <= 0:
             raise CalendarUserError("活動草稿類型不正確。")
-        event = self.get_editable_event(guild, draft.event_id)
+        event = self.get_editable_event(guild, event_id)
         data = build_calendar_event_input(
-            name=draft.event.name,
-            start=draft.event.start_time.astimezone(CALENDAR_TZ).strftime("%Y-%m-%d %H:%M"),
-            duration_minutes=draft.event.duration_minutes,
-            location=draft.event.location,
-            description=draft.event.description or "",
+            name=event_input.name,
+            start=event_input.start_time.astimezone(CALENDAR_TZ).strftime("%Y-%m-%d %H:%M"),
+            duration_minutes=event_input.duration_minutes,
+            location=event_input.location,
+            description=event_input.description or "",
         )
         try:
             updated = await event.edit(
@@ -1004,44 +980,39 @@ class CalendarBoardView(discord.ui.LayoutView):
 
 
 class CalendarCreateModal(discord.ui.Modal):
-    def __init__(self, manager: CalendarManager, *, draft: CalendarDraft | None = None) -> None:
+    def __init__(self, manager: CalendarManager) -> None:
         super().__init__(title="新增活動", timeout=5 * 60)
         self.manager = manager
-        data = draft.event if draft is not None else None
         self.name_input = discord.ui.TextInput(
             label="活動名稱",
             min_length=1,
             max_length=100,
-            default=data.name if data else None,
+            default=None,
         )
         self.start_input = discord.ui.TextInput(
             label="開始時間（YYYY-MM-DD HH:MM，UTC+8）",
             min_length=16,
             max_length=16,
-            default=(
-                data.start_time.astimezone(CALENDAR_TZ).strftime("%Y-%m-%d %H:%M")
-                if data
-                else None
-            ),
+            default=None,
         )
         self.duration_input = discord.ui.TextInput(
             label="活動長度（分鐘）",
             min_length=1,
             max_length=5,
-            default=str(data.duration_minutes if data else 60),
+            default="60",
         )
         self.location_input = discord.ui.TextInput(
             label="地點",
             min_length=1,
             max_length=100,
-            default=data.location if data else "Discord",
+            default="Discord",
         )
         self.description_input = discord.ui.TextInput(
             label="說明（選填）",
             style=discord.TextStyle.paragraph,
             required=False,
             max_length=1000,
-            default=data.description if data and data.description else None,
+            default=None,
         )
         for item in (
             self.name_input,
@@ -1072,7 +1043,7 @@ class CalendarCreateModal(discord.ui.Modal):
             )
             event = await self.manager.create_event(
                 interaction.guild,
-                CalendarDraft("create", event_input),
+                event_input,
                 interaction.user,
             )
         except CalendarUserError as exc:
@@ -1159,7 +1130,8 @@ class CalendarEditModal(discord.ui.Modal):
         try:
             event = await self.manager.edit_event(
                 interaction.guild,
-                CalendarDraft("edit", event_input, event_id=self.event_id),
+                self.event_id,
+                event_input,
                 interaction.user,
             )
         except CalendarUserError as exc:
