@@ -18,6 +18,7 @@ class AdminCommandTest(unittest.IsolatedAsyncioTestCase):
             CodexAccess(True, 10, 20, frozenset({1})),
             SimpleNamespace(),
             SimpleNamespace(),
+            SimpleNamespace(),
             server_activity=server_activity,
         )
 
@@ -56,6 +57,7 @@ class AdminCommandTest(unittest.IsolatedAsyncioTestCase):
             CodexAccess(True, 10, 20, frozenset({1})),
             temp_voice,
             steam,
+            SimpleNamespace(),
             server_activity=server_activity,
         )
         interaction = SimpleNamespace(

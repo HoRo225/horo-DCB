@@ -1,6 +1,6 @@
 from types import SimpleNamespace
 import unittest
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, Mock, patch
 
 from src.bot import HoroBot, main
 from src.codex_bridge_client import CodexAccess
@@ -55,6 +55,30 @@ class CodexRuntimeWiringTest(unittest.TestCase):
 
 
 class CodexBotLifecycleTest(unittest.IsolatedAsyncioTestCase):
+    async def test_temp_voice_and_steam_default_to_dormant(self):
+        codex = SimpleNamespace(start=AsyncMock())
+        temp_voice = SimpleNamespace(reconcile=AsyncMock())
+        steam = SimpleNamespace(start=Mock())
+        calendar = SimpleNamespace(
+            persistent_board_view=lambda: object(),
+            start=AsyncMock(),
+        )
+        bot = HoroBot(
+            codex,
+            CodexAccess(True, 10, 20, frozenset({30})),
+            temp_voice,
+            steam,
+            calendar,
+        )
+        bot.tree.sync = AsyncMock()
+        bot.add_view = Mock()
+
+        await bot.setup_hook()
+        await bot.on_ready()
+
+        steam.start.assert_not_called()
+        temp_voice.reconcile.assert_not_awaited()
+
     async def test_setup_starts_codex_and_close_closes_it(self):
         codex = SimpleNamespace(start=AsyncMock(), close=AsyncMock())
         calendar = SimpleNamespace(

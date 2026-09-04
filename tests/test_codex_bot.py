@@ -240,7 +240,7 @@ class CodexArchiveRoutingTest(unittest.IsolatedAsyncioTestCase):
         codex = SimpleNamespace(archive_scope=AsyncMock())
         bot = SimpleNamespace(
             codex=codex,
-            calendar=None,
+            calendar=SimpleNamespace(handle_channel_delete=lambda *_args: None),
             temp_voice=None,
             temp_voice_enabled=False,
         )
@@ -255,7 +255,7 @@ class CodexArchiveRoutingTest(unittest.IsolatedAsyncioTestCase):
         bot = SimpleNamespace(
             codex=codex,
             server_activity=None,
-            calendar=None,
+            calendar=SimpleNamespace(delete_guild=lambda _guild_id: None),
             temp_voice=None,
             temp_voice_enabled=False,
         )
