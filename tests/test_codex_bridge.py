@@ -59,7 +59,7 @@ class CodexAccessTest(unittest.TestCase):
             self.assertTrue(access.allows(10, 22, 30))
             self.assertEqual(
                 json.loads(path.read_text(encoding="utf-8")),
-                {"version": 3, "guild_id": 10, "channel_ids": [21, 22], "role_ids": []},
+                {"version": 2, "guild_id": 10, "channel_ids": [21, 22]},
             )
             self.assertEqual(os.stat(path).st_mode & 0o777, 0o600)
 
@@ -117,7 +117,7 @@ class CodexAccessTest(unittest.TestCase):
         self.assertTrue(access.allows(10, 20, 30, frozenset()))
         self.assertFalse(access.allows(10, 20, 31, frozenset({70})))
 
-    def test_corrupt_channel_state_fails_closed_and_selection_repairs_it(self):
+    def test_corrupt_channel_state_requires_channels_then_roles_for_recovery(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             path = Path(temp_dir) / "codex_access.json"
             path.write_text("{", encoding="utf-8")
@@ -137,8 +137,10 @@ class CodexAccessTest(unittest.TestCase):
             access.set_channels(10, frozenset({22, 23}))
 
             self.assertTrue(access.state_available)
-            self.assertTrue(access.allows(10, 22, 30))
-            self.assertTrue(access.allows(10, 23, 30))
+            self.assertFalse(access.allows(10, 22, 30))
+            self.assertFalse(access.allows(10, 23, 30))
+            access.set_roles(10, frozenset({70}))
+            self.assertTrue(access.allows(10, 22, 31, frozenset({70})))
 
     def test_boolean_guild_id_in_state_fails_closed(self):
         with tempfile.TemporaryDirectory() as temp_dir:
