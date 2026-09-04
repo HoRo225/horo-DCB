@@ -285,6 +285,13 @@ class SteamFreeGamesNotifierTest(unittest.IsolatedAsyncioTestCase):
         )
         self.assertIsNone(SteamFreeGamesNotifier._extract_app_id("https://example.com/x"))
 
+    def test_extract_app_id_rejects_overlong_numeric_steam_url(self):
+        self.assertIsNone(
+            SteamFreeGamesNotifier._extract_app_id(
+                f"https://shared.fastly.steamstatic.com/store_item_assets/steam/apps/{'9' * 5_000}/capsule.jpg"
+            )
+        )
+
     async def test_paid_game_at_100_percent_discount_is_accepted(self):
         notifier = SteamFreeGamesNotifier(self.state_path)
 
@@ -797,7 +804,11 @@ class SteamFreeGamesNotifierTest(unittest.IsolatedAsyncioTestCase):
 
     def test_guild_status_is_read_only_summary(self):
         notifier = SteamFreeGamesNotifier(self.state_path, poll_interval_seconds=600)
-        notifier._guilds[1] = SimpleNamespace(channel_id=10, active_app_ids={100, 101})
+        notifier._guilds[1] = SimpleNamespace(
+            channel_id=10,
+            active_app_ids={100, 101},
+            role_ids=set(),
+        )
 
         status = notifier.get_guild_status(1)
 
@@ -805,6 +816,7 @@ class SteamFreeGamesNotifierTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(status.poll_interval_seconds, 600)
         self.assertEqual(status.channel_id, 10)
         self.assertEqual(status.active_app_count, 2)
+        self.assertEqual(status.role_ids, ())
 
 
 if __name__ == "__main__":
