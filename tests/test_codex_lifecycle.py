@@ -3,14 +3,22 @@ from dataclasses import asdict
 import io
 import json
 import logging
+import subprocess
+import sys
+import textwrap
 from pathlib import Path
 from types import SimpleNamespace
 import tempfile
 import unittest
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, Mock, patch
 
 import discord
+from aiohttp import TCPConnector
 from aiohttp.test_utils import TestClient, TestServer
+from aiohttp.web_log import AccessLogger
+from openai_codex import TransportClosedError
+
+import src.codex_bridge as bridge
 
 from src.admin_panel import AdminPanelView
 from src.bot import HoroBot, codex_error_text
@@ -348,6 +356,76 @@ class BridgeLifecycleTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(status.get("last_error"), "unavailable")
         self.assertNotIn("private-account", json.dumps(status))
         self.assertNotIn("raw rpc", json.dumps(status))
+
+
+    async def test_transport_closed_recycles_without_auth_or_quota_misclassification(self):
+        for target_phase in ("start", "resume", "turn", "run", "account", "archive"):
+            with self.subTest(phase=target_phase):
+                self.codex = ControlledCodex()
+                self.store = ThreadStore(Path(self.directory.name) / f"transport-{target_phase}.json")
+                self.service = CodexService(self.codex, self.store, timeout_seconds=1)
+                self.exits.clear()
+                self.service.fatal_exit = self.exits.append
+                original_pause = self.codex.pause
+                async def fail_transport(phase):
+                    if phase == target_phase:
+                        raise TransportClosedError("ChatGPT login required quota private-stderr-secret")
+                    await original_pause(phase)
+                self.codex.pause = fail_transport
+                if target_phase in ("resume", "archive"):
+                    self.store.set("guild:1:thread:2", "old-thread")
+                with self.assertLogs(level=logging.INFO) as logs:
+                    if target_phase == "account":
+                        result = await asyncio.wait_for(self.service.status(), 0.3)
+                        self.assertFalse(result["available"])
+                    elif target_phase == "archive":
+                        outcome = "unexpected success"
+                        try:
+                            await asyncio.wait_for(self.service.archive_scope(1), 0.3)
+                        except BridgeRequestError as error:
+                            outcome = error.code
+                        self.assertEqual(outcome, "unavailable")
+                        self.assertIsNone(self.store.get("guild:1:thread:2"))
+                    else:
+                        self.assertEqual(await self.bounded_chat_error(), "unavailable")
+                    self.assertEqual(self.exits, [1])
+                self.assertNotIn("private-stderr-secret", "\n".join(logs.output))
+                self.assertEqual(self.codex.interrupted, [])
+
+    async def test_blocked_account_rpc_recycles_instead_of_leaking_an_executor_waiter(self):
+        self.codex.gates["account"] = asyncio.Event()
+        result = await asyncio.wait_for(self.service.status(), 2.3)
+        self.assertFalse(result["available"])
+        self.assertEqual(self.exits, [1])
+        self.assertEqual(result.get("last_error"), "unavailable")
+
+    async def test_hung_archive_rpc_is_bounded_after_durable_detach(self):
+        self.service.archive_timeout_seconds = 0.02
+        self.store.set("guild:1:thread:2", "old-thread")
+        self.codex.gates["archive"] = asyncio.Event()
+        outcome = "unexpected success"
+        try:
+            await asyncio.wait_for(self.service.archive_scope(1), 0.3)
+        except BridgeRequestError as error:
+            outcome = error.code
+        except TimeoutError:
+            outcome = "outer watchdog expired"
+        self.assertEqual(outcome, "unavailable")
+        self.assertEqual(self.exits, [1])
+        self.assertIsNone(ThreadStore(self.store.path).get("guild:1:thread:2"))
+        self.assertEqual(self.codex.archived, ["old-thread"])
+
+    async def test_cancelled_archive_rpc_recycles_after_durable_detach(self):
+        self.store.set("guild:1:thread:2", "old-thread")
+        self.codex.gates["archive"] = asyncio.Event()
+        archive = asyncio.create_task(self.service.archive_scope(1))
+        self.tasks.append(archive)
+        await asyncio.wait_for(self.codex.entered["archive"].wait(), 0.3)
+        archive.cancel()
+        await asyncio.wait_for(asyncio.gather(archive, return_exceptions=True), 0.3)
+        self.assertEqual(self.exits, [1])
+        self.assertIsNone(ThreadStore(self.store.path).get("guild:1:thread:2"))
+        self.assertEqual(self.codex.archived, ["old-thread"])
 
 
 class StatusService:
@@ -782,6 +860,57 @@ class BotAdmissionTest(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(job.done())
 
 
+    async def test_accepted_error_output_keeps_thread_ownership_and_can_be_cancelled(self):
+        for action in ("close", "archive"):
+            with self.subTest(action=action):
+                client = CodexBridgeClient("http://codex:8765", "a" * 64, cooldown_seconds=0)
+                self.client = self.bot.codex = client
+                requests = []
+                async def request(_method, path, *, payload=None, **_kwargs):
+                    if path == "/v1/chat":
+                        requests.append(payload)
+                        raise CodexBridgeError("unavailable")
+                    return {}
+                client._request = request
+                first_message = self.message(30, thread=True)
+                first_message.output_gate = asyncio.Event()
+                self.gates.append(first_message.output_gate)
+                first = self.start(first_message)
+                second = None
+                try:
+                    await asyncio.wait_for(first_message.output_entered.wait(), 0.3)
+                    second = self.start(self.message(31, thread=True))
+                    await settle()
+                    with self.subTest(check="same-thread ordering"):
+                        self.assertEqual(len(requests), 1, "next turn began while accepted error output was still blocked")
+                        self.assertFalse(second.done())
+                    if action == "close":
+                        await asyncio.wait_for(client.close(), 0.3)
+                    else:
+                        await asyncio.wait_for(client.archive_scope(10), 0.3)
+                    await settle()
+                    with self.subTest(check="registered error delivery"):
+                        self.assertTrue(first.done(), f"{action} lost track of accepted error delivery")
+                        self.assertTrue(second.done())
+                finally:
+                    first_message.output_gate.set()
+                    await stop_tasks([task for task in (first, second) if task is not None])
+                    await asyncio.wait_for(client.close(), 0.3)
+
+    async def test_timeout_error_delivery_has_a_bounded_cleanup_budget(self):
+        self.client.work_timeout_seconds = 0.02
+        self.client.cleanup_timeout_seconds = 0.02
+        message = self.message(thread=True)
+        message.output_gate = asyncio.Event()
+        self.gates.append(message.output_gate)
+        job = self.start(message)
+        await asyncio.wait_for(message.output_entered.wait(), 0.3)
+        done, _ = await asyncio.wait({job}, timeout=0.2)
+        self.assertIn(job, done, "timeout notification exceeded its remaining work and cleanup budget")
+        self.assertEqual(message.deliveries, [])
+        self.assertEqual(len(self.chat_calls), 1)
+
+
 def make_admin(access, client):
     return AdminPanelView(
         user_id=30, guild_id=10, codex_client=client, codex_access=access,
@@ -892,6 +1021,238 @@ class AdminMutationTest(unittest.IsolatedAsyncioTestCase):
             collect(components)
             self.assertEqual(len(selectors), 1)
             self.assertFalse(selectors[0].get("disabled", False))
+
+
+class RuntimeWorkerExitTest(unittest.TestCase):
+    def run_blocked_runtime(self, phase):
+        # This child exists only in the disposable CI runner. Real to_thread workers
+        # expose interpreter shutdown hangs that an AsyncMock cannot reproduce.
+        script = textwrap.dedent("""
+            import asyncio
+            import os
+            from pathlib import Path
+            import sys
+            import threading
+            from types import SimpleNamespace
+            import src.codex_bridge as bridge
+
+            phase = sys.argv[2]
+            blocker = threading.Event()
+
+            class FakeCodex:
+                metadata = SimpleNamespace(serverInfo=SimpleNamespace(version="0.147.0"))
+
+                def __init__(self, _config=None):
+                    self.initialized = False
+
+                async def __aenter__(self):
+                    if phase == "initialize":
+                        await asyncio.to_thread(blocker.wait)
+                    self.initialized = True
+                    return self
+
+                async def account(self):
+                    if not self.initialized:
+                        await self.__aenter__()
+                    return SimpleNamespace(account=None)
+
+                async def close(self):
+                    if phase == "close":
+                        await asyncio.to_thread(blocker.wait)
+
+            bridge.AsyncCodex = FakeCodex
+            bridge._codex_home = lambda: Path(sys.argv[1])
+            bridge.SDK_INITIALIZE_TIMEOUT_SECONDS = 0.02
+            bridge.SDK_SHUTDOWN_TIMEOUT_SECONDS = 0.02
+            os.environ["CODEX_BRIDGE_TOKEN"] = "a" * 64
+
+            async def exercise():
+                app = bridge._runtime_app()
+                app.freeze()
+                await app.startup()
+                await app.cleanup()
+
+            asyncio.run(exercise())
+        """)
+        with tempfile.TemporaryDirectory() as directory:
+            child = subprocess.Popen(
+                [sys.executable, "-c", script, directory, phase],
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+            )
+            try:
+                try:
+                    stdout, stderr = child.communicate(timeout=3)
+                except subprocess.TimeoutExpired:
+                    child.kill()
+                    child.communicate(timeout=1)
+                    self.fail(f"runtime {phase} left a blocking executor worker alive")
+                self.assertEqual(child.returncode, 1, stdout + stderr)
+                self.assertIn("Codex", stderr)
+                self.assertNotIn("Traceback", stderr)
+            finally:
+                if child.poll() is None:
+                    child.kill()
+                    child.communicate(timeout=1)
+
+    def test_startup_deadline_exits_with_real_blocked_worker(self):
+        self.run_blocked_runtime("initialize")
+
+    def test_shutdown_deadline_exits_with_real_blocked_worker(self):
+        self.run_blocked_runtime("close")
+
+
+class RuntimeHttpSafetyTest(unittest.IsolatedAsyncioTestCase):
+    @staticmethod
+    def launch_options(app):
+        # Exercise the serving entry point, then use its actual aiohttp options
+        # against loopback HTTP. No assertion merely checks a keyword exists.
+        with patch.object(bridge, "_runtime_app", return_value=app), patch.object(
+            bridge.web, "run_app", Mock(),
+        ) as launch, patch.object(sys, "argv", ["codex-bridge", "serve"]):
+            bridge.main()
+        return launch.call_args.kwargs
+
+    async def test_http_disconnect_cancels_and_interrupts_only_the_accepted_turn(self):
+        with tempfile.TemporaryDirectory() as directory:
+            codex = ControlledCodex()
+            codex.gates["run"] = asyncio.Event()
+            service = CodexService(codex, ThreadStore(Path(directory) / "threads.json"), timeout_seconds=5)
+            exits = []
+            service.fatal_exit = exits.append
+            app = create_app("a" * 64, service)
+            options = self.launch_options(app)
+            http = TestClient(TestServer(app, handler_cancellation=options.get("handler_cancellation", False)))
+            await http.start_server()
+            request = asyncio.create_task(http.post("/v1/chat", json={
+                "conversation_key": "guild:1:thread:2", "display_name": "A",
+                "text": "private prompt", "images": [],
+            }, headers={"Authorization": "Bearer " + "a" * 64}))
+            try:
+                await asyncio.wait_for(codex.entered["run"].wait(), 0.3)
+                request.cancel()
+                await asyncio.wait_for(asyncio.gather(request, return_exceptions=True), 0.3)
+                try:
+                    await asyncio.wait_for(codex.entered["interrupt"].wait(), 0.3)
+                except TimeoutError:
+                    self.fail("HTTP disconnect did not cancel the SDK turn")
+                await settle()
+                self.assertEqual(codex.interrupted, ["thread-1"])
+                self.assertEqual(len(codex.started), 1)
+                self.assertEqual(exits, [])
+                status = await asyncio.wait_for(service.status(), 0.3)
+                self.assertEqual(status["active_requests"], 0)
+                self.assertEqual(status["queued_requests"], 0)
+            finally:
+                codex.gates["run"].set()
+                await stop_tasks([request])
+                await asyncio.wait_for(http.close(), 1)
+
+    async def test_bot_real_http_bridge_and_sdk_keep_shared_thread_output_serialized(self):
+        with tempfile.TemporaryDirectory() as directory:
+            codex = ControlledCodex()
+            store = ThreadStore(Path(directory) / "threads.json")
+            service = CodexService(codex, store, timeout_seconds=1)
+            exits = []
+            service.fatal_exit = exits.append
+            http = TestClient(TestServer(create_app("a" * 64, service)))
+            await http.start_server()
+            client = CodexBridgeClient(str(http.make_url("")).rstrip("/"), "a" * 64, cooldown_seconds=0)
+            access = CodexAccess(True, 10, 20, frozenset())
+            access.set_roles(10, frozenset({70}))
+            bot = HoroBot(client, access, SimpleNamespace(), SimpleNamespace(close=AsyncMock()),
+                          SimpleNamespace(close=AsyncMock()), ai_text_display_enabled=False)
+            bot._connection.user = SimpleNamespace(id=99)
+            members = {}
+            guild = SimpleNamespace(id=10, get_member=members.get)
+            guild.fetch_member = AsyncMock(side_effect=members.get)
+            output_entered = asyncio.Event()
+            output_release = asyncio.Event()
+            delivered = []
+            tasks = []
+            def message(user_id):
+                author = SimpleNamespace(id=user_id, display_name="Member", bot=False,
+                                         roles=[SimpleNamespace(id=70)])
+                members[user_id] = author
+                async def reply(content=None, **_kwargs):
+                    if user_id == 30:
+                        output_entered.set()
+                        await output_release.wait()
+                    delivered.append(content)
+                return SimpleNamespace(
+                    author=author, guild=guild, webhook_id=None,
+                    channel=SimpleNamespace(id=21, parent_id=20, type=discord.ChannelType.public_thread,
+                                            typing=Typing, send=AsyncMock()),
+                    content="<@99> hello", mentions=[SimpleNamespace(id=99)],
+                    attachments=[], reference=None, reply=reply,
+                )
+            try:
+                first = asyncio.create_task(bot.on_message(message(30)))
+                tasks.append(first)
+                await asyncio.wait_for(output_entered.wait(), 1)
+                second = asyncio.create_task(bot.on_message(message(31)))
+                tasks.append(second)
+                await settle()
+                self.assertEqual(codex.runs, ["thread-1"])
+                status = await asyncio.wait_for(client.get_runtime_status(), 1)
+                self.assertEqual((status.active_requests, status.queued_requests), (0, 0))
+                self.assertEqual((status.bot_active_requests, status.bot_queued_requests), (1, 1))
+                output_release.set()
+                await asyncio.wait_for(asyncio.gather(first, second), 1)
+                self.assertEqual(delivered, ["answer", "answer"])
+                self.assertEqual(exits, [])
+                self.assertEqual(codex.runs, ["thread-1", "thread-1"])
+                self.assertEqual(len(codex.started), 1)
+                self.assertEqual([entry[0] for entry in codex.resumed], ["thread-1"])
+                self.assertEqual(store.get("guild:10:thread:21"), "thread-1")
+                status = await asyncio.wait_for(client.get_runtime_status(), 1)
+                self.assertEqual((status.bot_active_requests, status.bot_queued_requests), (0, 0))
+            finally:
+                output_release.set()
+                await stop_tasks(tasks)
+                await asyncio.wait_for(bot.close(), 1)
+                await asyncio.wait_for(http.close(), 1)
+
+    async def test_successful_health_probes_are_quiet_but_failure_and_recovery_are_logged(self):
+        service = StatusService()
+        app = create_app("a" * 64, service)
+        options = self.launch_options(app)
+        logger = logging.getLogger("horo.tests.health.access")
+        http = TestClient(TestServer(
+            app, access_log=logger,
+            access_log_class=options.get("access_log_class", AccessLogger),
+        ), connector=TCPConnector(force_close=True))
+        await http.start_server()
+        async def probe(path="/healthz"):
+            response = await http.get(path)
+            await response.read()
+            await settle()
+            return response
+        try:
+            with self.assertLogs(level=logging.INFO) as logs:
+                first = await probe()
+                self.assertEqual(first.status, 200)
+                initial = len(logs.output)
+                await probe()
+                self.assertEqual(len(logs.output), initial, "unchanged successful health probe was logged")
+                service.status_data["available"] = False
+                failed = await probe()
+                self.assertEqual(failed.status, 503)
+                self.assertGreater(len(logs.output), initial)
+                self.assertIn("503", "\n".join(logs.output))
+                failure_logs = len(logs.output)
+                service.status_data["available"] = True
+                recovered = await probe()
+                self.assertEqual(recovered.status, 200)
+                self.assertGreater(len(logs.output), failure_logs, "health recovery was hidden")
+                recovered_logs = len(logs.output)
+                await probe()
+                self.assertEqual(len(logs.output), recovered_logs)
+                unauthorized = await probe("/v1/status")
+                self.assertEqual(unauthorized.status, 401)
+                self.assertGreater(len(logs.output), recovered_logs)
+                self.assertNotIn("private", "\n".join(logs.output))
+        finally:
+            await asyncio.wait_for(http.close(), 1)
 
 
 if __name__ == "__main__":
