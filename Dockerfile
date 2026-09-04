@@ -1,5 +1,9 @@
 FROM python:3.14.7-slim-bookworm@sha256:d893452fcd120ea9a7233972c85ea868255bde289a636fe76ff090427fe8fac9
 
+ARG VCS_REF
+LABEL org.opencontainers.image.source="https://github.com/HoRo225/horo-DCB" \
+      org.opencontainers.image.revision="${VCS_REF}"
+
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PIP_DISABLE_PIP_VERSION_CHECK=1

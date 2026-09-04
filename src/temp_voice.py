@@ -261,39 +261,25 @@ class TempVoiceManager:
             )
             return
 
-        channel: discord.VoiceChannel | None = None
+        category = entry_channel.category
+        overwrites = category.overwrites.copy() if category is not None else {}
+        overwrites[member] = discord.PermissionOverwrite(
+            view_channel=True,
+            connect=True,
+            manage_channels=True,
+            move_members=True,
+            mute_members=True,
+            deafen_members=True,
+        )
         try:
             channel = await guild.create_voice_channel(
                 build_temp_voice_name(member.display_name),
-                category=entry_channel.category,
-                reason=AUDIT_REASON,
-            )
-            await channel.set_permissions(
-                member,
-                view_channel=True,
-                connect=True,
-                manage_channels=True,
-                move_members=True,
-                mute_members=True,
-                deafen_members=True,
+                category=category,
+                overwrites=overwrites,
                 reason=AUDIT_REASON,
             )
         except (discord.Forbidden, discord.HTTPException):
-            logging.exception("建立臨時語音頻道或設定建立者權限失敗。")
-            if (
-                channel is not None
-                and not await self._delete_untracked_if_empty(channel)
-            ):
-                self._children[channel.id] = (guild.id, member.id)
-                if self._persist_or_disable():
-                    logging.warning(
-                        "失敗流程建立的頻道無法刪除，已保留追蹤供下次同步重試。"
-                    )
-                else:
-                    logging.error(
-                        "失敗流程建立的頻道無法刪除或保存；僅保留於目前程序的記憶體，"
-                        "Bot 重啟後無法保證復原。"
-                    )
+            logging.exception("建立臨時語音頻道失敗。")
             return
 
         self._children[channel.id] = (guild.id, member.id)
