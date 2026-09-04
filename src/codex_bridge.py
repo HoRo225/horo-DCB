@@ -4,7 +4,6 @@ import argparse
 import asyncio
 import base64
 import binascii
-from collections import defaultdict
 from dataclasses import dataclass
 import hmac
 import json
@@ -27,6 +26,7 @@ from openai_codex import (
     TextInput,
 )
 from openai_codex import RetryLimitExceededError, ServerBusyError
+from src.codex_bridge_client import _Admission, CodexBridgeError, scope_matches
 from src.discord_images import MAX_IMAGE_BYTES, MAX_IMAGE_TOTAL_BYTES, image_signature_matches
 
 
@@ -117,12 +117,16 @@ class ThreadStore:
     def __init__(self, path: Path) -> None:
         self.path = path
         self._threads: dict[str, dict[str, object]] = {}
-        if path.exists():
+        try:
             self._threads = self._load()
+        except FileNotFoundError:
+            pass
 
     def _load(self) -> dict[str, dict[str, object]]:
         try:
             payload = json.loads(self.path.read_text(encoding="utf-8"))
+        except FileNotFoundError:
+            raise
         except (OSError, json.JSONDecodeError) as exc:
             raise ValueError("invalid thread mapping") from exc
         if (
@@ -152,11 +156,13 @@ class ThreadStore:
         return record["thread_id"] if record is not None else None  # type: ignore[return-value]
 
     def set(self, key: str, thread_id: str, *, updated_at: int | None = None) -> None:
-        self._threads[key] = {
+        candidate = self._threads.copy()
+        candidate[key] = {
             "thread_id": thread_id,
             "updated_at": int(time.time()) if updated_at is None else updated_at,
         }
-        self._persist()
+        self._persist(candidate)
+        self._threads = candidate
 
     def matching(self, guild_id: int, channel_id: int | None = None) -> list[str]:
         guild_prefix = f"guild:{guild_id}:"
@@ -171,24 +177,26 @@ class ThreadStore:
         ]
 
     def pop_many(self, keys: list[str]) -> list[str]:
+        candidate = self._threads.copy()
         thread_ids = [
             record["thread_id"]  # type: ignore[misc]
             for key in keys
-            if (record := self._threads.pop(key, None)) is not None
+            if (record := candidate.pop(key, None)) is not None
         ]
         if thread_ids:
-            self._persist()
+            self._persist(candidate)
+            self._threads = candidate
         return thread_ids  # type: ignore[return-value]
 
     def __len__(self) -> int:
         return len(self._threads)
 
-    def _persist(self) -> None:
+    def _persist(self, candidate: dict[str, dict[str, object]]) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         temporary = self.path.with_name(f"{self.path.name}.tmp")
         temporary.write_text(
             json.dumps(
-                {"version": 1, "threads": self._threads},
+                {"version": 1, "threads": candidate},
                 ensure_ascii=False,
                 indent=2,
                 sort_keys=True,
@@ -213,7 +221,12 @@ class CodexService:
         self.store = store
         self.timeout_seconds = timeout_seconds
         self.workspace = workspace
-        self._locks: defaultdict[str, asyncio.Lock] = defaultdict(asyncio.Lock)
+        self._admission = _Admission()
+        self._archives: dict[tuple[int, int | None], int] = {}
+        self.queue_timeout_seconds = 30.0
+        self.interrupt_timeout_seconds = 5.0
+        self.fatal_exit = os._exit
+        self.last_error: str | None = None
 
     def _thread_options(self) -> dict[str, object]:
         return {
@@ -259,20 +272,47 @@ class CodexService:
             return BridgeRequestError("usage_limit_or_unavailable", 429)
         return BridgeRequestError("unavailable", 503)
 
+    def _fatal(self) -> None:
+        self._admission.closed = True
+        self.last_error = "unavailable"
+        logging.error("Codex runtime stopped after an unresponsive SDK operation.")
+        self.fatal_exit(1)
+
+    async def _interrupt(self, handle: Any) -> None:
+        cleanup = asyncio.create_task(handle.interrupt())
+        deadline = asyncio.get_running_loop().time() + self.interrupt_timeout_seconds
+        while not cleanup.done():
+            remaining = deadline - asyncio.get_running_loop().time()
+            if remaining <= 0:
+                break
+            try:
+                await asyncio.wait({cleanup}, timeout=remaining)
+            except asyncio.CancelledError:
+                # A second shutdown request must not abandon the first interrupt.
+                continue
+        if not cleanup.done():
+            cleanup.cancel()
+            self._fatal()
+        elif cleanup.cancelled() or cleanup.exception() is not None:
+            self._fatal()
+
     async def status(self) -> dict[str, object]:
+        status: dict[str, object] = {
+            "available": False, "authenticated": False, "plan": None,
+            "sdk_version": openai_codex.__version__, "runtime_version": None,
+            "web_search": "live", "thread_count": len(self.store),
+            "active_requests": len(self._admission.active_keys),
+            "queued_requests": len(self._admission.waiting),
+            "last_error": self.last_error,
+        }
+        if self._admission.closed:
+            return status
         try:
-            response = await self.codex.account()
-            metadata = self.codex.metadata
+            async with asyncio.timeout(2):
+                response = await self.codex.account()
+                metadata = self.codex.metadata
         except Exception:
-            return {
-                "available": False,
-                "authenticated": False,
-                "plan": None,
-                "sdk_version": openai_codex.__version__,
-                "runtime_version": None,
-                "web_search": "live",
-                "thread_count": len(self.store),
-            }
+            return status
         account = response.account
         account_root = getattr(account, "root", None)
         plan_type = getattr(account_root, "plan_type", None)
@@ -281,80 +321,89 @@ class CodexService:
         runtime_version = getattr(server_info, "version", None)
         runtime_match = (
             re.match(r"^[0-9]+\.[0-9]+\.[0-9]+", runtime_version)
-            if isinstance(runtime_version, str)
-            else None
+            if isinstance(runtime_version, str) else None
         )
-        return {
-            "available": True,
-            "authenticated": account is not None,
+        status.update({
+            "available": True, "authenticated": account is not None,
             "plan": plan if isinstance(plan, str) else None,
-            "sdk_version": openai_codex.__version__,
-            "runtime_version": (
-                runtime_match.group(0) if runtime_match is not None else None
-            ),
-            "web_search": "live",
-            "thread_count": len(self.store),
-        }
+            "runtime_version": runtime_match.group(0) if runtime_match is not None else None,
+        })
+        return status
 
     async def chat(
-        self,
-        key: str,
-        display_name: str,
-        text: str,
-        images: tuple[str, ...],
+        self, key: str, display_name: str, text: str, images: tuple[str, ...],
     ) -> str:
-        async with self._locks[key]:
-            try:
-                thread_id = self.store.get(key)
-                if thread_id is None:
-                    thread = await self.codex.thread_start(
-                        **self._thread_options(),
-                        service_name="horo-dcb",
-                    )
-                    self.store.set(key, thread.id)
-                else:
-                    thread = await self.codex.thread_resume(
-                        thread_id,
-                        **self._thread_options(),
-                    )
-
-                inputs = [
-                    TextInput(f"[Discord user: {display_name}]\n{text}"),
-                    *(ImageInput(image) for image in images),
-                ]
-                handle = await thread.turn(inputs)
+        started = time.monotonic()
+        outcome = "unavailable"
+        try:
+            if any(scope_matches(key, guild, channel) for guild, channel in self._archives):
+                raise BridgeRequestError("busy", 429)
+            # Register before the first SDK await, including start/resume RPCs.
+            async with self._admission.claim(key, queue_timeout_seconds=self.queue_timeout_seconds):
+                handle = None
                 try:
-                    result = await asyncio.wait_for(
-                        handle.run(),
-                        timeout=self.timeout_seconds,
-                    )
-                except TimeoutError as exc:
-                    try:
-                        await handle.interrupt()
-                    except Exception:
-                        pass
-                    raise BridgeRequestError("timeout", 504) from exc
-            except BridgeRequestError:
-                raise
-            except Exception as exc:
-                raise self._normalize_error(exc) from exc
+                    async with asyncio.timeout(self.timeout_seconds):
+                        thread_id = self.store.get(key)
+                        if thread_id is None:
+                            thread = await self.codex.thread_start(
+                                **self._thread_options(), service_name="horo-dcb",
+                            )
+                            self.store.set(key, thread.id)
+                        else:
+                            thread = await self.codex.thread_resume(thread_id, **self._thread_options())
+                        inputs = [
+                            TextInput(f"[Discord user: {display_name}]\n{text}"),
+                            *(ImageInput(image) for image in images),
+                        ]
+                        handle = await thread.turn(inputs)
+                        result = await handle.run()
+                except (TimeoutError, asyncio.CancelledError) as exc:
+                    if handle is None:
+                        self._fatal()
+                    else:
+                        await self._interrupt(handle)
+                    if isinstance(exc, TimeoutError):
+                        raise BridgeRequestError("timeout", 504) from None
+                    outcome = "cancelled"
+                    raise
+                reply = getattr(result, "final_response", None)
+                if not isinstance(reply, str) or not reply.strip():
+                    raise BridgeRequestError("unavailable", 503)
+                outcome = "success"
+                return reply.strip()
+        except CodexBridgeError as exc:
+            self.last_error = outcome = exc.code
+            raise BridgeRequestError(exc.code, 429 if exc.code == "busy" else 504 if exc.code == "timeout" else 503) from None
+        except BridgeRequestError as exc:
+            self.last_error = outcome = exc.code
+            raise
+        except Exception as exc:
+            error = self._normalize_error(exc)
+            self.last_error = outcome = error.code
+            raise error from None
+        finally:
+            logging.info("Codex request result=%s sdk_ms=%.1f", outcome, (time.monotonic() - started) * 1000)
 
-            reply = getattr(result, "final_response", None)
-            if not isinstance(reply, str) or not reply.strip():
-                raise BridgeRequestError("unavailable", 503)
-            return reply.strip()
-
-    async def archive_scope(
-        self,
-        guild_id: int,
-        channel_id: int | None = None,
-    ) -> None:
-        thread_ids = self.store.pop_many(self.store.matching(guild_id, channel_id))
-        for thread_id in thread_ids:
+    async def archive_scope(self, guild_id: int, channel_id: int | None = None) -> None:
+        scope = (guild_id, channel_id)
+        # Mark the scope closed before any await; overlapping archives share the guard.
+        self._archives[scope] = self._archives.get(scope, 0) + 1
+        try:
             try:
-                await self.codex.thread_archive(thread_id)
-            except Exception:
-                continue
+                await self._admission.cancel(guild_id=guild_id, channel_id=channel_id)
+            except CodexBridgeError:
+                self._fatal()
+                raise BridgeRequestError("unavailable", 503) from None
+            thread_ids = self.store.pop_many(self.store.matching(guild_id, channel_id))
+            for thread_id in thread_ids:
+                try:
+                    await self.codex.thread_archive(thread_id)
+                except Exception:
+                    continue
+        finally:
+            self._archives[scope] -= 1
+            if not self._archives[scope]:
+                del self._archives[scope]
 
 
 _TOKEN_KEY = web.AppKey("bridge_token", str)
@@ -380,6 +429,7 @@ _CONFIG_OVERRIDES = (
 
 _SAFE_ERROR_CODES = {
     "auth_required",
+    "busy",
     "invalid_request",
     "timeout",
     "unauthorized",
@@ -396,7 +446,8 @@ def _error(code: str, status: int) -> web.Response:
 
 def _authorized(request: web.Request) -> bool:
     expected = f"Bearer {request.app[_TOKEN_KEY]}"
-    return hmac.compare_digest(request.headers.get("Authorization", ""), expected)
+    supplied = request.headers.get("Authorization", "")
+    return supplied.isascii() and hmac.compare_digest(supplied, expected)
 
 
 def create_app(token: str, service: Any) -> web.Application:

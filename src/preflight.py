@@ -19,20 +19,12 @@ def main(state_path: Path | str = DEFAULT_CODEX_ACCESS_STATE_PATH) -> None:
         config.codex_allowed_user_ids,
         state_path=state_path,
     )
-    access_mode = (
-        "roles"
-        if access.role_ids
-        else "legacy_users"
-        if config.codex_allowed_user_ids
-        else "unconfigured"
-    )
+    access_mode = access.mode
     safe_summary = {
         "codex_enabled": config.codex_enabled,
         "codex_allowlist_configured": bool(
             config.codex_allowed_guild_id
-            and access.state_available
-            and access.channel_ids
-            and (access.role_ids or config.codex_allowed_user_ids)
+            and access.configured
         ),
         "codex_access_mode": access_mode,
         "codex_allowed_role_count": len(access.role_ids),

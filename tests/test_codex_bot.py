@@ -1,7 +1,7 @@
 import asyncio
 from types import SimpleNamespace
 import unittest
-from unittest.mock import AsyncMock, patch
+from unittest.mock import ANY, AsyncMock, patch
 
 import discord
 
@@ -10,7 +10,7 @@ from src.bot import (
     codex_conversation_key_for_message,
     codex_error_text,
 )
-from src.codex_bridge_client import CodexAccess, CodexBridgeError
+from src.codex_bridge_client import CodexAccess, CodexBridgeClient, CodexBridgeError
 
 
 class Typing:
@@ -21,8 +21,9 @@ class Typing:
         return False
 
 
-class FakeCodex:
+class FakeCodex(CodexBridgeClient):
     def __init__(self, reply="answer", *, allowed=True, error=None):
+        super().__init__("http://codex:8765", "a" * 64, cooldown_seconds=0)
         self.reply = reply
         self.allowed = allowed
         self.error = error
@@ -154,7 +155,7 @@ class CodexBotRoutingTest(unittest.IsolatedAsyncioTestCase):
             codex.calls,
             [("guild:10:channel:20:user:30", "Steven", "hello", ())],
         )
-        bot._send_ai_answer.assert_awaited_once_with(message, "answer")
+        bot._send_ai_answer.assert_awaited_once_with(message, "answer", can_send=ANY)
 
     async def test_allowlisted_reply_to_bot_calls_codex(self):
         message = make_message()

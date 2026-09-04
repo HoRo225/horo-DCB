@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import asyncio
 import logging
+import time
 from typing import Any
 
 import discord
@@ -58,11 +60,13 @@ _THREAD_CHANNEL_TYPES = {
 def codex_conversation_key_for_message(
     message: Any,
     access: CodexAccess,
+    *,
+    author: Any | None = None,
 ) -> str | None:
     guild_id = getattr(getattr(message, "guild", None), "id", None)
     channel = getattr(message, "channel", None)
     channel_id = getattr(channel, "id", None)
-    author = getattr(message, "author", None)
+    author = getattr(message, "author", None) if author is None else author
     user_id = getattr(author, "id", None)
     if not all(type(value) is int and value > 0 for value in (
         guild_id,
@@ -96,6 +100,10 @@ def codex_conversation_key_for_message(
 
 
 def codex_error_text(code: str) -> str:
+    if code == "busy":
+        return "AI 目前忙碌，請稍後再試。"
+    if code == "unauthorized":
+        return "Codex 目前未對此身分組或頻道開放。"
     if code == "auth_required":
         return "AI 尚未完成登入，請聯絡管理員。"
     if code == "timeout":
@@ -133,8 +141,8 @@ async def get_referenced_message(message: Any) -> Any | None:
         return None
 
     try:
-        return await message.channel.fetch_message(message_id)
-    except (discord.NotFound, discord.Forbidden, discord.HTTPException):
+        return await asyncio.wait_for(message.channel.fetch_message(message_id), 2)
+    except (discord.NotFound, discord.Forbidden, discord.HTTPException, TimeoutError):
         return None
 
 
@@ -143,6 +151,7 @@ async def _send_native_ai_chunks(
     chunks: list[str],
     *,
     reply_first: bool,
+    can_send: Any = None,
 ) -> None:
     if not chunks:
         return
@@ -150,6 +159,8 @@ async def _send_native_ai_chunks(
     try:
         start = 0
         if reply_first:
+            if can_send is not None and not await can_send():
+                return
             await message.reply(
                 chunks[0],
                 mention_author=False,
@@ -158,12 +169,14 @@ async def _send_native_ai_chunks(
             start = 1
 
         for chunk in chunks[start:]:
+            if can_send is not None and not await can_send():
+                return
             await message.channel.send(
                 chunk,
                 allowed_mentions=discord.AllowedMentions.none(),
             )
     except discord.HTTPException:
-        logging.exception("Discord AI 回覆送出失敗。")
+        logging.error("Discord AI 回覆送出失敗。")
 
 
 class HoroBot(discord.Client):
@@ -421,12 +434,13 @@ class HoroBot(discord.Client):
         except Exception:
             logging.error("Codex guild archive failed.")
 
-    async def _send_ai_answer(self, message: discord.Message, answer: str) -> None:
+    async def _send_ai_answer(self, message: discord.Message, answer: str, *, can_send: Any = None) -> None:
         if not self.ai_text_display_enabled:
             await _send_native_ai_chunks(
                 message,
                 split_discord_message(answer),
                 reply_first=True,
+                can_send=can_send,
             )
             return
 
@@ -434,6 +448,8 @@ class HoroBot(discord.Client):
         sent_chunks: list[str] = []
         try:
             for index, chunk in enumerate(display_chunks):
+                if can_send is not None and not await can_send():
+                    return
                 view = build_ai_text_display_view(chunk)
                 if index == 0:
                     await message.reply(
@@ -448,14 +464,13 @@ class HoroBot(discord.Client):
                     )
                 sent_chunks.append(chunk)
         except discord.HTTPException:
-            logging.exception(
-                "Discord AI TextDisplay 回覆送出失敗，改用原生文字。"
-            )
+            logging.error("Discord AI TextDisplay 回覆送出失敗，改用原生文字。")
             remaining = "".join(display_chunks[len(sent_chunks) :])
             await _send_native_ai_chunks(
                 message,
                 split_discord_message(remaining or answer),
                 reply_first=not sent_chunks,
+                can_send=can_send,
             )
 
     async def on_message(self, message: discord.Message) -> None:
@@ -495,69 +510,99 @@ class HoroBot(discord.Client):
             return
 
         cleaned_content = clean_bot_mention(content, bot_user_id)
-        try:
-            image_attachments = select_image_attachments(attachments)
-            if not image_attachments:
-                if referenced_message is None and getattr(message, "reference", None) is not None:
-                    referenced_message = await get_referenced_message(message)
-                image_attachments = select_image_attachments(
-                    list(
-                        getattr(referenced_message, "attachments", ())
-                        if referenced_message is not None
-                        else ()
-                    )
-                )
-        except ImageAttachmentError as exc:
-            await message.reply(
-                str(exc),
-                mention_author=False,
-                allowed_mentions=discord.AllowedMentions.none(),
-            )
-            return
-
-        if not cleaned_content and not image_attachments:
-            await message.reply(
-                "請輸入問題，或附上 JPEG、PNG、WebP 圖片。",
-                mention_author=False,
-                allowed_mentions=discord.AllowedMentions.none(),
-            )
-            return
         if not self.codex.try_start_request(message.author.id):
             await message.reply(
-                "請稍候幾秒再試。",
-                mention_author=False,
+                "請稍候幾秒再試。", mention_author=False,
                 allowed_mentions=discord.AllowedMentions.none(),
             )
             return
 
-        async with self.codex.conversation_lock(key):
-            try:
-                async with message.channel.typing():
-                    images = await read_image_attachments(image_attachments)
-                    answer = await self.codex.chat(
-                        key,
-                        message.author.display_name,
-                        cleaned_content,
-                        images,
-                    )
-            except ImageAttachmentError as exc:
-                logging.error("Discord 圖片附件處理失敗。")
-                await message.reply(
-                    str(exc),
-                    mention_author=False,
-                    allowed_mentions=discord.AllowedMentions.none(),
-                )
-                return
-            except CodexBridgeError as exc:
-                logging.error("Codex bridge request failed: %s", exc.code)
-                await message.reply(
-                    codex_error_text(exc.code),
-                    mention_author=False,
-                    allowed_mentions=discord.AllowedMentions.none(),
-                )
-                return
+        queue_ms = images_ms = sdk_ms = discord_ms = 0.0
+        outcome = "unavailable"
+        output_started = False
+        try:
+            async with self.codex.accepted_request(
+                key, access=self.codex_access, user_id=message.author.id,
+            ) as job:
+                queue_ms = ((job.started_at or time.monotonic()) - job.accepted_at) * 1000
 
-        await self._send_ai_answer(message, answer)
+                async def can_send() -> bool:
+                    if not job.current:
+                        return False
+                    author = message.author
+                    if self.codex_access.mode == "roles":
+                        guild = message.guild
+                        author = None
+                        if getattr(getattr(self, "intents", None), "members", False):
+                            author = guild.get_member(message.author.id)
+                        if author is None:
+                            try:
+                                author = await asyncio.wait_for(guild.fetch_member(message.author.id), 2)
+                            except (discord.HTTPException, TimeoutError, AttributeError):
+                                return False
+                        if author is None:
+                            return False
+                    return job.current and codex_conversation_key_for_message(
+                        message, self.codex_access, author=author,
+                    ) == key
+
+                if not await can_send():
+                    raise CodexBridgeError("unauthorized")
+                image_attachments = select_image_attachments(attachments)
+                if not image_attachments:
+                    if referenced_message is None and getattr(message, "reference", None) is not None:
+                        referenced_message = await get_referenced_message(message)
+                    image_attachments = select_image_attachments(list(
+                        getattr(referenced_message, "attachments", ())
+                        if referenced_message is not None else ()
+                    ))
+                if not cleaned_content and not image_attachments:
+                    await message.reply(
+                        "請輸入問題，或附上 JPEG、PNG、WebP 圖片。",
+                        mention_author=False, allowed_mentions=discord.AllowedMentions.none(),
+                    )
+                    outcome = "invalid_request"
+                    return
+                async with message.channel.typing():
+                    started = time.monotonic()
+                    try:
+                        async with asyncio.timeout(self.codex.image_timeout_seconds):
+                            images = await read_image_attachments(image_attachments)
+                    finally:
+                        images_ms = (time.monotonic() - started) * 1000
+                    if not await can_send():
+                        raise CodexBridgeError("unauthorized")
+                    started = time.monotonic()
+                    try:
+                        answer = await self.codex.chat(key, message.author.display_name, cleaned_content, images)
+                    finally:
+                        sdk_ms = (time.monotonic() - started) * 1000
+                output_started = True
+                started = time.monotonic()
+                try:
+                    await self._send_ai_answer(message, answer, can_send=can_send)
+                finally:
+                    discord_ms = (time.monotonic() - started) * 1000
+                outcome = "success" if job.current else "unauthorized"
+        except asyncio.CancelledError:
+            outcome = "cancelled"
+        except (ImageAttachmentError, CodexBridgeError) as exc:
+            outcome = exc.code if isinstance(exc, CodexBridgeError) else "invalid_request"
+            if not output_started:
+                error_text = codex_error_text(exc.code) if isinstance(exc, CodexBridgeError) else str(exc)
+                try:
+                    async with asyncio.timeout(5):
+                        await message.reply(
+                            error_text, mention_author=False,
+                            allowed_mentions=discord.AllowedMentions.none(),
+                        )
+                except (discord.HTTPException, TimeoutError):
+                    logging.error("Discord AI 狀態回覆送出失敗。")
+        finally:
+            logging.info(
+                "AI request result=%s queue_ms=%.1f images_ms=%.1f sdk_ms=%.1f discord_ms=%.1f",
+                outcome, queue_ms, images_ms, sdk_ms, discord_ms,
+            )
 
     async def on_audit_log_entry_create(self, entry: discord.AuditLogEntry) -> None:
         HoroBot._record_server_activity(self, "record_audit", entry)
@@ -570,6 +615,14 @@ class HoroBot(discord.Client):
 
     async def on_member_update(self, before: discord.Member, after: discord.Member) -> None:
         HoroBot._record_server_activity(self, "record_member", "member_update", before, after)
+        guild_id = getattr(getattr(after, "guild", None), "id", None)
+        if type(guild_id) is int and self.codex_access.mode == "roles":
+            roles = {role.id for role in after.roles}
+            if not self.codex_access.role_ids.intersection(roles):
+                try:
+                    await self.codex.cancel_member(guild_id, after.id)
+                except CodexBridgeError:
+                    logging.error("Codex revoked member cleanup failed.")
 
     async def on_raw_reaction_add(self, payload: discord.RawReactionActionEvent) -> None:
         HoroBot._record_server_activity(self, "record_reaction", "reaction_add", payload)
