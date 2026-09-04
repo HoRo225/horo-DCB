@@ -240,7 +240,7 @@ class TempVoiceManagerTest(unittest.IsolatedAsyncioTestCase):
 
         self.assertFalse(self.state_path.exists())
 
-    async def test_join_entry_atomically_merges_category_and_owner_permissions(self):
+    async def test_join_entry_atomically_copies_category_and_replaces_owner_permissions(self):
         guild = FakeGuild()
         restricted_role = object()
         restricted_overwrite = discord.PermissionOverwrite(
@@ -273,7 +273,7 @@ class TempVoiceManagerTest(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(created.overwrites[restricted_role].view_channel)
         self.assertFalse(created.overwrites[restricted_role].connect)
         owner_overwrite = created.overwrites[member]
-        self.assertFalse(owner_overwrite.speak)
+        self.assertIsNone(owner_overwrite.speak)
         self.assertTrue(owner_overwrite.manage_channels)
         self.assertTrue(owner_overwrite.move_members)
         self.assertTrue(owner_overwrite.mute_members)
