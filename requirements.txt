@@ -13,8 +13,8 @@ propcache==0.5.2
 yarl==1.24.5
 annotated-types==0.8.0
 openai-codex==0.147.0
-openai-codex-cli-bin==0.147.0
+openai-codex-cli-bin==0.149.0
 pydantic==2.13.5
-pydantic-core==2.46.5
+pydantic-core==2.48.0
 typing-extensions==4.16.0
 typing-inspection==0.4.4
