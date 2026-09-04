@@ -25,10 +25,13 @@ class CodexConfigTest(unittest.TestCase):
         self.assertNotIn("a" * 64, rendered)
         self.assertIn("codex_allowed_guild_id=1", rendered)
 
-    def test_disabled_codex_allows_empty_scope(self):
+    def test_disabled_codex_uses_documented_feature_defaults(self):
         with patch.dict(
             "src.config.os.environ",
-            {"DISCORD_TOKEN": "configured"},
+            {
+                "DISCORD_TOKEN": "configured",
+                "CODEX_BRIDGE_TOKEN": "a" * 64,
+            },
             clear=True,
         ):
             config = AppConfig.from_env()
@@ -37,7 +40,20 @@ class CodexConfigTest(unittest.TestCase):
         self.assertIsNone(config.codex_allowed_guild_id)
         self.assertIsNone(config.codex_allowed_channel_id)
         self.assertEqual(config.codex_allowed_user_ids, frozenset())
-        self.assertEqual(config.codex_bridge_token, "")
+        self.assertEqual(config.codex_bridge_token, "a" * 64)
+        self.assertFalse(config.temp_voice_enabled)
+        self.assertFalse(config.steam_free_games_enabled)
+        self.assertTrue(config.ai_text_display_enabled)
+        self.assertFalse(config.server_activity_enabled)
+
+    def test_bridge_token_is_required_even_when_codex_chat_is_disabled(self):
+        with patch.dict(
+            "src.config.os.environ",
+            {"DISCORD_TOKEN": "configured"},
+            clear=True,
+        ):
+            with self.assertRaisesRegex(RuntimeError, "CODEX_BRIDGE_TOKEN"):
+                AppConfig.from_env()
 
     def test_enabled_codex_parses_exact_allowlist(self):
         with patch.dict(

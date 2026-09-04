@@ -107,7 +107,7 @@ docker compose up -d
 | STEAM_FREE_GAMES_ENABLED | 0 | Steam 限免通知。 |
 | SERVER_ACTIVITY_ENABLED | 0 | Server Activity 持久記錄。 |
 
-CODEX_ENABLED=0 時 allowlist 可留空；設為 1 時所有 allowlist 欄位與 bridge token 都必須有效。Bridge URL 固定為 http://codex:8765，不是部署選項。
+CODEX_ENABLED=0 時 allowlist 可留空，但 Codex sidecar 固定存在，因此 CODEX_BRIDGE_TOKEN 必須始終有效；設為 1 時所有 allowlist 欄位也都必須有效。Bridge URL 固定為 http://codex:8765，不是部署選項。
 
 ## 對話與圖片
 
