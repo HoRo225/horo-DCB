@@ -52,9 +52,10 @@ class AdminCommandTest(unittest.IsolatedAsyncioTestCase):
         server_activity = SimpleNamespace(
             get_runtime_status=lambda: ServerActivityStatus(True, 0, 100, 0)
         )
+        access = CodexAccess(True, 10, 20, frozenset({1}))
         bot = HoroBot(
             codex,
-            CodexAccess(True, 10, 20, frozenset({1})),
+            access,
             temp_voice,
             steam,
             SimpleNamespace(),
@@ -75,6 +76,7 @@ class AdminCommandTest(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(kwargs["ephemeral"])
         self.assertIsInstance(kwargs["view"], AdminPanelView)
         self.assertIs(kwargs["view"].server_activity, server_activity)
+        self.assertIs(kwargs["view"].codex_access, access)
         self.assertTrue(kwargs["view"].has_components_v2())
         self.assertFalse(kwargs["allowed_mentions"].everyone)
         self.assertFalse(kwargs["allowed_mentions"].users)

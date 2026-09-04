@@ -9,6 +9,7 @@ from discord import app_commands
 from src.admin_panel import AdminPanelView
 from src.calendar_events import CalendarManager
 from src.codex_bridge_client import (
+    DEFAULT_CODEX_ACCESS_STATE_PATH,
     CodexAccess,
     CodexBridgeClient,
     CodexBridgeError,
@@ -219,6 +220,7 @@ class HoroBot(discord.Client):
                     user_id=interaction.user.id,
                     guild_id=interaction.guild.id,
                     codex_client=self.codex,
+                    codex_access=self.codex_access,
                     codex_status=codex_status,
                     temp_voice=self.temp_voice,
                     steam_free_games=self.steam_free_games,
@@ -606,6 +608,7 @@ def main() -> None:
         config.codex_allowed_guild_id,
         config.codex_allowed_channel_id,
         config.codex_allowed_user_ids,
+        state_path=DEFAULT_CODEX_ACCESS_STATE_PATH,
     )
     server_activity = (
         ServerActivityMonitor() if config.server_activity_enabled else None

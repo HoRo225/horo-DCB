@@ -33,12 +33,14 @@ Setup files are ready.
 1. Edit .env and replace [REDACTED_SECRET] for DISCORD_TOKEN.
 2. Build the shared image: docker compose build bot
 3. Log in: docker compose run --rm --no-deps codex python -m src.codex_bridge login
-4. Set CODEX_ALLOWED_GUILD_ID, CODEX_ALLOWED_CHANNEL_ID, and
-   CODEX_ALLOWED_USER_IDS, then set CODEX_ENABLED=1.
+4. Set CODEX_ALLOWED_GUILD_ID and CODEX_ALLOWED_USER_IDS, then set
+   CODEX_ENABLED=1.
 5. Validate: sh scripts/check-env.sh
 6. Start: docker compose up -d
+7. In Discord, use /控制台 → AI 助手 to select the allowlisted text channel.
 
 Codex stores OAuth and persistent thread state only in codex_data. The Bot does
-not mount that volume. Fresh installs keep voice, Steam automation, and Server
-Activity disabled until their documented switches are enabled.
+not mount that volume. The selected AI channel is stored in bot_data. Fresh
+installs keep voice, Steam automation, and Server Activity disabled until their
+documented switches are enabled.
 EOF

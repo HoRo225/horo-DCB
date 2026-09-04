@@ -22,6 +22,8 @@ codex 的 8765 port 不發布到 host。兩個 container 都以 UID/GID 10001、
 7. 首次對話建立 Codex thread；後續依 mapping resume。
 8. 回覆經既有 Discord splitting／TextDisplay 輸出。
 
+白名單 Guild 與 User 由環境固定；頻道由 `/控制台` 保存於 `bot_data/codex_access.json`。切換頻道時暫停新 AI 請求，清除該 Guild 的既有 mapping，再開放新頻道。
+
 一般 Channel 依 User 分開 thread；Discord Thread 中所有 allowlisted 使用者共用該 Thread 的 Codex thread。旁觀訊息不會同步。
 
 ## 3. Trust boundaries
@@ -31,6 +33,8 @@ Bot 看不到 CODEX_HOME 或 codex_data。Sidecar 看不到 DISCORD_TOKEN、bot_
 Bridge log 不記錄 prompt、圖片、Bearer token、OAuth email 或完整 Codex exception。回 Discord 的錯誤為固定繁體中文文字，不包含 RPC payload 或 OAuth 狀態。
 
 使用者文字、圖片與 Web Search 結果都視為不可信資料。永久 allowlist 是必要安全邊界，不得改成公開 Bot。
+
+頻道狀態檔採 versioned JSON、mode 0600 與原子替換；讀取失敗時 fail closed，但管理員可從控制台重新選擇以修復。
 
 ## 4. Bridge contract
 

@@ -74,21 +74,22 @@ docker compose build bot
 docker compose run --rm --no-deps codex python -m src.codex_bridge login
 ~~~
 
-4. 在 Discord 開發者模式複製允許的 Guild、Channel 與 User ID，填入：
+4. 在 Discord 開發者模式複製允許的 Guild 與 User ID，填入：
 
 ~~~dotenv
 CODEX_ENABLED=1
 CODEX_ALLOWED_GUILD_ID=123
-CODEX_ALLOWED_CHANNEL_ID=456
 CODEX_ALLOWED_USER_IDS=789,101112
 ~~~
 
-5. 驗證並啟動：
+5. 驗證、啟動，再由伺服器管理員輸入 `/控制台`，到「AI 助手」選擇一般文字頻道：
 
 ~~~sh
 sh scripts/check-env.sh
 docker compose up -d
 ~~~
+
+`CODEX_ALLOWED_CHANNEL_ID` 可保留作首次升級預設值；控制台選擇後會以 mode 0600 原子保存至 `bot_data`，並優先於環境變數。切換至不同頻道時會封存該 Guild 的既有 Codex 對話；封存失敗不會回退新頻道。
 
 一般頻道必須同時符合 Guild、Channel 與 User allowlist。Discord Thread 使用 parent channel 驗證；DM、其他 Guild／Channel／User 都不呼叫 Codex。
 
@@ -99,7 +100,7 @@ docker compose up -d
 | DISCORD_TOKEN | 必填 | Discord Bot Token。 |
 | CODEX_ENABLED | 0 | 是否開放 Codex 對話。 |
 | CODEX_ALLOWED_GUILD_ID | 空 | 唯一允許的 Guild snowflake。 |
-| CODEX_ALLOWED_CHANNEL_ID | 空 | 唯一允許的頻道；Thread 使用 parent ID。 |
+| CODEX_ALLOWED_CHANNEL_ID | 空 | 可選的首次頻道預設；之後由 `/控制台` 管理。 |
 | CODEX_ALLOWED_USER_IDS | 空 | 逗號分隔、不得重複的正整數 snowflake。 |
 | CODEX_BRIDGE_TOKEN | setup 產生 | 64 字元小寫十六進位 bridge secret。 |
 | AI_TEXT_DISPLAY_ENABLED | 1 | Discord Components V2 文字輸出。 |
@@ -107,7 +108,7 @@ docker compose up -d
 | STEAM_FREE_GAMES_ENABLED | 0 | Steam 限免通知。 |
 | SERVER_ACTIVITY_ENABLED | 0 | Server Activity 持久記錄。 |
 
-CODEX_ENABLED=0 時 allowlist 可留空，但 Codex sidecar 固定存在，因此 CODEX_BRIDGE_TOKEN 必須始終有效；設為 1 時所有 allowlist 欄位也都必須有效。Bridge URL 固定為 http://codex:8765，不是部署選項。
+CODEX_ENABLED=0 時 allowlist 可留空，但 Codex sidecar 固定存在，因此 CODEX_BRIDGE_TOKEN 必須始終有效；設為 1 時 Guild 與 User allowlist 必須有效，頻道可在啟動後由控制台設定。尚未選擇頻道時 AI 一律拒絕請求。Bridge URL 固定為 http://codex:8765，不是部署選項。
 
 ## 對話與圖片
 

@@ -76,6 +76,25 @@ class CodexConfigTest(unittest.TestCase):
         self.assertEqual(config.codex_allowed_user_ids, frozenset({303, 404}))
         self.assertEqual(config.codex_bridge_token, "b" * 64)
 
+    def test_enabled_codex_allows_channel_to_be_selected_in_control_panel(self):
+        with patch.dict(
+            "src.config.os.environ",
+            {
+                "DISCORD_TOKEN": "configured",
+                "CODEX_ENABLED": "1",
+                "CODEX_ALLOWED_GUILD_ID": "101",
+                "CODEX_ALLOWED_USER_IDS": "303",
+                "CODEX_BRIDGE_TOKEN": "b" * 64,
+            },
+            clear=True,
+        ):
+            config = AppConfig.from_env()
+
+        self.assertTrue(config.codex_enabled)
+        self.assertEqual(config.codex_allowed_guild_id, 101)
+        self.assertIsNone(config.codex_allowed_channel_id)
+        self.assertEqual(config.codex_allowed_user_ids, frozenset({303}))
+
     def test_enabled_codex_rejects_missing_or_invalid_scope(self):
         base = {
             "DISCORD_TOKEN": "configured",

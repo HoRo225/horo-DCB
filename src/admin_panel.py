@@ -5,7 +5,11 @@ import time
 
 import discord
 
-from src.codex_bridge_client import CodexBridgeClient, CodexRuntimeStatus
+from src.codex_bridge_client import (
+    CodexAccess,
+    CodexBridgeClient,
+    CodexRuntimeStatus,
+)
 from src.server_activity import (
     ActivitySummary,
     ServerActivityMonitor,
@@ -80,6 +84,25 @@ class _PanelSelect(discord.ui.Select["AdminPanelView"]):
             await view.handle_action(interaction, self.values[0])
 
 
+class _CodexChannelSelect(discord.ui.ChannelSelect):
+    def __init__(self, *, disabled: bool) -> None:
+        super().__init__(
+            channel_types=[discord.ChannelType.text],
+            placeholder="選擇 AI 白名單文字頻道",
+            min_values=1,
+            max_values=1,
+            disabled=disabled,
+        )
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        view = self.view
+        if not isinstance(view, AdminPanelView):
+            return
+        selected = self.values[0] if self.values else None
+        channel = selected.resolve() if selected is not None else None
+        await view.handle_codex_channel_select(interaction, channel)
+
+
 class _SteamRoleSelect(discord.ui.RoleSelect):
     def __init__(self, *, disabled: bool, configured: bool) -> None:
         super().__init__(
@@ -129,6 +152,7 @@ class AdminPanelView(discord.ui.LayoutView):
         user_id: int,
         guild_id: int,
         codex_client: CodexBridgeClient,
+        codex_access: CodexAccess,
         codex_status: CodexRuntimeStatus,
         temp_voice: TempVoiceManager,
         steam_free_games: SteamFreeGamesNotifier,
@@ -140,6 +164,7 @@ class AdminPanelView(discord.ui.LayoutView):
         self.user_id = user_id
         self.guild_id = guild_id
         self.codex_client = codex_client
+        self.codex_access = codex_access
         self.codex_status = codex_status
         self.temp_voice = temp_voice
         self.steam_free_games = steam_free_games
@@ -507,12 +532,26 @@ class AdminPanelView(discord.ui.LayoutView):
             self._activity_recent = tuple(recent[:10])
             self._activity_error = False
 
-    def _render_ai(self) -> None:
+    def _render_ai(self, note: str | None = None) -> None:
         self.page = "ai"
         plan, runtime, search = self._ai_display()
         sdk = self.codex_status.sdk_version or "Unknown"
         authenticated = "已登入" if self.codex_status.authenticated else "未登入"
-        self._set_container(
+        configured_guild = self.codex_access.guild_id == self.guild_id
+        channel = (
+            f"<#{self.codex_access.channel_id}>"
+            if self.codex_access.state_available and self.codex_access.channel_id
+            else "尚未設定"
+        )
+        if not configured_guild:
+            channel_detail = "此伺服器不在 AI 白名單"
+        elif not self.codex_access.enabled:
+            channel_detail = "AI 對話目前依設定停用"
+        elif not self.codex_access.state_available:
+            channel_detail = "狀態檔不可用；重新選擇可修復"
+        else:
+            channel_detail = "僅此頻道及其 Thread 可使用 AI"
+        children: list[discord.ui.Item] = [
             self._title("AI 助手", "官方 Codex OAuth 與持久對話"),
             discord.ui.Separator(spacing=discord.SeparatorSpacing.large),
             self._main_select("ai"),
@@ -530,12 +569,30 @@ class AdminPanelView(discord.ui.LayoutView):
             ),
             self._gap(),
             discord.ui.TextDisplay(
+                f"## 白名單頻道 {channel}\n"
+                f"-# {channel_detail}"
+            ),
+            discord.ui.ActionRow(
+                _CodexChannelSelect(
+                    disabled=not self.codex_access.enabled or not configured_guild
+                )
+            ),
+            self._gap(),
+            discord.ui.TextDisplay(
                 "## 安全邊界\n"
                 "**Read-only · Deny-all**\n"
                 "-# Shell、MCP、Apps、Subagents 與全域 Memories 均停用"
             ),
             self._row(_PanelButton("refresh", "重新整理"), self._close_button()),
-        )
+        ]
+        if note:
+            children.insert(
+                -1,
+                discord.ui.TextDisplay(
+                    f"## 最近操作\n-# {discord.utils.escape_markdown(note)}"
+                ),
+            )
+        self._set_container(*children)
 
     def _render_modules(self) -> None:
         self.page = "modules"
@@ -732,6 +789,55 @@ class AdminPanelView(discord.ui.LayoutView):
 
     async def _edit(self, interaction: discord.Interaction) -> None:
         await interaction.response.edit_message(
+            view=self,
+            allowed_mentions=discord.AllowedMentions.none(),
+        )
+
+    async def handle_codex_channel_select(
+        self,
+        interaction: discord.Interaction,
+        channel: object | None,
+    ) -> None:
+        await interaction.response.defer()
+        guild_id = getattr(getattr(interaction, "guild", None), "id", None)
+        channel_id = getattr(channel, "id", None)
+        channel_guild_id = getattr(getattr(channel, "guild", None), "id", None)
+        if (
+            not self.codex_access.enabled
+            or guild_id != self.guild_id
+            or guild_id != self.codex_access.guild_id
+            or channel_guild_id != guild_id
+            or getattr(channel, "type", None) != discord.ChannelType.text
+            or type(channel_id) is not int
+            or channel_id <= 0
+        ):
+            self._render_ai("只能選擇目前伺服器的一般文字頻道。")
+        else:
+            try:
+                previous = self.codex_access.set_channel(guild_id, channel_id)
+            except (OSError, ValueError):
+                logging.error("管理控制台保存 Codex 白名單頻道失敗。")
+                self._render_ai("白名單頻道無法保存，設定未變更。")
+            else:
+                if previous == channel_id:
+                    note = f"目前已設定為 <#{channel_id}>。"
+                elif previous is None:
+                    note = f"已設定白名單頻道為 <#{channel_id}>。"
+                else:
+                    self.codex_access.suspend()
+                    try:
+                        await self.codex_client.archive_scope(guild_id)
+                    except Exception:
+                        logging.error("管理控制台封存舊 Codex 對話失敗。")
+                        note = (
+                            f"已切換至 <#{channel_id}>，但舊對話封存失敗。"
+                        )
+                    else:
+                        note = f"已切換至 <#{channel_id}> 並封存舊對話。"
+                    finally:
+                        self.codex_access.resume()
+                self._render_ai(note)
+        await interaction.edit_original_response(
             view=self,
             allowed_mentions=discord.AllowedMentions.none(),
         )

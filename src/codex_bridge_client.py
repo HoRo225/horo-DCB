@@ -3,9 +3,15 @@ from __future__ import annotations
 import asyncio
 from collections import defaultdict
 from dataclasses import dataclass
+import json
+import logging
+import os
+from pathlib import Path
 import time
 
 import aiohttp
+
+DEFAULT_CODEX_ACCESS_STATE_PATH = Path("/app/data/codex_access.json")
 
 
 _SAFE_ERROR_CODES = {
@@ -18,12 +24,44 @@ _SAFE_ERROR_CODES = {
 }
 
 
-@dataclass(frozen=True, slots=True)
 class CodexAccess:
-    enabled: bool
-    guild_id: int | None
-    channel_id: int | None
-    user_ids: frozenset[int]
+    def __init__(
+        self,
+        enabled: bool,
+        guild_id: int | None,
+        channel_id: int | None,
+        user_ids: frozenset[int],
+        *,
+        state_path: Path | str | None = None,
+    ) -> None:
+        self.enabled = enabled
+        self.guild_id = guild_id
+        self.channel_id = channel_id
+        self.user_ids = user_ids
+        self.state_available = True
+        self._suspended = False
+        self._state_path = Path(state_path) if state_path is not None else None
+        if self._state_path is None or not self._state_path.exists():
+            return
+        try:
+            payload = json.loads(self._state_path.read_text(encoding="utf-8"))
+            if (
+                not isinstance(payload, dict)
+                or set(payload) != {"version", "guild_id", "channel_id"}
+                or type(payload.get("version")) is not int
+                or payload["version"] != 1
+                or type(payload.get("guild_id")) is not int
+                or payload["guild_id"] <= 0
+                or payload["guild_id"] != guild_id
+                or type(payload.get("channel_id")) is not int
+                or payload["channel_id"] <= 0
+            ):
+                raise ValueError("invalid Codex access state")
+            self.channel_id = payload["channel_id"]
+        except (OSError, ValueError, TypeError, json.JSONDecodeError):
+            self.channel_id = None
+            self.state_available = False
+            logging.error("Codex 白名單狀態檔無法讀取；AI 對話已停用。")
 
     def allows(
         self,
@@ -33,10 +71,45 @@ class CodexAccess:
     ) -> bool:
         return (
             self.enabled
+            and self.state_available
+            and not self._suspended
             and guild_id == self.guild_id
             and channel_id == self.channel_id
             and user_id in self.user_ids
         )
+
+    def set_channel(self, guild_id: int, channel_id: int) -> int | None:
+        if (
+            type(guild_id) is not int
+            or guild_id != self.guild_id
+            or type(channel_id) is not int
+            or channel_id <= 0
+        ):
+            raise ValueError("invalid Codex allowlist channel")
+        if self._state_path is not None:
+            payload = {
+                "version": 1,
+                "guild_id": guild_id,
+                "channel_id": channel_id,
+            }
+            self._state_path.parent.mkdir(parents=True, exist_ok=True)
+            temporary = self._state_path.with_name(f"{self._state_path.name}.tmp")
+            temporary.write_text(
+                json.dumps(payload, ensure_ascii=False, indent=2) + "\n",
+                encoding="utf-8",
+            )
+            os.chmod(temporary, 0o600)
+            os.replace(temporary, self._state_path)
+        previous = self.channel_id
+        self.channel_id = channel_id
+        self.state_available = True
+        return previous
+
+    def suspend(self) -> None:
+        self._suspended = True
+
+    def resume(self) -> None:
+        self._suspended = False
 
 
 def conversation_key(

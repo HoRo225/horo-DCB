@@ -3,7 +3,10 @@ import unittest
 from unittest.mock import AsyncMock, Mock, patch
 
 from src.bot import HoroBot, main
-from src.codex_bridge_client import CodexAccess
+from src.codex_bridge_client import (
+    DEFAULT_CODEX_ACCESS_STATE_PATH,
+    CodexAccess,
+)
 
 
 class CodexRuntimeWiringTest(unittest.TestCase):
@@ -28,6 +31,7 @@ class CodexRuntimeWiringTest(unittest.TestCase):
             patch("src.bot.SteamFreeGamesNotifier") as steam_class,
             patch("src.bot.CalendarManager") as calendar_class,
             patch("src.bot.ServerActivityMonitor") as activity_class,
+            patch("src.bot.CodexAccess") as access_class,
             patch("src.bot.HoroBot") as bot_class,
         ):
             main()
@@ -36,10 +40,17 @@ class CodexRuntimeWiringTest(unittest.TestCase):
             "http://codex:8765",
             config.codex_bridge_token,
         )
+        access_class.assert_called_once_with(
+            True,
+            10,
+            20,
+            frozenset({30}),
+            state_path=DEFAULT_CODEX_ACCESS_STATE_PATH,
+        )
         activity_class.assert_not_called()
         bot_class.assert_called_once_with(
             codex_class.return_value,
-            CodexAccess(True, 10, 20, frozenset({30})),
+            access_class.return_value,
             voice_class.return_value,
             steam_class.return_value,
             calendar=calendar_class.return_value,
