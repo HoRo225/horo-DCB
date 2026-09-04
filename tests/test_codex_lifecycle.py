@@ -296,6 +296,41 @@ class BridgeLifecycleTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.exits, [1])
         self.assertEqual(self.codex.runs, ["thread-1"])
 
+    async def test_drained_cleanup_preserves_interrupt_and_transport_failure_restarts(self):
+        cases = (
+            ("interrupt", RuntimeError("private interrupt error"), None, [1]),
+            ("transport", None, TransportClosedError("private transport error"), [1]),
+            ("turn", None, RuntimeError("private turn error"), []),
+        )
+        for name, interrupt_error, run_error, expected_exits in cases:
+            with self.subTest(failure=name):
+                self.codex = ControlledCodex()
+                self.store = ThreadStore(Path(self.directory.name) / f"drained-{name}.json")
+                self.service = CodexService(self.codex, self.store, timeout_seconds=1)
+                self.exits.clear()
+                self.service.fatal_exit = self.exits.append
+                self.service.interrupt_timeout_seconds = 0.2
+                self.codex.gates["run"] = asyncio.Event()
+                self.codex.gates["interrupt"] = asyncio.Event()
+                job = self.chat_task()
+                await asyncio.wait_for(self.codex.entered["run"].wait(), 0.3)
+                job.cancel()
+                await asyncio.wait_for(self.codex.entered["interrupt"].wait(), 0.3)
+                self.codex.run_error = run_error
+                self.codex.gates["run"].set()
+                await settle()
+                self.codex.interrupt_error = interrupt_error
+                self.codex.gates["interrupt"].set()
+                result = (await asyncio.wait_for(
+                    asyncio.gather(job, return_exceptions=True), 0.3,
+                ))[0]
+                self.assertIsInstance(result, asyncio.CancelledError)
+                self.assertEqual(self.exits, expected_exits)
+                self.assertEqual(self.codex.runs, ["thread-1"])
+                self.assertEqual(self.codex.interrupted, ["thread-1"])
+                self.assertEqual(len(self.codex.started), 1)
+                self.assertFalse(self.service._admission.jobs)
+
     async def test_auth_and_quota_errors_do_not_request_process_restart(self):
         for message, expected in (("ChatGPT login required", "auth_required"), ("quota exceeded", "usage_limit_or_unavailable")):
             with self.subTest(expected=expected):

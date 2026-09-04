@@ -295,22 +295,26 @@ class CodexService:
         logging.error("Codex runtime stopped after an unresponsive SDK operation.")
         self.fatal_exit(1)
 
-    async def _interrupt(self, handle: Any) -> None:
+    async def _interrupt(self, handle: Any, collector: asyncio.Task[Any]) -> None:
+        deadline = asyncio.get_running_loop().time() + min(5.0, self.interrupt_timeout_seconds)
         cleanup = asyncio.create_task(handle.interrupt())
-        deadline = asyncio.get_running_loop().time() + self.interrupt_timeout_seconds
-        while not cleanup.done():
+        tasks = {cleanup, collector}
+        while not all(task.done() for task in tasks):
             remaining = deadline - asyncio.get_running_loop().time()
             if remaining <= 0:
                 break
             try:
-                await asyncio.wait({cleanup}, timeout=remaining)
+                await asyncio.wait(tasks, timeout=remaining)
             except asyncio.CancelledError:
-                # A second shutdown request must not abandon the first interrupt.
+                # Repeated cancellation must preserve the stream until its terminal event.
                 continue
-        if not cleanup.done():
-            cleanup.cancel()
-            self._fatal()
-        elif cleanup.cancelled() or cleanup.exception() is not None:
+        undrained = any(not task.done() or task.cancelled() for task in tasks)
+        for task in tasks:
+            if not task.done():
+                task.cancel()
+            elif not task.cancelled():
+                task.exception()
+        if undrained:
             self._fatal()
 
     async def status(self) -> dict[str, object]:
@@ -370,7 +374,7 @@ class CodexService:
             async with self._admission.claim(key, queue_timeout_seconds=self.queue_timeout_seconds):
                 if not self.store.available:
                     raise BridgeRequestError("unavailable", 503)
-                handle = None
+                collector = None
                 try:
                     async with asyncio.timeout(self.timeout_seconds):
                         thread_id = self.store.get(key)
@@ -388,12 +392,14 @@ class CodexService:
                             *(ImageInput(image) for image in images),
                         ]
                         handle = await thread.turn(inputs)
-                        result = await handle.run()
+                        # SDK stream cancellation unregisters without waking its to_thread waiter.
+                        collector = asyncio.create_task(handle.run())
+                        result = await asyncio.shield(collector)
                 except (TimeoutError, asyncio.CancelledError) as exc:
-                    if handle is None:
+                    if collector is None:
                         self._fatal()
                     else:
-                        await self._interrupt(handle)
+                        await self._interrupt(handle, collector)
                     if isinstance(exc, TimeoutError):
                         raise BridgeRequestError("timeout", 504) from None
                     outcome = "cancelled"

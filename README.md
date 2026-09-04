@@ -192,7 +192,7 @@ Runtime image 建置時執行 pip check，完成後移除 pip。CI 另外驗證 
 
 正式 horo-laptop 保持 image-only，只保存 .env、compose.yaml、共享 runtime image、bot_data 與 codex_data。原始碼在 horo-server 的隔離 worktree 修改，GitHub Actions 建置、測試並匯出同一個通過驗證的 image。
 
-每個 push 候選 artifact 包含完整 `docker save` 壓縮檔、SHA-256、原生 image inspect 與來源 commit。Image 的 OCI labels 記錄 source／revision。部署下載該 artifact，核對 commit、archive hash、image ID、architecture 與 RootFS layers，再先啟動 codex 至 healthy、最後啟動 bot。
+每個 push 候選 artifact 包含完整 `docker save` 壓縮檔、SHA-256、`image-identity.json`（篩選後的映像身分資料）與來源 commit。Image 的 OCI labels 記錄 source／revision。部署下載該 artifact，核對 commit、archive hash、image ID、architecture 與 RootFS layers，再先啟動 codex 至 healthy、最後啟動 bot。
 
 切換前保留舊 compose、舊 image 與必要狀態回復點至少七天，自實際切換起算。既有 mapping v1 與 access v2／v3 格式保留；回滾優先還原 image／compose，不整批覆蓋 bot_data。
 

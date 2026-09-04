@@ -152,15 +152,15 @@ async def _send_native_ai_chunks(
     *,
     reply_first: bool,
     can_send: Any = None,
-) -> None:
+) -> str:
     if not chunks:
-        return
+        return "unavailable"
 
     try:
         start = 0
         if reply_first:
             if can_send is not None and not await can_send():
-                return
+                return "unauthorized"
             await message.reply(
                 chunks[0],
                 mention_author=False,
@@ -170,13 +170,15 @@ async def _send_native_ai_chunks(
 
         for chunk in chunks[start:]:
             if can_send is not None and not await can_send():
-                return
+                return "unauthorized"
             await message.channel.send(
                 chunk,
                 allowed_mentions=discord.AllowedMentions.none(),
             )
     except discord.HTTPException:
         logging.error("Discord AI 回覆送出失敗。")
+        return "unavailable"
+    return "success"
 
 
 class HoroBot(discord.Client):
@@ -434,22 +436,21 @@ class HoroBot(discord.Client):
         except Exception:
             logging.error("Codex guild archive failed.")
 
-    async def _send_ai_answer(self, message: discord.Message, answer: str, *, can_send: Any = None) -> None:
+    async def _send_ai_answer(self, message: discord.Message, answer: str, *, can_send: Any = None) -> str:
         if not self.ai_text_display_enabled:
-            await _send_native_ai_chunks(
+            return await _send_native_ai_chunks(
                 message,
                 split_discord_message(answer),
                 reply_first=True,
                 can_send=can_send,
             )
-            return
 
         display_chunks = split_discord_text_display(answer)
         sent_chunks: list[str] = []
         try:
             for index, chunk in enumerate(display_chunks):
                 if can_send is not None and not await can_send():
-                    return
+                    return "unauthorized"
                 view = build_ai_text_display_view(chunk)
                 if index == 0:
                     await message.reply(
@@ -466,12 +467,13 @@ class HoroBot(discord.Client):
         except discord.HTTPException:
             logging.error("Discord AI TextDisplay 回覆送出失敗，改用原生文字。")
             remaining = "".join(display_chunks[len(sent_chunks) :])
-            await _send_native_ai_chunks(
+            return await _send_native_ai_chunks(
                 message,
                 split_discord_message(remaining or answer),
                 reply_first=not sent_chunks,
                 can_send=can_send,
             )
+        return "success" if sent_chunks else "unavailable"
 
     async def on_message(self, message: discord.Message) -> None:
         if (
@@ -610,10 +612,11 @@ class HoroBot(discord.Client):
                         output_started = True
                         started = time.monotonic()
                         try:
-                            await self._send_ai_answer(message, answer, can_send=can_send)
+                            outcome = await self._send_ai_answer(message, answer, can_send=can_send)
                         finally:
                             discord_ms = (time.monotonic() - started) * 1000
-                        outcome = "success" if job.current else "unauthorized"
+                        if not job.current:
+                            outcome = "unauthorized"
                 except (ImageAttachmentError, CodexBridgeError, TimeoutError) as exc:
                     # Active error output still owns its key and cancellation registry.
                     await send_error(exc, deadline=job.deadline)
