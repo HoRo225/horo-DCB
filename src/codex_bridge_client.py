@@ -9,7 +9,6 @@ import logging
 import os
 from pathlib import Path
 import time
-from weakref import WeakValueDictionary
 
 import aiohttp
 
@@ -252,6 +251,7 @@ class _AcceptedJob:
     generation: int = 0
     user_id: int | None = None
     started_at: float | None = None
+    deadline: float = 0.0
 
     @property
     def current(self) -> bool:
@@ -374,10 +374,10 @@ class CodexBridgeClient:
         self.queue_timeout_seconds = 30.0
         self.image_timeout_seconds = 15.0
         self.work_timeout_seconds = 150.0
+        self.cleanup_timeout_seconds = 5.0
         self._admission = _Admission()
         self._session: aiohttp.ClientSession | None = None
         self._cooldowns: dict[int, float] = {}
-        self._locks: WeakValueDictionary[str, asyncio.Lock] = WeakValueDictionary()
 
     def try_start_request(self, user_id: int, *, now: float | None = None) -> bool:
         current = time.monotonic() if now is None else now
@@ -394,19 +394,16 @@ class CodexBridgeClient:
         self._cooldowns[user_id] = current
         return True
 
-    def conversation_lock(self, key: str) -> asyncio.Lock:
-        return self._locks.setdefault(key, asyncio.Lock())
-
     @asynccontextmanager
     async def accepted_request(self, key: str, *, access: CodexAccess | None = None,
                                user_id: int | None = None):
         try:
-            async with asyncio.timeout(self.work_timeout_seconds):
-                async with self._admission.claim(
-                    key, queue_timeout_seconds=self.queue_timeout_seconds,
-                    access=access, user_id=user_id,
-                ) as job:
-                    yield job
+            async with self._admission.claim(
+                key, queue_timeout_seconds=min(self.queue_timeout_seconds, self.work_timeout_seconds),
+                access=access, user_id=user_id,
+            ) as job:
+                job.deadline = job.accepted_at + self.work_timeout_seconds
+                yield job
         except TimeoutError:
             raise CodexBridgeError("timeout") from None
 
@@ -514,8 +511,9 @@ class CodexBridgeClient:
         images: tuple[str, ...],
     ) -> str:
         if asyncio.current_task() not in self._admission.jobs:
-            async with self.accepted_request(key):
-                return await self.chat(key, display_name, text, images)
+            async with self.accepted_request(key) as job:
+                async with asyncio.timeout_at(job.deadline):
+                    return await self.chat(key, display_name, text, images)
         body = await self._request(
             "POST",
             "/v1/chat",

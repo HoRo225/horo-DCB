@@ -517,87 +517,112 @@ class HoroBot(discord.Client):
             )
             return
 
+        queued_at = time.monotonic()
         queue_ms = images_ms = sdk_ms = discord_ms = 0.0
         outcome = "unavailable"
         output_started = False
+
+        async def send_error(exc: Exception, *, deadline: float | None = None) -> None:
+            nonlocal outcome, discord_ms
+            outcome = (
+                exc.code if isinstance(exc, CodexBridgeError)
+                else "timeout" if isinstance(exc, TimeoutError) else "invalid_request"
+            )
+            if output_started:
+                return
+            error_text = str(exc) if isinstance(exc, ImageAttachmentError) else codex_error_text(outcome)
+            budget = min(5.0, self.codex.cleanup_timeout_seconds)
+            if deadline is not None:
+                remaining = deadline - time.monotonic()
+                if remaining > 0:
+                    budget = min(budget, remaining)
+            started = time.monotonic()
+            try:
+                async with asyncio.timeout(budget):
+                    await message.reply(
+                        error_text, mention_author=False,
+                        allowed_mentions=discord.AllowedMentions.none(),
+                    )
+            except (discord.HTTPException, TimeoutError):
+                logging.error("Discord AI 狀態回覆送出失敗。")
+            finally:
+                discord_ms += (time.monotonic() - started) * 1000
+
         try:
             async with self.codex.accepted_request(
                 key, access=self.codex_access, user_id=message.author.id,
             ) as job:
                 queue_ms = ((job.started_at or time.monotonic()) - job.accepted_at) * 1000
 
-                async def can_send() -> bool:
-                    if not job.current:
-                        return False
-                    author = message.author
-                    if self.codex_access.mode == "roles":
-                        guild = message.guild
-                        author = None
-                        if getattr(getattr(self, "intents", None), "members", False):
-                            author = guild.get_member(message.author.id)
-                        if author is None:
-                            try:
-                                author = await asyncio.wait_for(guild.fetch_member(message.author.id), 2)
-                            except (discord.HTTPException, TimeoutError, AttributeError):
-                                return False
-                        if author is None:
-                            return False
-                    return job.current and codex_conversation_key_for_message(
-                        message, self.codex_access, author=author,
-                    ) == key
-
-                if not await can_send():
-                    raise CodexBridgeError("unauthorized")
-                image_attachments = select_image_attachments(attachments)
-                if not image_attachments:
-                    if referenced_message is None and getattr(message, "reference", None) is not None:
-                        referenced_message = await get_referenced_message(message)
-                    image_attachments = select_image_attachments(list(
-                        getattr(referenced_message, "attachments", ())
-                        if referenced_message is not None else ()
-                    ))
-                if not cleaned_content and not image_attachments:
-                    await message.reply(
-                        "請輸入問題，或附上 JPEG、PNG、WebP 圖片。",
-                        mention_author=False, allowed_mentions=discord.AllowedMentions.none(),
-                    )
-                    outcome = "invalid_request"
-                    return
-                async with message.channel.typing():
-                    started = time.monotonic()
-                    try:
-                        async with asyncio.timeout(self.codex.image_timeout_seconds):
-                            images = await read_image_attachments(image_attachments)
-                    finally:
-                        images_ms = (time.monotonic() - started) * 1000
-                    if not await can_send():
-                        raise CodexBridgeError("unauthorized")
-                    started = time.monotonic()
-                    try:
-                        answer = await self.codex.chat(key, message.author.display_name, cleaned_content, images)
-                    finally:
-                        sdk_ms = (time.monotonic() - started) * 1000
-                output_started = True
-                started = time.monotonic()
                 try:
-                    await self._send_ai_answer(message, answer, can_send=can_send)
-                finally:
-                    discord_ms = (time.monotonic() - started) * 1000
-                outcome = "success" if job.current else "unauthorized"
+                    async with asyncio.timeout_at(job.deadline):
+                        async def can_send() -> bool:
+                            if not job.current:
+                                return False
+                            author = message.author
+                            if self.codex_access.mode == "roles":
+                                guild = message.guild
+                                author = None
+                                if getattr(getattr(self, "intents", None), "members", False):
+                                    author = guild.get_member(message.author.id)
+                                if author is None:
+                                    try:
+                                        author = await asyncio.wait_for(guild.fetch_member(message.author.id), 2)
+                                    except (discord.HTTPException, TimeoutError, AttributeError):
+                                        return False
+                                if author is None:
+                                    return False
+                            return job.current and codex_conversation_key_for_message(
+                                message, self.codex_access, author=author,
+                            ) == key
+
+                        if not await can_send():
+                            raise CodexBridgeError("unauthorized")
+                        image_attachments = select_image_attachments(attachments)
+                        if not image_attachments:
+                            if referenced_message is None and getattr(message, "reference", None) is not None:
+                                referenced_message = await get_referenced_message(message)
+                            image_attachments = select_image_attachments(list(
+                                getattr(referenced_message, "attachments", ())
+                                if referenced_message is not None else ()
+                            ))
+                        if not cleaned_content and not image_attachments:
+                            await message.reply(
+                                "請輸入問題，或附上 JPEG、PNG、WebP 圖片。",
+                                mention_author=False, allowed_mentions=discord.AllowedMentions.none(),
+                            )
+                            outcome = "invalid_request"
+                            return
+                        async with message.channel.typing():
+                            started = time.monotonic()
+                            try:
+                                async with asyncio.timeout(self.codex.image_timeout_seconds):
+                                    images = await read_image_attachments(image_attachments)
+                            finally:
+                                images_ms = (time.monotonic() - started) * 1000
+                            if not await can_send():
+                                raise CodexBridgeError("unauthorized")
+                            started = time.monotonic()
+                            try:
+                                answer = await self.codex.chat(key, message.author.display_name, cleaned_content, images)
+                            finally:
+                                sdk_ms = (time.monotonic() - started) * 1000
+                        output_started = True
+                        started = time.monotonic()
+                        try:
+                            await self._send_ai_answer(message, answer, can_send=can_send)
+                        finally:
+                            discord_ms = (time.monotonic() - started) * 1000
+                        outcome = "success" if job.current else "unauthorized"
+                except (ImageAttachmentError, CodexBridgeError, TimeoutError) as exc:
+                    # Active error output still owns its key and cancellation registry.
+                    await send_error(exc, deadline=job.deadline)
         except asyncio.CancelledError:
             outcome = "cancelled"
-        except (ImageAttachmentError, CodexBridgeError) as exc:
-            outcome = exc.code if isinstance(exc, CodexBridgeError) else "invalid_request"
-            if not output_started:
-                error_text = codex_error_text(exc.code) if isinstance(exc, CodexBridgeError) else str(exc)
-                try:
-                    async with asyncio.timeout(5):
-                        await message.reply(
-                            error_text, mention_author=False,
-                            allowed_mentions=discord.AllowedMentions.none(),
-                        )
-                except (discord.HTTPException, TimeoutError):
-                    logging.error("Discord AI 狀態回覆送出失敗。")
+        except CodexBridgeError as exc:
+            # Rejected admission and expired queues report immediately, without requeueing.
+            queue_ms = (time.monotonic() - queued_at) * 1000
+            await send_error(exc)
         finally:
             logging.info(
                 "AI request result=%s queue_ms=%.1f images_ms=%.1f sdk_ms=%.1f discord_ms=%.1f",

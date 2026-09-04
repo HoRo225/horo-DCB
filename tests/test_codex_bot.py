@@ -1,4 +1,3 @@
-import asyncio
 from types import SimpleNamespace
 import unittest
 from unittest.mock import ANY, AsyncMock, patch
@@ -31,9 +30,6 @@ class FakeCodex(CodexBridgeClient):
 
     def try_start_request(self, _user_id):
         return self.allowed
-
-    def conversation_lock(self, _key):
-        return asyncio.Lock()
 
     async def chat(self, key, display_name, text, images):
         if self.error is not None:

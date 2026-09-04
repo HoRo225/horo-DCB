@@ -278,14 +278,6 @@ class CodexClientGateTest(unittest.TestCase):
         self.assertFalse(client.try_start_request(10, now=104.9))
         self.assertTrue(client.try_start_request(10, now=105))
 
-    def test_conversation_lock_is_stable_per_key(self):
-        client = CodexBridgeClient("http://codex:8765", "a" * 64)
-
-        first = client.conversation_lock("guild:1:thread:2")
-
-        self.assertIs(first, client.conversation_lock("guild:1:thread:2"))
-        self.assertIsNot(first, client.conversation_lock("guild:1:thread:3"))
-
 
 class ThreadStoreTest(unittest.TestCase):
     def setUp(self):
