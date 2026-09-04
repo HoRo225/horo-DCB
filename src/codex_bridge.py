@@ -322,22 +322,17 @@ class CodexService:
                     TextInput(f"[Discord user: {display_name}]\n{text}"),
                     *(ImageInput(image) for image in images),
                 ]
-                turn_method = getattr(thread, "turn", None)
-                if callable(turn_method):
-                    handle = await turn_method(inputs)
-                    run = handle.run()
-                else:
-                    handle = thread
-                    run = thread.run(inputs)
+                handle = await thread.turn(inputs)
                 try:
-                    result = await asyncio.wait_for(run, timeout=self.timeout_seconds)
+                    result = await asyncio.wait_for(
+                        handle.run(),
+                        timeout=self.timeout_seconds,
+                    )
                 except TimeoutError as exc:
-                    interrupt = getattr(handle, "interrupt", None)
-                    if callable(interrupt):
-                        try:
-                            await interrupt()
-                        except Exception:
-                            pass
+                    try:
+                        await handle.interrupt()
+                    except Exception:
+                        pass
                     raise BridgeRequestError("timeout", 504) from exc
             except BridgeRequestError:
                 raise
@@ -362,7 +357,6 @@ class CodexService:
                 continue
 
 
-_SERVICE_KEY = web.AppKey("codex_service", object)
 _TOKEN_KEY = web.AppKey("bridge_token", str)
 _CONFIG_OVERRIDES = (
     'web_search="live"',
@@ -408,7 +402,6 @@ def _authorized(request: web.Request) -> bool:
 def create_app(token: str, service: Any) -> web.Application:
     app = web.Application(client_max_size=24 * 1024 * 1024)
     app[_TOKEN_KEY] = token
-    app[_SERVICE_KEY] = service
 
     async def health(_request: web.Request) -> web.Response:
         try:

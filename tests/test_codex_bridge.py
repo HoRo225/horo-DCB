@@ -204,6 +204,18 @@ class ChatPayloadTest(unittest.TestCase):
                     validate_chat_payload(payload)
 
 
+class FakeTurnHandle:
+    def __init__(self, thread, inputs):
+        self.thread = thread
+        self.inputs = inputs
+
+    async def run(self):
+        return await self.thread._run_inputs(self.inputs)
+
+    async def interrupt(self):
+        self.thread.interrupted = True
+
+
 class FakeThread:
     def __init__(self, thread_id, replies):
         self.id = thread_id
@@ -211,17 +223,17 @@ class FakeThread:
         self.calls = []
         self.interrupted = False
 
-    async def run(self, inputs):
+    async def turn(self, inputs):
         self.calls.append(inputs)
+        return FakeTurnHandle(self, inputs)
+
+    async def _run_inputs(self, inputs):
         reply = self.replies.pop(0)
         if isinstance(reply, BaseException):
             raise reply
         if isinstance(reply, asyncio.Event):
             await reply.wait()
         return SimpleNamespace(final_response=reply)
-
-    async def interrupt(self):
-        self.interrupted = True
 
 
 class FakeCodex:
@@ -263,7 +275,10 @@ class ParallelThread:
         self.owner = owner
         self.id = thread_id
 
-    async def run(self, _inputs):
+    async def turn(self, inputs):
+        return FakeTurnHandle(self, inputs)
+
+    async def _run_inputs(self, _inputs):
         self.owner.active += 1
         self.owner.max_active = max(self.owner.max_active, self.owner.active)
         self.owner.entered += 1
