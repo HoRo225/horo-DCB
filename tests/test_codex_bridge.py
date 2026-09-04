@@ -417,12 +417,21 @@ class FakeTurnHandle:
     def __init__(self, thread, inputs):
         self.thread = thread
         self.inputs = inputs
+        self.run_waiter = None
 
     async def run(self):
-        return await self.thread._run_inputs(self.inputs)
+        self.run_waiter = asyncio.create_task(self.thread._run_inputs(self.inputs))
+        try:
+            return await self.run_waiter
+        except asyncio.CancelledError:
+            if not getattr(self.thread, "interrupted", False):
+                raise
+            return SimpleNamespace(final_response=None)
 
     async def interrupt(self):
         self.thread.interrupted = True
+        if self.run_waiter is not None:
+            self.run_waiter.cancel()
 
 
 class FakeThread:

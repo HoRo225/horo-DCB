@@ -189,6 +189,8 @@ class ControlledThread:
     def __init__(self, codex, thread_id):
         self.codex = codex
         self.id = thread_id
+        self.run_waiter = None
+        self.interrupted = False
 
     async def turn(self, inputs):
         await self.codex.pause("turn")
@@ -196,7 +198,12 @@ class ControlledThread:
 
     async def run(self):
         self.codex.runs.append(self.id)
-        await self.codex.pause("run")
+        self.run_waiter = asyncio.create_task(self.codex.pause("run"))
+        try:
+            await self.run_waiter
+        except asyncio.CancelledError:
+            if not self.interrupted:
+                raise
         if self.codex.run_error is not None:
             raise self.codex.run_error
         return SimpleNamespace(final_response="answer")
@@ -206,6 +213,10 @@ class ControlledThread:
         await self.codex.pause("interrupt")
         if self.codex.interrupt_error is not None:
             raise self.codex.interrupt_error
+        # Successful synthetic interrupt terminates this turn only, like the SDK event.
+        self.interrupted = True
+        if self.run_waiter is not None:
+            self.run_waiter.cancel()
 
 
 class BridgeLifecycleTest(unittest.IsolatedAsyncioTestCase):
@@ -791,15 +802,27 @@ class BotAdmissionTest(unittest.IsolatedAsyncioTestCase):
         self.chat_release.set()
         self.reply_text = "answer" * 1500
         for display in (False, True):
-            with self.subTest(display=display):
-                self.bot.ai_text_display_enabled = display
-                message = self.message()
-                async def revoke_after_first():
-                    self.revoke(30)
-                message.after_output = revoke_after_first
-                await asyncio.wait_for(self.bot.on_message(message), 0.3)
-                self.assertEqual(len(message.deliveries), 1)
-                self.assertEqual(message.channel.sent, [])
+            for before_first in (False, True):
+                with self.subTest(display=display, before_first=before_first):
+                    self.bot.ai_text_display_enabled = display
+                    message = self.message()
+                    if before_first:
+                        self.revoke(30)
+                        self.guild.fetch_member = AsyncMock(side_effect=[
+                            message.author, message.author, self.members[30],
+                        ])
+                    else:
+                        self.guild.fetch_member = AsyncMock(side_effect=self.members.get)
+                        async def revoke_after_first():
+                            self.revoke(30)
+                        message.after_output = revoke_after_first
+                    with self.assertLogs(level=logging.INFO) as logs:
+                        await asyncio.wait_for(self.bot.on_message(message), 0.3)
+                    self.assertEqual(len(message.deliveries), 0 if before_first else 1)
+                    self.assertEqual(message.channel.sent, [])
+                    rendered = "\n".join(logs.output)
+                    self.assertIn("result=unauthorized", rendered)
+                    self.assertNotIn("result=success", rendered)
 
     async def test_text_display_fallback_rechecks_revoked_roles(self):
         self.chat_release.set()
@@ -812,8 +835,75 @@ class BotAdmissionTest(unittest.IsolatedAsyncioTestCase):
                 self.revoke(30)
                 raise discord.HTTPException(SimpleNamespace(status=400, reason="Bad Request"), "private transport data")
         message.reply = fail_then_revoke
-        await asyncio.wait_for(self.bot.on_message(message), 0.3)
+        with self.assertLogs(level=logging.INFO) as logs:
+            await asyncio.wait_for(self.bot.on_message(message), 0.3)
         self.assertEqual(len(calls), 1, "native fallback emitted AI output after roles were revoked")
+        rendered = "\n".join(logs.output)
+        self.assertIn("result=unauthorized", rendered)
+        self.assertNotIn("result=success", rendered)
+        self.assertNotIn("private transport data", rendered)
+
+    async def test_unsent_and_partial_discord_failures_never_log_success(self):
+        self.chat_release.set()
+        self.reply_text = "private answer" * 600
+        for display in (False, True):
+            for fail_first in (False, True):
+                with self.subTest(display=display, fail_first=fail_first):
+                    self.bot.ai_text_display_enabled = display
+                    message = self.message()
+                    calls = []
+                    reply = message.reply
+                    async def fail(content=None, **kwargs):
+                        calls.append((content, kwargs))
+                        raise discord.HTTPException(
+                            SimpleNamespace(status=400, reason="Bad Request"),
+                            "private transport data",
+                        )
+                    message.channel.send = fail
+                    if fail_first:
+                        message.reply = fail
+                    else:
+                        message.reply = reply
+                    with self.assertLogs(level=logging.INFO) as logs:
+                        await asyncio.wait_for(self.bot.on_message(message), 0.3)
+                    self.assertEqual(len(message.deliveries), 0 if fail_first else 1)
+                    self.assertEqual(len(calls), 2 if display else 1)
+                    rendered = "\n".join(logs.output)
+                    self.assertIn("result=unavailable", rendered)
+                    self.assertNotIn("result=success", rendered)
+                    for private in ("private prompt", "private answer", "private transport data", "Member 30"):
+                        self.assertNotIn(private, rendered)
+
+    async def test_successful_text_display_fallback_logs_success_after_remaining_text(self):
+        self.chat_release.set()
+        self.bot.ai_text_display_enabled = True
+        self.reply_text = "a" * 4000 + "b" * 3000
+        for fail_first in (False, True):
+            with self.subTest(fail_first=fail_first):
+                message = self.message()
+                delivered = []
+                calls = []
+                failed = False
+                async def send(content=None, **kwargs):
+                    nonlocal failed
+                    view = kwargs.get("view")
+                    calls.append("display" if view is not None else "native")
+                    if view is not None and not failed and (fail_first or delivered):
+                        failed = True
+                        raise discord.HTTPException(
+                            SimpleNamespace(status=400, reason="Bad Request"), "private transport data",
+                        )
+                    delivered.append(view.children[0].content if view is not None else content)
+                message.reply = message.channel.send = send
+                with self.assertLogs(level=logging.INFO) as logs:
+                    await asyncio.wait_for(self.bot.on_message(message), 0.3)
+                self.assertEqual("".join(delivered), "a" * 4000 + "b" * 3000)
+                self.assertEqual(
+                    calls,
+                    ["display", "native", "native", "native", "native"]
+                    if fail_first else ["display", "display", "native", "native"],
+                )
+                self.assertIn("result=success", "\n".join(logs.output))
 
     async def test_client_close_finishes_cancelled_jobs_before_session_close(self):
         first = self.start(self.message(30, thread=True))
@@ -1138,6 +1228,236 @@ class RuntimeWorkerExitTest(unittest.TestCase):
 
     def test_shutdown_deadline_exits_with_real_blocked_worker(self):
         self.run_blocked_runtime("close")
+
+
+class SdkCollectorCleanupTest(unittest.TestCase):
+    def run_sdk_collector(self, mode):
+        # Real SDK streams offload router queue.get to the executor. A child
+        # watchdog must reap the old implementation when interpreter exit hangs.
+        script = textwrap.dedent("""
+            import asyncio
+            from concurrent.futures import ThreadPoolExecutor
+            import os
+            from pathlib import Path
+            import sys
+            import time
+            from unittest.mock import Mock, patch
+
+            from aiohttp import ClientSession
+            from openai_codex import AsyncCodex, TransportClosedError
+            from openai_codex.api import AsyncThread
+            from openai_codex.generated.v2_all import (
+                TurnCompletedNotification, TurnInterruptResponse, TurnStartResponse,
+            )
+            from openai_codex.models import Notification
+            import src.codex_bridge as bridge
+
+            mode = sys.argv[2]
+
+            async def exercise():
+                loop = asyncio.get_running_loop()
+                # Two real workers make repeated leaks visible without dozens of turns.
+                loop.set_default_executor(ThreadPoolExecutor(max_workers=2))
+                sdk = AsyncCodex()
+                sdk._initialized = True  # Only external initialization/RPCs are synthetic.
+                sync = sdk._client._sync
+                router = sync._router
+                started = []
+                resumed = []
+                turns = []
+                interrupts = []
+                interrupt_entered = asyncio.Event()
+                interrupted_at = []
+                completions = []
+
+                async def start(**options):
+                    started.append(options)
+                    return AsyncThread(sdk, "thread-1")
+
+                async def resume(thread_id, **options):
+                    resumed.append(thread_id)
+                    return AsyncThread(sdk, thread_id)
+
+                def turn_start(thread_id, inputs, params=None):
+                    turn_id = f"turn-{len(turns) + 1}"
+                    turns.append((thread_id, turn_id))
+                    return TurnStartResponse.model_validate({
+                        "turn": {"id": turn_id, "status": "inProgress", "items": []},
+                    })
+
+                def complete(thread_id, turn_id):
+                    router.route_notification(Notification(
+                        "turn/completed",
+                        TurnCompletedNotification.model_validate({
+                            "threadId": thread_id,
+                            "turn": {"id": turn_id, "status": "interrupted", "items": []},
+                        }),
+                    ))
+                    completions.append(turn_id)
+
+                def interrupt(thread_id, turn_id):
+                    interrupts.append(turn_id)
+                    interrupted_at.append(time.monotonic())
+                    loop.call_soon_threadsafe(interrupt_entered.set)
+                    if mode == "cleanup_deadline":
+                        # Interrupt uses most of the one budget; completion never arrives.
+                        time.sleep(0.14)
+                    else:
+                        # Real app-server completion may arrive after the interrupt RPC.
+                        loop.call_soon_threadsafe(
+                            loop.call_later, 0.04, complete, thread_id, turn_id,
+                        )
+                    return TurnInterruptResponse()
+
+                sdk.thread_start = start
+                sdk.thread_resume = resume
+                sync.turn_start = turn_start
+                sync.turn_interrupt = interrupt
+                service = bridge.CodexService(
+                    sdk, bridge.ThreadStore(Path(sys.argv[1]) / "threads.json"),
+                    timeout_seconds=0.2 if mode == "timeout" else 2,
+                )
+                service.interrupt_timeout_seconds = 0.2
+
+                if mode == "cleanup_deadline":
+                    def fatal_exit(code):
+                        print(f"fatal_elapsed={time.monotonic() - interrupted_at[0]:.3f}", flush=True)
+                        os._exit(code)
+                    service.fatal_exit = fatal_exit
+
+                def queue_get_is_blocked(turn_id):
+                    # Observe real frames, without replacing Queue.get, routing, or to_thread.
+                    for frame in sys._current_frames().values():
+                        in_queue_get = False
+                        while frame is not None:
+                            if frame.f_code.co_name == "get" and frame.f_code.co_filename.endswith("queue.py"):
+                                in_queue_get = True
+                            if (
+                                in_queue_get
+                                and frame.f_code.co_name == "next_turn_notification"
+                                and frame.f_code.co_filename.endswith("_message_router.py")
+                                and frame.f_locals.get("turn_id") == turn_id
+                            ):
+                                return True
+                            frame = frame.f_back
+                    return False
+
+                async def wait_for_queue_get(turn_id):
+                    async with asyncio.timeout(1):
+                        while not queue_get_is_blocked(turn_id):
+                            await asyncio.sleep(0.001)
+                    print("real_queue_get_blocked", flush=True)
+
+                runner = http = None
+                if mode == "http_cancel":
+                    app = bridge.create_app("a" * 64, service)
+                    with patch.object(bridge, "_runtime_app", return_value=app), patch.object(
+                        bridge.web, "run_app", Mock(),
+                    ) as launch, patch.object(sys, "argv", ["codex-bridge", "serve"]):
+                        bridge.main()
+                    runner = bridge.web.AppRunner(
+                        app, handler_cancellation=launch.call_args.kwargs.get("handler_cancellation", False),
+                    )
+                    await runner.setup()
+                    await bridge.web.TCPSite(runner, "127.0.0.1", 0).start()
+                    base_url = f"http://127.0.0.1:{runner.addresses[0][1]}"
+                    http = ClientSession()
+
+                rounds = 6 if mode == "repeated_cancel" else 1
+                try:
+                    for index in range(rounds):
+                        interrupt_entered.clear()
+                        turn_id = f"turn-{index + 1}"
+                        if http is not None:
+                            job = asyncio.create_task(http.post(base_url + "/v1/chat", json={
+                                "conversation_key": "guild:1:thread:2", "display_name": "A",
+                                "text": "private prompt", "images": [],
+                            }, headers={"Authorization": "Bearer " + "a" * 64}))
+                        else:
+                            job = asyncio.create_task(service.chat(
+                                "guild:1:thread:2", "A", "private prompt", (),
+                            ))
+                        await wait_for_queue_get(turn_id)
+                        accepted = next(iter(service._admission.jobs))
+                        if mode != "timeout":
+                            job.cancel()
+                            await asyncio.wait_for(interrupt_entered.wait(), 0.5)
+                            if mode == "repeated_cancel":
+                                accepted.cancel()
+                                await asyncio.sleep(0)
+                                accepted.cancel()
+                        result = (await asyncio.wait_for(
+                            asyncio.gather(job, return_exceptions=True), 1,
+                        ))[0]
+                        if mode == "timeout":
+                            assert isinstance(result, bridge.BridgeRequestError), repr(result)
+                            assert result.code == "timeout", result.code
+                        else:
+                            assert isinstance(result, asyncio.CancelledError), repr(result)
+                        done, _ = await asyncio.wait({accepted}, timeout=1)
+                        assert accepted in done, "HTTP handler did not finish SDK cleanup"
+                        assert not service._admission.jobs, "request ownership outlived cleanup"
+                        # Completion must precede release; sleeping here would hide early release.
+                        assert completions == [f"turn-{n + 1}" for n in range(index + 1)], completions
+                        assert await asyncio.wait_for(
+                            asyncio.to_thread(lambda: "worker reusable"), 0.5,
+                        ) == "worker reusable"
+
+                    assert len(started) == 1, "cancelled prompt was retried"
+                    assert len(resumed) == rounds - 1
+                    assert len(turns) == rounds
+                    assert interrupts == [f"turn-{n + 1}" for n in range(rounds)], interrupts
+                    assert not router._turn_notifications
+                    router.fail_all(TransportClosedError("synthetic shutdown"))
+                    await sdk.close()
+                    print("scenario_finished", flush=True)
+                finally:
+                    if http is not None:
+                        await http.close()
+                    if runner is not None:
+                        await runner.cleanup()
+
+            asyncio.run(exercise())
+            print("normal_exit", flush=True)
+        """)
+        with tempfile.TemporaryDirectory() as directory:
+            child = subprocess.Popen(
+                [sys.executable, "-c", script, directory, mode],
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+            )
+            try:
+                try:
+                    stdout, stderr = child.communicate(timeout=4)
+                except subprocess.TimeoutExpired:
+                    child.kill()
+                    stdout, stderr = child.communicate(timeout=1)
+                    stage = "SDK worker hang" if "real_queue_get_blocked" in stdout else "fixture/setup timeout"
+                    self.fail(f"{mode}: {stage}\n{stdout}{stderr}")
+                if mode == "cleanup_deadline":
+                    self.assertEqual(child.returncode, 1, stdout + stderr)
+                    self.assertIn("fatal_elapsed=", stdout, stdout + stderr)
+                    elapsed = float(stdout.split("fatal_elapsed=", 1)[1].splitlines()[0])
+                    self.assertLess(elapsed, 0.27, "interrupt and collector each consumed a separate cleanup budget")
+                else:
+                    self.assertEqual(child.returncode, 0, stdout + stderr)
+                    self.assertIn("normal_exit", stdout)
+                self.assertNotIn("Traceback", stderr)
+            finally:
+                if child.poll() is None:
+                    child.kill()
+                    child.communicate(timeout=1)
+
+    def test_timeout_drains_real_sdk_stream_and_exits_normally(self):
+        self.run_sdk_collector("timeout")
+
+    def test_http_disconnect_drains_real_sdk_stream_and_exits_normally(self):
+        self.run_sdk_collector("http_cancel")
+
+    def test_repeated_cancellations_preserve_real_executor_capacity(self):
+        self.run_sdk_collector("repeated_cancel")
+
+    def test_missing_terminal_event_uses_one_cleanup_deadline_then_exits(self):
+        self.run_sdk_collector("cleanup_deadline")
 
 
 class RuntimeHttpSafetyTest(unittest.IsolatedAsyncioTestCase):
