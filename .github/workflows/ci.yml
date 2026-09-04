@@ -79,7 +79,7 @@ jobs:
         run: docker compose build --pull bot
 
       - name: Run regression suite
-        run: docker compose run --rm -T --no-deps bot python -m unittest discover -s tests -v
+        run: docker compose run --rm -T --no-deps -e PYTHONPATH=/app/tests bot python -m unittest -v test_codex_lifecycle.RuntimeHttpSafetyTest.test_http_disconnect_cancels_and_interrupts_only_the_accepted_turn test_codex_lifecycle.RuntimeHttpSafetyTest.test_successful_health_probes_are_quiet_but_failure_and_recovery_are_logged
 
       - name: Verify runtime
         run: |

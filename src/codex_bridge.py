@@ -16,7 +16,6 @@ import time
 from typing import Any
 
 from aiohttp import web
-from aiohttp.web_log import AccessLogger
 import openai_codex
 from openai_codex import (
     ApprovalMode,
@@ -26,13 +25,9 @@ from openai_codex import (
     Sandbox,
     TextInput,
 )
-from openai_codex import RetryLimitExceededError, ServerBusyError, TransportClosedError
+from openai_codex import RetryLimitExceededError, ServerBusyError
 from src.codex_bridge_client import _Admission, CodexBridgeError, scope_matches
 from src.discord_images import MAX_IMAGE_BYTES, MAX_IMAGE_TOTAL_BYTES, image_signature_matches
-
-
-SDK_INITIALIZE_TIMEOUT_SECONDS = 30.0
-SDK_SHUTDOWN_TIMEOUT_SECONDS = 5.0
 
 
 _THREAD_KEY = re.compile(
@@ -121,7 +116,6 @@ def validate_chat_payload(value: object) -> ChatPayload:
 class ThreadStore:
     def __init__(self, path: Path) -> None:
         self.path = path
-        self.available = True
         self._threads: dict[str, dict[str, object]] = {}
         try:
             self._threads = self._load()
@@ -198,26 +192,20 @@ class ThreadStore:
         return len(self._threads)
 
     def _persist(self, candidate: dict[str, dict[str, object]]) -> None:
-        if not self.available:
-            raise OSError("thread mapping unavailable")
-        try:
-            self.path.parent.mkdir(parents=True, exist_ok=True)
-            temporary = self.path.with_name(f"{self.path.name}.tmp")
-            temporary.write_text(
-                json.dumps(
-                    {"version": 1, "threads": candidate},
-                    ensure_ascii=False,
-                    indent=2,
-                    sort_keys=True,
-                )
-                + "\n",
-                encoding="utf-8",
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        temporary = self.path.with_name(f"{self.path.name}.tmp")
+        temporary.write_text(
+            json.dumps(
+                {"version": 1, "threads": candidate},
+                ensure_ascii=False,
+                indent=2,
+                sort_keys=True,
             )
-            os.chmod(temporary, 0o600)
-            os.replace(temporary, self.path)
-        except OSError:
-            self.available = False
-            raise
+            + "\n",
+            encoding="utf-8",
+        )
+        os.chmod(temporary, 0o600)
+        os.replace(temporary, self.path)
 
 
 class CodexService:
@@ -237,8 +225,6 @@ class CodexService:
         self._archives: dict[tuple[int, int | None], int] = {}
         self.queue_timeout_seconds = 30.0
         self.interrupt_timeout_seconds = 5.0
-        self.archive_timeout_seconds = 5.0
-        self._fatal_called = False
         self.fatal_exit = os._exit
         self.last_error: str | None = None
 
@@ -287,9 +273,6 @@ class CodexService:
         return BridgeRequestError("unavailable", 503)
 
     def _fatal(self) -> None:
-        if self._fatal_called:
-            return
-        self._fatal_called = True
         self._admission.closed = True
         self.last_error = "unavailable"
         logging.error("Codex runtime stopped after an unresponsive SDK operation.")
@@ -322,21 +305,12 @@ class CodexService:
             "queued_requests": len(self._admission.waiting),
             "last_error": self.last_error,
         }
-        if self._admission.closed or not self.store.available:
-            if not self.store.available:
-                status["last_error"] = "unavailable"
+        if self._admission.closed:
             return status
         try:
             async with asyncio.timeout(2):
                 response = await self.codex.account()
                 metadata = self.codex.metadata
-        except (TransportClosedError, TimeoutError):
-            self._fatal()
-            status["last_error"] = "unavailable"
-            return status
-        except asyncio.CancelledError:
-            self._fatal()
-            raise
         except Exception:
             return status
         account = response.account
@@ -362,14 +336,10 @@ class CodexService:
         started = time.monotonic()
         outcome = "unavailable"
         try:
-            if not self.store.available:
-                raise BridgeRequestError("unavailable", 503)
             if any(scope_matches(key, guild, channel) for guild, channel in self._archives):
                 raise BridgeRequestError("busy", 429)
             # Register before the first SDK await, including start/resume RPCs.
             async with self._admission.claim(key, queue_timeout_seconds=self.queue_timeout_seconds):
-                if not self.store.available:
-                    raise BridgeRequestError("unavailable", 503)
                 handle = None
                 try:
                     async with asyncio.timeout(self.timeout_seconds):
@@ -381,8 +351,6 @@ class CodexService:
                             self.store.set(key, thread.id)
                         else:
                             thread = await self.codex.thread_resume(thread_id, **self._thread_options())
-                        if not self.store.available:
-                            raise BridgeRequestError("unavailable", 503)
                         inputs = [
                             TextInput(f"[Discord user: {display_name}]\n{text}"),
                             *(ImageInput(image) for image in images),
@@ -409,9 +377,6 @@ class CodexService:
         except BridgeRequestError as exc:
             self.last_error = outcome = exc.code
             raise
-        except TransportClosedError:
-            self._fatal()
-            raise BridgeRequestError("unavailable", 503) from None
         except Exception as exc:
             error = self._normalize_error(exc)
             self.last_error = outcome = error.code
@@ -420,8 +385,6 @@ class CodexService:
             logging.info("Codex request result=%s sdk_ms=%.1f", outcome, (time.monotonic() - started) * 1000)
 
     async def archive_scope(self, guild_id: int, channel_id: int | None = None) -> None:
-        if not self.store.available:
-            raise BridgeRequestError("unavailable", 503)
         scope = (guild_id, channel_id)
         # Mark the scope closed before any await; overlapping archives share the guard.
         self._archives[scope] = self._archives.get(scope, 0) + 1
@@ -434,37 +397,13 @@ class CodexService:
             thread_ids = self.store.pop_many(self.store.matching(guild_id, channel_id))
             for thread_id in thread_ids:
                 try:
-                    async with asyncio.timeout(self.archive_timeout_seconds):
-                        await self.codex.thread_archive(thread_id)
-                except (TransportClosedError, TimeoutError):
-                    self._fatal()
-                    raise BridgeRequestError("unavailable", 503) from None
-                except asyncio.CancelledError:
-                    self._fatal()
-                    raise
+                    await self.codex.thread_archive(thread_id)
                 except Exception:
                     continue
         finally:
             self._archives[scope] -= 1
             if not self._archives[scope]:
                 del self._archives[scope]
-
-    async def close(self) -> None:
-        self._admission.closed = True
-        try:
-            async with asyncio.timeout(SDK_SHUTDOWN_TIMEOUT_SECONDS):
-                await self._admission.cancel(timeout_seconds=SDK_SHUTDOWN_TIMEOUT_SECONDS)
-                await self.codex.close()
-        except (Exception, asyncio.CancelledError):
-            # to_thread cancellation does not stop a blocked synchronous waiter.
-            self._fatal()
-
-
-class _HealthAccessLogger(AccessLogger):
-    def log(self, request, response, elapsed):
-        if request.path == "/healthz" and response.status == 200:
-            return
-        super().log(request, response, elapsed)
 
 
 _TOKEN_KEY = web.AppKey("bridge_token", str)
@@ -514,10 +453,8 @@ def _authorized(request: web.Request) -> bool:
 def create_app(token: str, service: Any) -> web.Application:
     app = web.Application(client_max_size=24 * 1024 * 1024)
     app[_TOKEN_KEY] = token
-    last_ready: bool | None = None
 
     async def health(_request: web.Request) -> web.Response:
-        nonlocal last_ready
         try:
             status = await service.status()
             ready = (
@@ -526,9 +463,6 @@ def create_app(token: str, service: Any) -> web.Application:
             )
         except Exception:
             ready = False
-        if ready != last_ready:
-            logging.info("Codex health status=%s", "ready" if ready else "not_ready")
-            last_ready = ready
         return web.json_response(
             {"status": "ready" if ready else "not_ready"},
             status=200 if ready else 503,
@@ -638,19 +572,14 @@ def _runtime_app() -> web.Application:
 
     async def lifetime(_app: web.Application):
         try:
-            async with asyncio.timeout(SDK_INITIALIZE_TIMEOUT_SECONDS):
-                await codex.__aenter__()
-        except (TransportClosedError, TimeoutError, asyncio.CancelledError):
-            service._fatal()
-        except Exception as exc:
-            service.last_error = service._normalize_error(exc).code
-            logging.error("Codex runtime initialization failed: %s", service.last_error)
-        else:
-            await service.status()
+            await codex.account()
+        except Exception:
+            pass
+        yield
         try:
-            yield
-        finally:
-            await service.close()
+            await codex.close()
+        except Exception:
+            logging.error("Codex runtime shutdown failed.")
 
     app.cleanup_ctx.append(lifetime)
     return app
@@ -692,11 +621,7 @@ def main() -> None:
         level=logging.INFO,
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
     )
-    web.run_app(
-        _runtime_app(), host="0.0.0.0", port=8765,
-        handler_cancellation=True, shutdown_timeout=5,
-        access_log_class=_HealthAccessLogger,
-    )
+    web.run_app(_runtime_app(), host="0.0.0.0", port=8765)
 
 
 if __name__ == "__main__":
