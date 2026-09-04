@@ -107,6 +107,25 @@ class _CodexChannelSelect(discord.ui.ChannelSelect):
         await view.handle_codex_channel_select(interaction, channels)
 
 
+class _CodexRoleSelect(discord.ui.RoleSelect):
+    def __init__(self, *, disabled: bool, role_ids: frozenset[int]) -> None:
+        super().__init__(
+            placeholder="選擇 AI 白名單身分組（可複選）",
+            min_values=1,
+            max_values=MAX_CODEX_ALLOWED_CHANNELS,
+            disabled=disabled,
+            default_values=[
+                discord.SelectDefaultValue.from_role(discord.Object(id=role_id))
+                for role_id in sorted(role_ids)
+            ],
+        )
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        view = self.view
+        if isinstance(view, AdminPanelView):
+            await view.handle_codex_role_select(interaction, tuple(self.values))
+
+
 class _SteamRoleSelect(discord.ui.RoleSelect):
     def __init__(self, *, disabled: bool, configured: bool) -> None:
         super().__init__(
@@ -160,6 +179,7 @@ class AdminPanelView(discord.ui.LayoutView):
         codex_status: CodexRuntimeStatus,
         temp_voice: TempVoiceManager,
         steam_free_games: SteamFreeGamesNotifier,
+        user_role_ids: frozenset[int] = frozenset(),
         temp_voice_enabled: bool = True,
         steam_free_games_enabled: bool = True,
         server_activity: ServerActivityMonitor | None = None,
@@ -172,6 +192,7 @@ class AdminPanelView(discord.ui.LayoutView):
         self.codex_status = codex_status
         self.temp_voice = temp_voice
         self.steam_free_games = steam_free_games
+        self.user_role_ids = user_role_ids
         self.temp_voice_enabled = temp_voice_enabled
         self.steam_free_games_enabled = steam_free_games_enabled
         self.server_activity = server_activity
@@ -190,6 +211,12 @@ class AdminPanelView(discord.ui.LayoutView):
             and interaction.permissions.administrator
         )
         if allowed:
+            self.user_role_ids = frozenset(
+                role_id
+                for role in getattr(interaction.user, "roles", ())
+                if type(role_id := getattr(role, "id", None)) is int
+                and role_id > 0
+            )
             return True
         if not interaction.response.is_done():
             await interaction.response.send_message(
@@ -548,6 +575,23 @@ class AdminPanelView(discord.ui.LayoutView):
             else frozenset()
         )
         channels = " ".join(f"<#{channel_id}>" for channel_id in sorted(channel_ids))
+        role_ids = (
+            self.codex_access.role_ids
+            if self.codex_access.state_available
+            else frozenset()
+        )
+        roles = " ".join(f"<@&{role_id}>" for role_id in sorted(role_ids))
+        current_allowed = self.codex_access.allows(
+            self.guild_id,
+            next(iter(channel_ids), None),
+            self.user_id,
+            self.user_role_ids,
+        )
+        role_detail = (
+            "擁有任一所選身分組即可使用"
+            if role_ids
+            else f"暫用舊使用者白名單（{len(self.codex_access.user_ids)} 人）"
+        )
         if not configured_guild:
             channel_detail = "此伺服器不在 AI 白名單"
         elif not self.codex_access.enabled:
@@ -581,6 +625,20 @@ class AdminPanelView(discord.ui.LayoutView):
                 _CodexChannelSelect(
                     disabled=not self.codex_access.enabled or not configured_guild,
                     channel_ids=channel_ids,
+                )
+            ),
+            self._gap(),
+            discord.ui.TextDisplay(
+                f"## 白名單身分組 {len(role_ids)} 個\n"
+                f"{roles or '尚未設定'}\n"
+                f"-# {role_detail}\n"
+                f"-# 目前操作者：{'已允許' if current_allowed else '未允許'}"
+            ),
+            discord.ui.ActionRow(
+                _CodexRoleSelect(
+                    disabled=not self.codex_access.enabled or not configured_guild
+                    or not self.codex_access.state_available or not channel_ids,
+                    role_ids=role_ids,
                 )
             ),
             self._gap(),
@@ -846,6 +904,70 @@ class AdminPanelView(discord.ui.LayoutView):
                         self.codex_access.resume()
                 else:
                     note = f"已更新 {count} 個白名單頻道。"
+                self._render_ai(note)
+        await interaction.edit_original_response(
+            view=self,
+            allowed_mentions=discord.AllowedMentions.none(),
+        )
+
+    async def handle_codex_role_select(
+        self,
+        interaction: discord.Interaction,
+        roles: tuple[discord.Role, ...],
+    ) -> None:
+        await interaction.response.defer()
+        guild_id = getattr(getattr(interaction, "guild", None), "id", None)
+        self.user_role_ids = frozenset(
+            role_id
+            for role in getattr(interaction.user, "roles", ())
+            if type(role_id := getattr(role, "id", None)) is int and role_id > 0
+        )
+        role_ids = [getattr(role, "id", None) for role in roles]
+        if (
+            not self.codex_access.enabled
+            or guild_id != self.guild_id
+            or guild_id != self.codex_access.guild_id
+            or not self.codex_access.state_available
+            or not self.codex_access.channel_ids
+            or not 1 <= len(roles) <= MAX_CODEX_ALLOWED_CHANNELS
+            or any(
+                getattr(getattr(role, "guild", None), "id", None) != guild_id
+                or role.is_default()
+                or type(role_id) is not int
+                or role_id <= 0
+                for role, role_id in zip(roles, role_ids, strict=True)
+            )
+            or len(role_ids) != len(set(role_ids))
+        ):
+            self._render_ai("只能選擇目前伺服器的一般身分組。")
+        else:
+            selected = frozenset(role_ids)
+            if selected == self.codex_access.role_ids:
+                try:
+                    self.codex_access.set_roles(guild_id, selected)
+                except (OSError, ValueError):
+                    logging.error("管理控制台保存 Codex 白名單身分組失敗。")
+                    self._render_ai("白名單身分組無法保存，設定未變更。")
+                else:
+                    self._render_ai(f"目前已設定 {len(selected)} 個白名單身分組。")
+            else:
+                self.codex_access.suspend()
+                note: str
+                try:
+                    await self.codex_client.archive_scope(guild_id)
+                except Exception:
+                    logging.error("管理控制台切換白名單身分組前封存對話失敗。")
+                    note = "舊對話封存失敗，角色設定未變更。"
+                else:
+                    try:
+                        self.codex_access.set_roles(guild_id, selected)
+                    except (OSError, ValueError):
+                        logging.error("管理控制台保存 Codex 白名單身分組失敗。")
+                        note = "舊對話已封存，但角色設定無法保存。"
+                    else:
+                        note = f"已更新 {len(selected)} 個白名單身分組。"
+                finally:
+                    self.codex_access.resume()
                 self._render_ai(note)
         await interaction.edit_original_response(
             view=self,

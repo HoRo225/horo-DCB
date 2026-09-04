@@ -23,7 +23,7 @@ The following are secrets and must never be committed, logged or pasted into sup
 
 ## Security boundaries
 
-Codex access is permanently restricted by exact Guild, parent Channel and User IDs. DM and non-allowlisted events must not call the bridge. Programmatic execution must not be exposed as a public Bot feature.
+Codex access is permanently restricted by an exact Guild, persisted parent Channels and one or more non-default Role IDs. Legacy exact User IDs may authorize only until the first Role set is persisted; they must never bypass an existing Role allowlist. DM and non-allowlisted events must not call the bridge. Role changes must archive existing Guild conversations before the new access set becomes active. Programmatic execution must not be exposed as a public Bot feature.
 
 The bridge:
 
@@ -42,7 +42,9 @@ Direct mention／reply text and accepted images are sent to OpenAI. Live Web Sea
 
 codex_data contains sensitive OAuth cache and persistent thread mapping. Backup, transport and diagnostic copies require the same protection as credentials. Clearing only the mapping does not guarantee remote deletion; channel／guild cleanup uses best-effort thread archive. Full local removal requires deleting codex_data and then logging in again.
 
-bot_data may contain Calendar, Steam, voice and Server Activity state. Legacy Semantic Memory files can remain during rollback but the current image must not open or modify them.
+bot_data may contain Codex Channel／Role access state plus Calendar, Steam, voice and Server Activity state. Legacy Semantic Memory files can remain during rollback but the current image must not open or modify them.
+
+All members with an allowlisted Role intentionally share the same persistent Codex context inside one Discord Thread. Assigning that Role grants access to that shared AI context; normal Channels remain separated by User ID.
 
 ## Dependency and image updates
 

@@ -15,16 +15,16 @@ codex 的 8765 port 不發布到 host。兩個 container 都以 UID/GID 10001、
 
 1. Discord event 進入 HoroBot。
 2. 只接受直接 mention Bot 或 reply Bot。
-3. DM 直接拒絕；Guild、parent Channel 與 User 必須全部命中 allowlist。
+3. DM 直接拒絕；Guild、parent Channel 與至少一個 Member Role 必須命中 allowlist。
 4. Bot 驗證文字與附件，建立 conversation key。
 5. Bot 透過固定 http://codex:8765 與 Bearer token 呼叫 bridge。
 6. Sidecar 驗證 token、JSON schema、文字與 data URL 上限。
 7. 首次對話建立 Codex thread；後續依 mapping resume。
 8. 回覆經既有 Discord splitting／TextDisplay 輸出。
 
-白名單 Guild 與 User 由環境固定；1–25 個頻道由 `/控制台` 保存於 `bot_data/codex_access.json`。新增頻道保留既有 mapping；移除頻道時暫停新 AI 請求，清除該 Guild 的既有 mapping，再套用新白名單。version 1 單頻道狀態可直接讀取，下次保存寫成 version 2。
+白名單 Guild 由環境固定；1–25 個頻道與角色由 `/控制台` 保存於 `bot_data/codex_access.json`。version 1／2 可直接讀取並暫用 legacy User IDs，第一次保存角色後寫成 version 3 並永久只依角色授權。角色變更先封存 Guild 對話，成功後才套用。
 
-一般 Channel 依 User 分開 thread；Discord Thread 中所有 allowlisted 使用者共用該 Thread 的 Codex thread。旁觀訊息不會同步。
+一般 Channel 依 User 分開 thread；Discord Thread 中所有合資格角色成員共用該 Thread 的 Codex thread。旁觀訊息不會同步。
 
 ## 3. Trust boundaries
 
@@ -34,7 +34,7 @@ Bridge log 不記錄 prompt、圖片、Bearer token、OAuth email 或完整 Code
 
 使用者文字、圖片與 Web Search 結果都視為不可信資料。永久 allowlist 是必要安全邊界，不得改成公開 Bot。
 
-頻道狀態檔採 versioned JSON、mode 0600 與原子替換；讀取失敗時 fail closed，但管理員可從控制台重新選擇以修復。
+頻道／角色狀態檔採 versioned JSON、mode 0600 與原子替換；讀取失敗時 fail closed，但管理員可從控制台重新選擇以修復。
 
 ## 4. Bridge contract
 

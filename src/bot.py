@@ -62,7 +62,8 @@ def codex_conversation_key_for_message(
     guild_id = getattr(getattr(message, "guild", None), "id", None)
     channel = getattr(message, "channel", None)
     channel_id = getattr(channel, "id", None)
-    user_id = getattr(getattr(message, "author", None), "id", None)
+    author = getattr(message, "author", None)
+    user_id = getattr(author, "id", None)
     if not all(type(value) is int and value > 0 for value in (
         guild_id,
         channel_id,
@@ -74,10 +75,16 @@ def codex_conversation_key_for_message(
     allowed_channel_id = (
         getattr(channel, "parent_id", None) if is_thread else channel_id
     )
+    role_ids = frozenset(
+        role_id
+        for role in getattr(author, "roles", ())
+        if type(role_id := getattr(role, "id", None)) is int and role_id > 0
+    )
     if type(allowed_channel_id) is not int or not access.allows(
         guild_id,
         allowed_channel_id,
         user_id,
+        role_ids,
     ):
         return None
     return conversation_key(
@@ -220,6 +227,12 @@ class HoroBot(discord.Client):
                     user_id=interaction.user.id,
                     guild_id=interaction.guild.id,
                     codex_client=self.codex,
+                    user_role_ids=frozenset(
+                        role_id
+                        for role in getattr(interaction.user, "roles", ())
+                        if type(role_id := getattr(role, "id", None)) is int
+                        and role_id > 0
+                    ),
                     codex_access=self.codex_access,
                     codex_status=codex_status,
                     temp_voice=self.temp_voice,
@@ -475,7 +488,7 @@ class HoroBot(discord.Client):
         key = codex_conversation_key_for_message(message, self.codex_access)
         if key is None:
             await message.reply(
-                "Codex 目前未對此帳號或頻道開放。",
+                "Codex 目前未對此身分組或頻道開放。",
                 mention_author=False,
                 allowed_mentions=discord.AllowedMentions.none(),
             )

@@ -64,7 +64,10 @@ class AdminCommandTest(unittest.IsolatedAsyncioTestCase):
         interaction = SimpleNamespace(
             guild=SimpleNamespace(id=10),
             permissions=SimpleNamespace(administrator=True),
-            user=SimpleNamespace(id=1),
+            user=SimpleNamespace(
+                id=1,
+                roles=[SimpleNamespace(id=70), SimpleNamespace(id=80)],
+            ),
             response=SimpleNamespace(send_message=AsyncMock()),
         )
 
@@ -77,6 +80,7 @@ class AdminCommandTest(unittest.IsolatedAsyncioTestCase):
         self.assertIsInstance(kwargs["view"], AdminPanelView)
         self.assertIs(kwargs["view"].server_activity, server_activity)
         self.assertIs(kwargs["view"].codex_access, access)
+        self.assertEqual(kwargs["view"].user_role_ids, frozenset({70, 80}))
         self.assertTrue(kwargs["view"].has_components_v2())
         self.assertFalse(kwargs["allowed_mentions"].everyone)
         self.assertFalse(kwargs["allowed_mentions"].users)

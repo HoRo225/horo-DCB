@@ -30,6 +30,7 @@ class PreflightTest(unittest.TestCase):
                 True, 10, None, frozenset({30, 40}), state_path=state_path
             )
             access.set_channels(10, frozenset({20, 21}))
+            access.set_roles(10, frozenset({70, 80}))
             output = io.StringIO()
 
             with (
@@ -46,7 +47,9 @@ class PreflightTest(unittest.TestCase):
         self.assertNotIn("a" * 64, output.getvalue())
         self.assertTrue(payload["codex_enabled"])
         self.assertTrue(payload["codex_allowlist_configured"])
-        self.assertEqual(payload["codex_allowed_user_count"], 2)
+        self.assertEqual(payload["codex_access_mode"], "roles")
+        self.assertEqual(payload["codex_allowed_role_count"], 2)
+        self.assertEqual(payload["codex_legacy_user_count"], 2)
         self.assertFalse(payload["temp_voice_enabled"])
         self.assertFalse(payload["steam_free_games_enabled"])
         self.assertTrue(payload["ai_text_display_enabled"])

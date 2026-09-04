@@ -92,7 +92,6 @@ class AppConfig:
         if codex_enabled:
             for name, value in (
                 ("CODEX_ALLOWED_GUILD_ID", guild_id),
-                ("CODEX_ALLOWED_USER_IDS", user_ids),
                 ("CODEX_BRIDGE_TOKEN", bridge_token),
             ):
                 if not value:

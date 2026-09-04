@@ -40,7 +40,7 @@ jobs:
           sed -i 's/DISCORD_TOKEN=\[REDACTED_SECRET\]/DISCORD_TOKEN=configured-for-ci/' .env
           sh scripts/check-env.sh
 
-          sed -i             -e 's/^CODEX_ENABLED=.*/CODEX_ENABLED=1/'             -e 's/^CODEX_ALLOWED_GUILD_ID=.*/CODEX_ALLOWED_GUILD_ID=1/'             -e 's/^CODEX_ALLOWED_CHANNEL_ID=.*/CODEX_ALLOWED_CHANNEL_ID=/'             -e 's/^CODEX_ALLOWED_USER_IDS=.*/CODEX_ALLOWED_USER_IDS=3,4/'             .env
+          sed -i             -e 's/^CODEX_ENABLED=.*/CODEX_ENABLED=1/'             -e 's/^CODEX_ALLOWED_GUILD_ID=.*/CODEX_ALLOWED_GUILD_ID=1/'             -e 's/^CODEX_ALLOWED_CHANNEL_ID=.*/CODEX_ALLOWED_CHANNEL_ID=/'             -e 's/^CODEX_ALLOWED_USER_IDS=.*/CODEX_ALLOWED_USER_IDS=/'             .env
           sh scripts/check-env.sh
           sed -i 's/^CODEX_ALLOWED_CHANNEL_ID=.*/CODEX_ALLOWED_CHANNEL_ID=0/' .env
           if sh scripts/check-env.sh; then
@@ -53,7 +53,7 @@ jobs:
             echo "check-env unexpectedly accepted duplicate allowlist users" >&2
             exit 1
           fi
-          sed -i 's/^CODEX_ALLOWED_USER_IDS=.*/CODEX_ALLOWED_USER_IDS=3,4/' .env
+          sed -i 's/^CODEX_ALLOWED_USER_IDS=.*/CODEX_ALLOWED_USER_IDS=/' .env
 
       - name: Validate Compose isolation
         run: |

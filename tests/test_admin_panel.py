@@ -44,8 +44,14 @@ class FakeResponse:
 
 
 class FakeInteraction:
-    def __init__(self, *, user_id=1, guild_id=10, administrator=True, response_done=False):
-        self.user = SimpleNamespace(id=user_id)
+    def __init__(
+        self, *, user_id=1, role_ids=(), guild_id=10,
+        administrator=True, response_done=False,
+    ):
+        self.user = SimpleNamespace(
+            id=user_id,
+            roles=[SimpleNamespace(id=role_id) for role_id in role_ids],
+        )
         self.guild_id = guild_id
         self.guild = SimpleNamespace(id=guild_id) if guild_id is not None else None
         self.permissions = SimpleNamespace(administrator=administrator)
@@ -54,6 +60,14 @@ class FakeInteraction:
 
     async def edit_original_response(self, **kwargs):
         self.original_edits.append(kwargs)
+
+
+def make_role(role_id, *, guild_id=10, default=False):
+    return SimpleNamespace(
+        id=role_id,
+        guild=SimpleNamespace(id=guild_id),
+        is_default=lambda: default,
+    )
 
 
 class FakeTempVoice:
@@ -184,6 +198,14 @@ class AdminPanelViewTest(unittest.IsolatedAsyncioTestCase):
             component
             for component in cls.all_components(view)
             if component.get("type") == discord.ComponentType.channel_select.value
+        ]
+
+    @classmethod
+    def role_selects(cls, view):
+        return [
+            component
+            for component in cls.all_components(view)
+            if component.get("type") == discord.ComponentType.role_select.value
         ]
 
     @staticmethod
@@ -500,6 +522,91 @@ class AdminPanelViewTest(unittest.IsolatedAsyncioTestCase):
         )
         self.assertIn("白名單頻道 2 個", self.text(self.view))
         self.assertIn("<#20> <#21>", self.text(self.view))
+
+    def test_ai_page_shows_legacy_user_mode_and_current_operator_status(self):
+        self.view._render_ai()
+
+        role_select = self.role_selects(self.view)[0]
+        self.assertEqual(role_select["min_values"], 1)
+        self.assertEqual(role_select["max_values"], 25)
+        self.assertEqual(role_select.get("default_values", []), [])
+        text = self.text(self.view)
+        self.assertIn("暫用舊使用者白名單（1 人）", text)
+        self.assertIn("目前操作者：已允許", text)
+
+    def test_ai_page_preselects_roles_and_reports_operator_access(self):
+        self.codex_access.set_roles(10, frozenset({70, 80}))
+        self.view.user_role_ids = frozenset({60, 80})
+
+        self.view._render_ai()
+
+        role_select = self.role_selects(self.view)[0]
+        self.assertEqual(
+            role_select["default_values"],
+            [
+                {"id": 70, "type": "role"},
+                {"id": 80, "type": "role"},
+            ],
+        )
+        text = self.text(self.view)
+        self.assertIn("白名單身分組 2 個", text)
+        self.assertIn("<@&70> <@&80>", text)
+        self.assertIn("目前操作者：已允許", text)
+
+        self.view.user_role_ids = frozenset({60})
+        self.view._render_ai()
+        self.assertIn("目前操作者：未允許", self.text(self.view))
+
+    async def test_role_change_archives_before_applying_new_roles(self):
+        self.codex_access.set_roles(10, frozenset({70}))
+        interaction = FakeInteraction(role_ids=(80,))
+        roles = (make_role(80),)
+
+        async def archive(guild_id):
+            self.assertEqual(guild_id, 10)
+            self.assertEqual(self.codex_access.role_ids, frozenset({70}))
+            self.assertFalse(
+                self.codex_access.allows(10, 20, 1, frozenset({70}))
+            )
+
+        self.codex_client.archive_scope.side_effect = archive
+
+        await self.view.handle_codex_role_select(interaction, roles)
+
+        self.assertEqual(self.codex_access.role_ids, frozenset({80}))
+        self.codex_client.archive_scope.assert_awaited_once_with(10)
+        self.assertIn("已更新 1 個白名單身分組", self.text(self.view))
+        self.assertIn("目前操作者：已允許", self.text(self.view))
+
+    async def test_role_archive_failure_keeps_old_roles(self):
+        self.codex_access.set_roles(10, frozenset({70}))
+        interaction = FakeInteraction(role_ids=(80,))
+        self.codex_client.archive_scope.side_effect = RuntimeError("SENSITIVE_DETAIL")
+
+        with self.assertLogs(level="ERROR"):
+            await self.view.handle_codex_role_select(
+                interaction,
+                (make_role(80),),
+            )
+
+        self.assertEqual(self.codex_access.role_ids, frozenset({70}))
+        text = self.text(self.view)
+        self.assertIn("角色設定未變更", text)
+        self.assertNotIn("SENSITIVE_DETAIL", text)
+
+    async def test_role_select_rejects_default_or_other_guild_role(self):
+        for role in (
+            make_role(10, default=True),
+            make_role(80, guild_id=11),
+        ):
+            with self.subTest(role_id=role.id):
+                interaction = FakeInteraction(role_ids=(role.id,))
+
+                await self.view.handle_codex_role_select(interaction, (role,))
+
+                self.assertEqual(self.codex_access.role_ids, frozenset())
+                self.codex_client.archive_scope.assert_not_awaited()
+                self.assertIn("只能選擇目前伺服器的一般身分組", self.text(self.view))
 
     async def test_adding_channel_does_not_archive_existing_conversations(self):
         interaction = FakeInteraction()

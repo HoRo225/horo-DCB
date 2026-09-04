@@ -41,6 +41,7 @@ class CodexAccess:
             frozenset({channel_id}) if channel_id is not None else frozenset()
         )
         self.user_ids = user_ids
+        self.role_ids: frozenset[int] = frozenset()
         self.state_available = True
         self._suspended = False
         self._state_path = Path(state_path) if state_path is not None else None
@@ -72,18 +73,42 @@ class CodexAccess:
                 ):
                     raise ValueError("invalid Codex access state")
                 self.channel_ids = frozenset(channel_ids)
+            elif version == 3 and set(payload) == {
+                "version", "guild_id", "channel_ids", "role_ids"
+            }:
+                channel_ids = payload.get("channel_ids")
+                role_ids = payload.get("role_ids")
+                if (
+                    not self._valid_ids(channel_ids, minimum=1)
+                    or not self._valid_ids(role_ids, minimum=0)
+                    or guild_id in role_ids
+                ):
+                    raise ValueError("invalid Codex access state")
+                self.channel_ids = frozenset(channel_ids)
+                self.role_ids = frozenset(role_ids)
             else:
                 raise ValueError("invalid Codex access state")
         except (OSError, ValueError, TypeError, json.JSONDecodeError):
             self.channel_ids = frozenset()
+            self.role_ids = frozenset()
             self.state_available = False
             logging.error("Codex 白名單狀態檔無法讀取；AI 對話已停用。")
+
+    @staticmethod
+    def _valid_ids(values: object, *, minimum: int) -> bool:
+        return (
+            isinstance(values, list)
+            and minimum <= len(values) <= MAX_CODEX_ALLOWED_CHANNELS
+            and all(type(value) is int and value > 0 for value in values)
+            and len(values) == len(set(values))
+        )
 
     def allows(
         self,
         guild_id: int | None,
         channel_id: int | None,
         user_id: int,
+        role_ids: frozenset[int] = frozenset(),
     ) -> bool:
         return (
             self.enabled
@@ -91,8 +116,35 @@ class CodexAccess:
             and not self._suspended
             and guild_id == self.guild_id
             and channel_id in self.channel_ids
-            and user_id in self.user_ids
+            and (
+                bool(self.role_ids & role_ids)
+                if self.role_ids
+                else user_id in self.user_ids
+            )
         )
+
+    def _persist(
+        self,
+        guild_id: int,
+        channel_ids: frozenset[int],
+        role_ids: frozenset[int],
+    ) -> None:
+        if self._state_path is None:
+            return
+        payload = {
+            "version": 3,
+            "guild_id": guild_id,
+            "channel_ids": sorted(channel_ids),
+            "role_ids": sorted(role_ids),
+        }
+        self._state_path.parent.mkdir(parents=True, exist_ok=True)
+        temporary = self._state_path.with_name(f"{self._state_path.name}.tmp")
+        temporary.write_text(
+            json.dumps(payload, ensure_ascii=False, indent=2) + "\n",
+            encoding="utf-8",
+        )
+        os.chmod(temporary, 0o600)
+        os.replace(temporary, self._state_path)
 
     def set_channels(
         self,
@@ -106,22 +158,25 @@ class CodexAccess:
             or any(type(value) is not int or value <= 0 for value in channel_ids)
         ):
             raise ValueError("invalid Codex allowlist channels")
-        if self._state_path is not None:
-            payload = {
-                "version": 2,
-                "guild_id": guild_id,
-                "channel_ids": sorted(channel_ids),
-            }
-            self._state_path.parent.mkdir(parents=True, exist_ok=True)
-            temporary = self._state_path.with_name(f"{self._state_path.name}.tmp")
-            temporary.write_text(
-                json.dumps(payload, ensure_ascii=False, indent=2) + "\n",
-                encoding="utf-8",
-            )
-            os.chmod(temporary, 0o600)
-            os.replace(temporary, self._state_path)
+        self._persist(guild_id, channel_ids, self.role_ids)
         previous = self.channel_ids
         self.channel_ids = channel_ids
+        self.state_available = True
+        return previous
+
+    def set_roles(self, guild_id: int, role_ids: frozenset[int]) -> frozenset[int]:
+        if (
+            type(guild_id) is not int
+            or guild_id != self.guild_id
+            or not self.channel_ids
+            or not 1 <= len(role_ids) <= MAX_CODEX_ALLOWED_CHANNELS
+            or guild_id in role_ids
+            or any(type(value) is not int or value <= 0 for value in role_ids)
+        ):
+            raise ValueError("invalid Codex allowlist roles")
+        self._persist(guild_id, self.channel_ids, role_ids)
+        previous = self.role_ids
+        self.role_ids = role_ids
         self.state_available = True
         return previous
 

@@ -59,7 +59,7 @@ class CodexAccessTest(unittest.TestCase):
             self.assertTrue(access.allows(10, 22, 30))
             self.assertEqual(
                 json.loads(path.read_text(encoding="utf-8")),
-                {"version": 2, "guild_id": 10, "channel_ids": [21, 22]},
+                {"version": 3, "guild_id": 10, "channel_ids": [21, 22], "role_ids": []},
             )
             self.assertEqual(os.stat(path).st_mode & 0o777, 0o600)
 
@@ -92,8 +92,30 @@ class CodexAccessTest(unittest.TestCase):
             )
 
         self.assertEqual(access.channel_ids, frozenset({20}))
+        self.assertEqual(access.role_ids, frozenset())
         self.assertTrue(access.allows(10, 20, 30))
         self.assertFalse(access.allows(10, 99, 30))
+
+    def test_version_two_state_loads_channels_with_legacy_user_fallback(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "codex_access.json"
+            path.write_text(
+                json.dumps({"version": 2, "guild_id": 10, "channel_ids": [20, 21]}),
+                encoding="utf-8",
+            )
+
+            access = CodexAccess(
+                True,
+                10,
+                99,
+                frozenset({30}),
+                state_path=path,
+            )
+
+        self.assertEqual(access.channel_ids, frozenset({20, 21}))
+        self.assertEqual(access.role_ids, frozenset())
+        self.assertTrue(access.allows(10, 20, 30, frozenset()))
+        self.assertFalse(access.allows(10, 20, 31, frozenset({70})))
 
     def test_corrupt_channel_state_fails_closed_and_selection_repairs_it(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -109,6 +131,7 @@ class CodexAccessTest(unittest.TestCase):
 
             self.assertFalse(access.state_available)
             self.assertEqual(access.channel_ids, frozenset())
+            self.assertEqual(access.role_ids, frozenset())
             self.assertFalse(access.allows(10, 20, 30))
 
             access.set_channels(10, frozenset({22, 23}))
@@ -154,6 +177,64 @@ class CodexAccessTest(unittest.TestCase):
 
         self.assertFalse(access.state_available)
         self.assertFalse(access.allows(10, 20, 30))
+
+    def test_roles_replace_legacy_users_and_persist_version_three(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "codex_access.json"
+            access = CodexAccess(
+                True,
+                10,
+                20,
+                frozenset({30}),
+                state_path=path,
+            )
+
+            previous = access.set_roles(10, frozenset({70, 80}))
+
+            self.assertEqual(previous, frozenset())
+            self.assertFalse(access.allows(10, 20, 30, frozenset()))
+            self.assertTrue(access.allows(10, 20, 31, frozenset({60, 80})))
+            self.assertFalse(access.allows(10, 20, 31, frozenset({60})))
+            self.assertEqual(
+                json.loads(path.read_text(encoding="utf-8")),
+                {
+                    "version": 3,
+                    "guild_id": 10,
+                    "channel_ids": [20],
+                    "role_ids": [70, 80],
+                },
+            )
+
+            restarted = CodexAccess(
+                True,
+                10,
+                99,
+                frozenset({30}),
+                state_path=path,
+            )
+
+        self.assertEqual(restarted.role_ids, frozenset({70, 80}))
+        self.assertFalse(restarted.allows(10, 20, 30, frozenset()))
+        self.assertTrue(restarted.allows(10, 20, 31, frozenset({70})))
+
+    def test_role_set_rejects_empty_default_boolean_and_over_limit(self):
+        access = CodexAccess(True, 10, 20, frozenset({30}))
+
+        for role_ids in (
+            frozenset(),
+            frozenset({10}),
+            frozenset({True}),
+            frozenset(range(20, 46)),
+        ):
+            with self.subTest(role_ids=role_ids):
+                with self.assertRaises(ValueError):
+                    access.set_roles(10, role_ids)
+
+    def test_roles_cannot_be_saved_before_channels_are_configured(self):
+        access = CodexAccess(True, 10, None, frozenset({30}))
+
+        with self.assertRaises(ValueError):
+            access.set_roles(10, frozenset({70}))
 
     def test_channel_set_must_contain_one_to_twenty_five_positive_ids(self):
         access = CodexAccess(True, 10, 20, frozenset({30}))

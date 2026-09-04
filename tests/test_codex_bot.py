@@ -41,7 +41,14 @@ class FakeCodex:
         return self.reply
 
 
-def make_message(*, user_id=30, channel_type=discord.ChannelType.text, parent_id=None):
+def make_message(
+    *,
+    user_id=30,
+    role_ids=(),
+    administrator=False,
+    channel_type=discord.ChannelType.text,
+    parent_id=None,
+):
     channel = SimpleNamespace(
         id=20,
         parent_id=parent_id,
@@ -49,7 +56,13 @@ def make_message(*, user_id=30, channel_type=discord.ChannelType.text, parent_id
         typing=lambda: Typing(),
     )
     message = SimpleNamespace(
-        author=SimpleNamespace(id=user_id, bot=False, display_name="Steven"),
+        author=SimpleNamespace(
+            id=user_id,
+            bot=False,
+            display_name="Steven",
+            roles=[SimpleNamespace(id=role_id) for role_id in role_ids],
+            guild_permissions=SimpleNamespace(administrator=administrator),
+        ),
         webhook_id=None,
         guild=SimpleNamespace(id=10),
         channel=channel,
@@ -92,6 +105,28 @@ class CodexBotHelpersTest(unittest.TestCase):
         self.assertIsNone(codex_conversation_key_for_message(wrong_channel, access))
         self.assertIsNone(codex_conversation_key_for_message(wrong_user, access))
         self.assertIsNone(codex_conversation_key_for_message(direct_message, access))
+
+    def test_roles_replace_legacy_user_without_admin_bypass(self):
+        access = CodexAccess(True, 10, 20, frozenset({30}))
+        access.set_roles(10, frozenset({70, 80}))
+        allowed = make_message(user_id=31, role_ids=(60, 80))
+        legacy_only = make_message(user_id=30)
+        administrator = make_message(user_id=32, administrator=True)
+
+        self.assertEqual(
+            codex_conversation_key_for_message(allowed, access),
+            "guild:10:channel:20:user:31",
+        )
+        self.assertIsNone(codex_conversation_key_for_message(legacy_only, access))
+        self.assertIsNone(codex_conversation_key_for_message(administrator, access))
+
+    def test_role_mode_fails_closed_when_member_roles_are_missing(self):
+        access = CodexAccess(True, 10, 20, frozenset({30}))
+        access.set_roles(10, frozenset({70}))
+        message = make_message(user_id=31, role_ids=(70,))
+        del message.author.roles
+
+        self.assertIsNone(codex_conversation_key_for_message(message, access))
 
     def test_errors_map_to_fixed_user_safe_text(self):
         self.assertIn("登入", codex_error_text("auth_required"))
@@ -223,7 +258,7 @@ class CodexBotRoutingTest(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(codex.calls, [])
         message.reply.assert_awaited_once()
-        self.assertIn("未對此帳號或頻道開放", message.reply.await_args.args[0])
+        self.assertIn("未對此身分組或頻道開放", message.reply.await_args.args[0])
 
 
 class CodexArchiveRoutingTest(unittest.IsolatedAsyncioTestCase):

@@ -95,6 +95,23 @@ class CodexConfigTest(unittest.TestCase):
         self.assertIsNone(config.codex_allowed_channel_id)
         self.assertEqual(config.codex_allowed_user_ids, frozenset({303}))
 
+    def test_enabled_codex_allows_empty_legacy_user_list(self):
+        with patch.dict(
+            "src.config.os.environ",
+            {
+                "DISCORD_TOKEN": "configured",
+                "CODEX_ENABLED": "1",
+                "CODEX_ALLOWED_GUILD_ID": "101",
+                "CODEX_BRIDGE_TOKEN": "b" * 64,
+            },
+            clear=True,
+        ):
+            config = AppConfig.from_env()
+
+        self.assertTrue(config.codex_enabled)
+        self.assertEqual(config.codex_allowed_guild_id, 101)
+        self.assertEqual(config.codex_allowed_user_ids, frozenset())
+
     def test_enabled_codex_rejects_missing_or_invalid_scope(self):
         base = {
             "DISCORD_TOKEN": "configured",

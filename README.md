@@ -5,7 +5,7 @@ horo-DCB 是 Discord Bot。AI 對話由獨立 Codex sidecar 經官方 openai-cod
 ## 架構
 
 ~~~
-Allowlisted Discord user
+Discord member with allowlisted role
         |
         v
 Bot container -- authenticated private HTTP --> Codex sidecar
@@ -74,24 +74,23 @@ docker compose build bot
 docker compose run --rm --no-deps codex python -m src.codex_bridge login
 ~~~
 
-4. 在 Discord 開發者模式複製允許的 Guild 與 User ID，填入：
+4. 在 Discord 開發者模式複製允許的 Guild ID，填入：
 
 ~~~dotenv
 CODEX_ENABLED=1
 CODEX_ALLOWED_GUILD_ID=123
-CODEX_ALLOWED_USER_IDS=789,101112
 ~~~
 
-5. 驗證、啟動，再由伺服器管理員輸入 `/控制台`，到「AI 助手」選擇 1–25 個一般文字頻道：
+5. 驗證、啟動，再由伺服器管理員輸入 `/控制台`，到「AI 助手」選擇 1–25 個一般文字頻道與身分組：
 
 ~~~sh
 sh scripts/check-env.sh
 docker compose up -d
 ~~~
 
-`CODEX_ALLOWED_CHANNEL_ID` 可保留作第一個頻道的升級預設值；控制台選擇後會以 mode 0600 原子保存至 `bot_data`，並優先於環境變數。新增頻道不影響既有對話；移除任何頻道時會封存該 Guild 的既有 Codex 對話，封存失敗也不會回退新白名單。
+`CODEX_ALLOWED_CHANNEL_ID` 與 `CODEX_ALLOWED_USER_IDS` 可保留作升級／回滾資料。尚未第一次保存角色時，舊 User ID 暫時有效；角色保存後永久只依角色授權。角色清單有變時會先封存該 Guild 的既有 Codex 對話，封存失敗則保留舊角色。
 
-一般頻道必須同時符合 Guild、Channel 與 User allowlist。Discord Thread 使用 parent channel 驗證；DM、其他 Guild／Channel／User 都不呼叫 Codex。
+一般頻道必須同時符合 Guild、Channel 與任一 Role allowlist。Discord Thread 使用 parent channel 驗證並由合資格成員共用 Codex 對話；DM 與其他 Guild／Channel／Role 都不呼叫 Codex。
 
 ## 設定
 
@@ -101,14 +100,14 @@ docker compose up -d
 | CODEX_ENABLED | 0 | 是否開放 Codex 對話。 |
 | CODEX_ALLOWED_GUILD_ID | 空 | 唯一允許的 Guild snowflake。 |
 | CODEX_ALLOWED_CHANNEL_ID | 空 | 可選的第一個頻道預設；之後由 `/控制台` 管理 1–25 個頻道。 |
-| CODEX_ALLOWED_USER_IDS | 空 | 逗號分隔、不得重複的正整數 snowflake。 |
+| CODEX_ALLOWED_USER_IDS | 空 | 可選的 legacy 使用者白名單；第一次保存角色後不再授權。 |
 | CODEX_BRIDGE_TOKEN | setup 產生 | 64 字元小寫十六進位 bridge secret。 |
 | AI_TEXT_DISPLAY_ENABLED | 1 | Discord Components V2 文字輸出。 |
 | TEMP_VOICE_ENABLED | 0 | 臨時語音。 |
 | STEAM_FREE_GAMES_ENABLED | 0 | Steam 限免通知。 |
 | SERVER_ACTIVITY_ENABLED | 0 | Server Activity 持久記錄。 |
 
-CODEX_ENABLED=0 時 allowlist 可留空，但 Codex sidecar 固定存在，因此 CODEX_BRIDGE_TOKEN 必須始終有效；設為 1 時 Guild 與 User allowlist 必須有效，頻道可在啟動後由控制台設定。尚未選擇任何頻道時 AI 一律拒絕請求。Bridge URL 固定為 http://codex:8765，不是部署選項。
+CODEX_ENABLED=0 時 allowlist 可留空，但 Codex sidecar 固定存在，因此 CODEX_BRIDGE_TOKEN 必須始終有效；設為 1 時 Guild 必須有效，頻道與角色可在啟動後由控制台設定。尚未完成任何有效授權組合時 AI 一律拒絕請求。Bridge URL 固定為 http://codex:8765，不是部署選項。
 
 ## 對話與圖片
 
