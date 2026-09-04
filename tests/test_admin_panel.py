@@ -479,25 +479,47 @@ class AdminPanelViewTest(unittest.IsolatedAsyncioTestCase):
         self.assertIn("**Unknown · 未登入**", text)
         self.assertNotIn("9Router", text)
 
-    def test_ai_page_has_single_text_channel_allowlist_selector(self):
+    def test_ai_page_has_multi_text_channel_selector_with_current_defaults(self):
+        self.codex_access.set_channels(10, frozenset({20, 21}))
         self.view._render_ai()
 
         channel_selects = self.channel_selects(self.view)
         self.assertEqual(len(channel_selects), 1)
         self.assertEqual(channel_selects[0]["min_values"], 1)
-        self.assertEqual(channel_selects[0]["max_values"], 1)
+        self.assertEqual(channel_selects[0]["max_values"], 25)
         self.assertEqual(
             channel_selects[0]["channel_types"],
             [discord.ChannelType.text.value],
         )
-        self.assertIn("白名單頻道 <#20>", self.text(self.view))
+        self.assertEqual(
+            channel_selects[0]["default_values"],
+            [
+                {"id": 20, "type": "channel"},
+                {"id": 21, "type": "channel"},
+            ],
+        )
+        self.assertIn("白名單頻道 2 個", self.text(self.view))
+        self.assertIn("<#20> <#21>", self.text(self.view))
 
-    async def test_channel_switch_archives_guild_while_access_is_suspended(self):
+    async def test_adding_channel_does_not_archive_existing_conversations(self):
         interaction = FakeInteraction()
-        channel = SimpleNamespace(
-            id=21,
-            type=discord.ChannelType.text,
-            guild=interaction.guild,
+        channels = (
+            SimpleNamespace(id=20, type=discord.ChannelType.text, guild=interaction.guild),
+            SimpleNamespace(id=21, type=discord.ChannelType.text, guild=interaction.guild),
+        )
+
+        await self.view.handle_codex_channel_select(interaction, channels)
+
+        self.assertTrue(self.codex_access.allows(10, 20, 1))
+        self.assertTrue(self.codex_access.allows(10, 21, 1))
+        self.codex_client.archive_scope.assert_not_awaited()
+        self.assertIn("已更新 2 個白名單頻道", self.text(self.view))
+
+    async def test_removing_channel_archives_guild_while_access_is_suspended(self):
+        self.codex_access.set_channels(10, frozenset({20, 21}))
+        interaction = FakeInteraction()
+        channels = (
+            SimpleNamespace(id=21, type=discord.ChannelType.text, guild=interaction.guild),
         )
 
         async def archive(guild_id):
@@ -506,40 +528,37 @@ class AdminPanelViewTest(unittest.IsolatedAsyncioTestCase):
 
         self.codex_client.archive_scope.side_effect = archive
 
-        await self.view.handle_codex_channel_select(interaction, channel)
+        await self.view.handle_codex_channel_select(interaction, channels)
 
         self.assertTrue(self.codex_access.allows(10, 21, 1))
         self.assertFalse(self.codex_access.allows(10, 20, 1))
         self.codex_client.archive_scope.assert_awaited_once_with(10)
         self.assertEqual(interaction.response.defer_count, 1)
         self.assertEqual(len(interaction.original_edits), 1)
-        self.assertIn("已切換至 <#21> 並封存舊對話", self.text(self.view))
+        self.assertIn("已更新 1 個白名單頻道並封存舊對話", self.text(self.view))
 
-    async def test_same_channel_is_saved_without_archiving(self):
+    async def test_same_channels_are_saved_without_archiving(self):
         interaction = FakeInteraction()
-        channel = SimpleNamespace(
-            id=20,
-            type=discord.ChannelType.text,
-            guild=interaction.guild,
+        channels = (
+            SimpleNamespace(id=20, type=discord.ChannelType.text, guild=interaction.guild),
         )
 
-        await self.view.handle_codex_channel_select(interaction, channel)
+        await self.view.handle_codex_channel_select(interaction, channels)
 
         self.codex_client.archive_scope.assert_not_awaited()
         self.assertTrue(self.codex_access.allows(10, 20, 1))
-        self.assertIn("目前已設定為 <#20>", self.text(self.view))
+        self.assertIn("目前已設定 1 個白名單頻道", self.text(self.view))
 
     async def test_archive_failure_keeps_new_channel_and_reports_safe_warning(self):
+        self.codex_access.set_channels(10, frozenset({20, 21}))
         interaction = FakeInteraction()
-        channel = SimpleNamespace(
-            id=21,
-            type=discord.ChannelType.text,
-            guild=interaction.guild,
+        channels = (
+            SimpleNamespace(id=21, type=discord.ChannelType.text, guild=interaction.guild),
         )
         self.codex_client.archive_scope.side_effect = RuntimeError("SENSITIVE_DETAIL")
 
         with self.assertLogs(level="ERROR"):
-            await self.view.handle_codex_channel_select(interaction, channel)
+            await self.view.handle_codex_channel_select(interaction, channels)
 
         self.assertTrue(self.codex_access.allows(10, 21, 1))
         text = self.text(self.view)
@@ -547,22 +566,26 @@ class AdminPanelViewTest(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("SENSITIVE_DETAIL", text)
 
     async def test_channel_select_rejects_voice_or_other_guild(self):
-        for channel in (
-            SimpleNamespace(
-                id=21,
-                type=discord.ChannelType.voice,
-                guild=SimpleNamespace(id=10),
+        for channels in (
+            (
+                SimpleNamespace(
+                    id=21,
+                    type=discord.ChannelType.voice,
+                    guild=SimpleNamespace(id=10),
+                ),
             ),
-            SimpleNamespace(
-                id=22,
-                type=discord.ChannelType.text,
-                guild=SimpleNamespace(id=11),
+            (
+                SimpleNamespace(
+                    id=22,
+                    type=discord.ChannelType.text,
+                    guild=SimpleNamespace(id=11),
+                ),
             ),
         ):
-            with self.subTest(channel_id=channel.id):
+            with self.subTest(channel_id=channels[0].id):
                 interaction = FakeInteraction()
 
-                await self.view.handle_codex_channel_select(interaction, channel)
+                await self.view.handle_codex_channel_select(interaction, channels)
 
                 self.assertTrue(self.codex_access.allows(10, 20, 1))
                 self.codex_client.archive_scope.assert_not_awaited()

@@ -22,7 +22,7 @@ codex 的 8765 port 不發布到 host。兩個 container 都以 UID/GID 10001、
 7. 首次對話建立 Codex thread；後續依 mapping resume。
 8. 回覆經既有 Discord splitting／TextDisplay 輸出。
 
-白名單 Guild 與 User 由環境固定；頻道由 `/控制台` 保存於 `bot_data/codex_access.json`。切換頻道時暫停新 AI 請求，清除該 Guild 的既有 mapping，再開放新頻道。
+白名單 Guild 與 User 由環境固定；1–25 個頻道由 `/控制台` 保存於 `bot_data/codex_access.json`。新增頻道保留既有 mapping；移除頻道時暫停新 AI 請求，清除該 Guild 的既有 mapping，再套用新白名單。version 1 單頻道狀態可直接讀取，下次保存寫成 version 2。
 
 一般 Channel 依 User 分開 thread；Discord Thread 中所有 allowlisted 使用者共用該 Thread 的 Codex thread。旁觀訊息不會同步。
 

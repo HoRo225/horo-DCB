@@ -29,7 +29,7 @@ class PreflightTest(unittest.TestCase):
             access = CodexAccess(
                 True, 10, None, frozenset({30, 40}), state_path=state_path
             )
-            access.set_channel(10, 20)
+            access.set_channels(10, frozenset({20, 21}))
             output = io.StringIO()
 
             with (

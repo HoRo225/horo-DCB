@@ -37,10 +37,10 @@ Setup files are ready.
    CODEX_ENABLED=1.
 5. Validate: sh scripts/check-env.sh
 6. Start: docker compose up -d
-7. In Discord, use /控制台 → AI 助手 to select the allowlisted text channel.
+7. In Discord, use /控制台 → AI 助手 to select 1-25 allowlisted text channels.
 
 Codex stores OAuth and persistent thread state only in codex_data. The Bot does
-not mount that volume. The selected AI channel is stored in bot_data. Fresh
+not mount that volume. The selected AI channels are stored in bot_data. Fresh
 installs keep voice, Steam automation, and Server Activity disabled until their
 documented switches are enabled.
 EOF

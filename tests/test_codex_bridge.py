@@ -29,16 +29,18 @@ from src.codex_bridge_client import (
 
 
 class CodexAccessTest(unittest.TestCase):
-    def test_allowlist_requires_exact_guild_channel_and_user(self):
+    def test_allowlist_accepts_multiple_channels_with_exact_guild_and_user(self):
         access = CodexAccess(True, 10, 20, frozenset({30, 40}))
+        access.set_channels(10, frozenset({20, 21}))
 
         self.assertTrue(access.allows(10, 20, 30))
+        self.assertTrue(access.allows(10, 21, 40))
         self.assertFalse(access.allows(11, 20, 30))
-        self.assertFalse(access.allows(10, 21, 30))
+        self.assertFalse(access.allows(10, 22, 30))
         self.assertFalse(access.allows(10, 20, 31))
         self.assertFalse(CodexAccess(False, 10, 20, frozenset({30})).allows(10, 20, 30))
 
-    def test_selected_channel_persists_and_overrides_environment_seed(self):
+    def test_selected_channels_persist_and_override_environment_seed(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             path = Path(temp_dir) / "codex_access.json"
             access = CodexAccess(
@@ -49,14 +51,15 @@ class CodexAccessTest(unittest.TestCase):
                 state_path=path,
             )
 
-            previous = access.set_channel(10, 21)
+            previous = access.set_channels(10, frozenset({21, 22}))
 
-            self.assertEqual(previous, 20)
+            self.assertEqual(previous, frozenset({20}))
             self.assertFalse(access.allows(10, 20, 30))
             self.assertTrue(access.allows(10, 21, 30))
+            self.assertTrue(access.allows(10, 22, 30))
             self.assertEqual(
                 json.loads(path.read_text(encoding="utf-8")),
-                {"version": 1, "guild_id": 10, "channel_id": 21},
+                {"version": 2, "guild_id": 10, "channel_ids": [21, 22]},
             )
             self.assertEqual(os.stat(path).st_mode & 0o777, 0o600)
 
@@ -69,7 +72,28 @@ class CodexAccessTest(unittest.TestCase):
             )
 
         self.assertTrue(restarted.allows(10, 21, 30))
+        self.assertTrue(restarted.allows(10, 22, 30))
         self.assertFalse(restarted.allows(10, 99, 30))
+
+    def test_version_one_state_loads_as_single_channel(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "codex_access.json"
+            path.write_text(
+                json.dumps({"version": 1, "guild_id": 10, "channel_id": 20}),
+                encoding="utf-8",
+            )
+
+            access = CodexAccess(
+                True,
+                10,
+                99,
+                frozenset({30}),
+                state_path=path,
+            )
+
+        self.assertEqual(access.channel_ids, frozenset({20}))
+        self.assertTrue(access.allows(10, 20, 30))
+        self.assertFalse(access.allows(10, 99, 30))
 
     def test_corrupt_channel_state_fails_closed_and_selection_repairs_it(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -84,13 +108,14 @@ class CodexAccessTest(unittest.TestCase):
             )
 
             self.assertFalse(access.state_available)
-            self.assertIsNone(access.channel_id)
+            self.assertEqual(access.channel_ids, frozenset())
             self.assertFalse(access.allows(10, 20, 30))
 
-            access.set_channel(10, 22)
+            access.set_channels(10, frozenset({22, 23}))
 
             self.assertTrue(access.state_available)
             self.assertTrue(access.allows(10, 22, 30))
+            self.assertTrue(access.allows(10, 23, 30))
 
     def test_boolean_guild_id_in_state_fails_closed(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -110,6 +135,33 @@ class CodexAccessTest(unittest.TestCase):
 
         self.assertFalse(access.state_available)
         self.assertFalse(access.allows(1, 20, 30))
+
+    def test_boolean_version_in_state_fails_closed(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "codex_access.json"
+            path.write_text(
+                json.dumps({"version": True, "guild_id": 10, "channel_id": 20}),
+                encoding="utf-8",
+            )
+
+            access = CodexAccess(
+                True,
+                10,
+                20,
+                frozenset({30}),
+                state_path=path,
+            )
+
+        self.assertFalse(access.state_available)
+        self.assertFalse(access.allows(10, 20, 30))
+
+    def test_channel_set_must_contain_one_to_twenty_five_positive_ids(self):
+        access = CodexAccess(True, 10, 20, frozenset({30}))
+
+        for channel_ids in (frozenset(), frozenset(range(1, 27)), frozenset({True})):
+            with self.subTest(channel_ids=channel_ids):
+                with self.assertRaises(ValueError):
+                    access.set_channels(10, channel_ids)
 
     def test_suspension_temporarily_denies_access(self):
         access = CodexAccess(True, 10, 20, frozenset({30}))

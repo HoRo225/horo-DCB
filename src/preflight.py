@@ -24,7 +24,7 @@ def main(state_path: Path | str = DEFAULT_CODEX_ACCESS_STATE_PATH) -> None:
         "codex_allowlist_configured": bool(
             config.codex_allowed_guild_id
             and access.state_available
-            and access.channel_id
+            and access.channel_ids
             and config.codex_allowed_user_ids
         ),
         "codex_allowed_user_count": len(config.codex_allowed_user_ids),

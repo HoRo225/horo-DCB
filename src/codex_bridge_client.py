@@ -12,6 +12,7 @@ import time
 import aiohttp
 
 DEFAULT_CODEX_ACCESS_STATE_PATH = Path("/app/data/codex_access.json")
+MAX_CODEX_ALLOWED_CHANNELS = 25
 
 
 _SAFE_ERROR_CODES = {
@@ -36,7 +37,9 @@ class CodexAccess:
     ) -> None:
         self.enabled = enabled
         self.guild_id = guild_id
-        self.channel_id = channel_id
+        self.channel_ids = (
+            frozenset({channel_id}) if channel_id is not None else frozenset()
+        )
         self.user_ids = user_ids
         self.state_available = True
         self._suspended = False
@@ -45,21 +48,34 @@ class CodexAccess:
             return
         try:
             payload = json.loads(self._state_path.read_text(encoding="utf-8"))
-            if (
-                not isinstance(payload, dict)
-                or set(payload) != {"version", "guild_id", "channel_id"}
-                or type(payload.get("version")) is not int
-                or payload["version"] != 1
-                or type(payload.get("guild_id")) is not int
+            if not isinstance(payload, dict) or (
+                type(payload.get("guild_id")) is not int
                 or payload["guild_id"] <= 0
                 or payload["guild_id"] != guild_id
-                or type(payload.get("channel_id")) is not int
-                or payload["channel_id"] <= 0
             ):
                 raise ValueError("invalid Codex access state")
-            self.channel_id = payload["channel_id"]
+            version = payload.get("version")
+            if type(version) is not int:
+                raise ValueError("invalid Codex access state")
+            if version == 1 and set(payload) == {"version", "guild_id", "channel_id"}:
+                channel_id = payload.get("channel_id")
+                if type(channel_id) is not int or channel_id <= 0:
+                    raise ValueError("invalid Codex access state")
+                self.channel_ids = frozenset({channel_id})
+            elif version == 2 and set(payload) == {"version", "guild_id", "channel_ids"}:
+                channel_ids = payload.get("channel_ids")
+                if (
+                    not isinstance(channel_ids, list)
+                    or not 1 <= len(channel_ids) <= MAX_CODEX_ALLOWED_CHANNELS
+                    or any(type(value) is not int or value <= 0 for value in channel_ids)
+                    or len(channel_ids) != len(set(channel_ids))
+                ):
+                    raise ValueError("invalid Codex access state")
+                self.channel_ids = frozenset(channel_ids)
+            else:
+                raise ValueError("invalid Codex access state")
         except (OSError, ValueError, TypeError, json.JSONDecodeError):
-            self.channel_id = None
+            self.channel_ids = frozenset()
             self.state_available = False
             logging.error("Codex 白名單狀態檔無法讀取；AI 對話已停用。")
 
@@ -74,23 +90,27 @@ class CodexAccess:
             and self.state_available
             and not self._suspended
             and guild_id == self.guild_id
-            and channel_id == self.channel_id
+            and channel_id in self.channel_ids
             and user_id in self.user_ids
         )
 
-    def set_channel(self, guild_id: int, channel_id: int) -> int | None:
+    def set_channels(
+        self,
+        guild_id: int,
+        channel_ids: frozenset[int],
+    ) -> frozenset[int]:
         if (
             type(guild_id) is not int
             or guild_id != self.guild_id
-            or type(channel_id) is not int
-            or channel_id <= 0
+            or not 1 <= len(channel_ids) <= MAX_CODEX_ALLOWED_CHANNELS
+            or any(type(value) is not int or value <= 0 for value in channel_ids)
         ):
-            raise ValueError("invalid Codex allowlist channel")
+            raise ValueError("invalid Codex allowlist channels")
         if self._state_path is not None:
             payload = {
-                "version": 1,
+                "version": 2,
                 "guild_id": guild_id,
-                "channel_id": channel_id,
+                "channel_ids": sorted(channel_ids),
             }
             self._state_path.parent.mkdir(parents=True, exist_ok=True)
             temporary = self._state_path.with_name(f"{self._state_path.name}.tmp")
@@ -100,8 +120,8 @@ class CodexAccess:
             )
             os.chmod(temporary, 0o600)
             os.replace(temporary, self._state_path)
-        previous = self.channel_id
-        self.channel_id = channel_id
+        previous = self.channel_ids
+        self.channel_ids = channel_ids
         self.state_available = True
         return previous
 
