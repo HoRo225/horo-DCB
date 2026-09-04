@@ -264,15 +264,20 @@ class CodexBridgeClient:
         path: str,
         *,
         payload: dict[str, object] | None = None,
+        timeout_seconds: float | None = None,
     ) -> dict[str, object]:
         if self._session is None or self._session.closed:
             await self.start()
         assert self._session is not None
+        timeout = aiohttp.ClientTimeout(
+            total=self.timeout_seconds if timeout_seconds is None else timeout_seconds
+        )
         try:
             async with self._session.request(
                 method,
                 f"{self.base_url}{path}",
                 json=payload,
+                timeout=timeout,
             ) as response:
                 try:
                     body = await response.json()
@@ -294,7 +299,7 @@ class CodexBridgeClient:
         return body
 
     async def get_runtime_status(self) -> CodexRuntimeStatus:
-        body = await self._request("GET", "/v1/status")
+        body = await self._request("GET", "/v1/status", timeout_seconds=3)
         try:
             return CodexRuntimeStatus(
                 available=body["available"] is True,

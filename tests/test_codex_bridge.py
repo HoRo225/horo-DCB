@@ -716,14 +716,17 @@ class FakeBridgeService:
         self.archive_calls.append((guild_id, channel_id))
 
 
-class RecordingStatusSession:
+class RecordingRequestSession:
     closed = False
+    status = 200
 
     def __init__(self):
-        self.timeout = None
+        self.path = ""
+        self.timeouts = []
 
-    def request(self, _method, _url, **kwargs):
-        self.timeout = kwargs.get("timeout")
+    def request(self, _method, url, **kwargs):
+        self.path = url
+        self.timeouts.append(kwargs.get("timeout"))
         return self
 
     async def __aenter__(self):
@@ -733,6 +736,8 @@ class RecordingStatusSession:
         return None
 
     async def json(self):
+        if self.path.endswith("/v1/chat"):
+            return {"reply": "answer"}
         return {
             "available": True,
             "authenticated": True,
@@ -743,8 +748,6 @@ class RecordingStatusSession:
             "thread_count": 1,
         }
 
-    status = 200
-
 
 class CodexBridgeClientStatusTest(unittest.IsolatedAsyncioTestCase):
     async def test_status_uses_three_second_timeout_separate_from_chat_timeout(self):
@@ -753,15 +756,16 @@ class CodexBridgeClientStatusTest(unittest.IsolatedAsyncioTestCase):
             "d" * 64,
             timeout_seconds=125,
         )
-        session = RecordingStatusSession()
+        session = RecordingRequestSession()
         client._session = session
 
         status = await client.get_runtime_status()
+        reply = await client.chat("guild:1:thread:2", "Steven", "hello", ())
 
         self.assertTrue(status.available)
-        self.assertIsNotNone(session.timeout)
-        self.assertEqual(session.timeout.total, 3)
-        self.assertEqual(client.timeout_seconds, 125)
+        self.assertEqual(reply, "answer")
+        self.assertNotIn(None, session.timeouts)
+        self.assertEqual([timeout.total for timeout in session.timeouts], [3, 125])
 
 
 class BridgeHttpTest(unittest.IsolatedAsyncioTestCase):

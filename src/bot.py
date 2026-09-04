@@ -209,6 +209,7 @@ class HoroBot(discord.Client):
                     allowed_mentions=discord.AllowedMentions.none(),
                 )
                 return
+            await interaction.response.defer(ephemeral=True)
             try:
                 codex_status = await self.codex.get_runtime_status()
             except Exception:
@@ -222,7 +223,7 @@ class HoroBot(discord.Client):
                     None,
                     0,
                 )
-            await interaction.response.send_message(
+            await interaction.edit_original_response(
                 view=AdminPanelView(
                     user_id=interaction.user.id,
                     guild_id=interaction.guild.id,
@@ -241,7 +242,6 @@ class HoroBot(discord.Client):
                     temp_voice_enabled=self.temp_voice_enabled,
                     steam_free_games_enabled=self.steam_free_games_enabled,
                 ),
-                ephemeral=True,
                 allowed_mentions=discord.AllowedMentions.none(),
             )
 

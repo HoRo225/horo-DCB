@@ -333,7 +333,23 @@ class AdminPanelView(discord.ui.LayoutView):
         steam_status = self.steam_free_games.get_guild_status(self.guild_id)
 
         statuses: list[tuple[str, str, str]] = []
-        if not self.codex_status.available:
+        ai_access_enabled = (
+            self.codex_access.enabled
+            and self.codex_access.guild_id == self.guild_id
+        )
+        if not self.codex_access.enabled:
+            statuses.append(("AI 助手", "停用", "AI 對話目前依設定停用"))
+        elif not ai_access_enabled:
+            statuses.append(("AI 助手", "停用", "此伺服器不在 AI 白名單"))
+        elif not self.codex_access.state_available:
+            statuses.append(("AI 助手", "異常", "白名單狀態檔不可用"))
+        elif not self.codex_access.channel_ids:
+            statuses.append(("AI 助手", "待設定", "白名單頻道尚未設定"))
+        elif not self.codex_access.role_ids and not self.codex_access.user_ids:
+            statuses.append(
+                ("AI 助手", "待設定", "白名單身分組或舊使用者尚未設定")
+            )
+        elif not self.codex_status.available:
             statuses.append(("AI 助手", "異常", "Codex bridge 無法連線"))
         elif not self.codex_status.authenticated:
             statuses.append(("AI 助手", "待設定", "Codex 尚未登入"))
@@ -376,6 +392,11 @@ class AdminPanelView(discord.ui.LayoutView):
         pending_count = sum(status == "待設定" for _name, status, _detail in statuses)
         error_count = sum(status == "異常" for _name, status, _detail in statuses)
         disabled_count = sum(status == "停用" for _name, status, _detail in statuses)
+        disabled_details = [
+            f"**{name} · {status}** · {detail}"
+            for name, status, detail in statuses
+            if name == "AI 助手" and status == "停用"
+        ]
         disabled_features = []
         if not self.temp_voice_enabled:
             disabled_features.append("臨時語音")
@@ -384,11 +405,12 @@ class AdminPanelView(discord.ui.LayoutView):
         if self.server_activity is None:
             disabled_features.append("伺服器活動")
         if len(disabled_features) > 1:
-            disabled_text = f"{'、'.join(disabled_features[:-1])}與 {disabled_features[-1]}依設定停用"
+            disabled_details.append(
+                f"{'、'.join(disabled_features[:-1])}與 {disabled_features[-1]}依設定停用"
+            )
         elif disabled_features:
-            disabled_text = f"{disabled_features[0]}依設定停用"
-        else:
-            disabled_text = ""
+            disabled_details.append(f"{disabled_features[0]}依設定停用")
+        disabled_text = " · ".join(disabled_details)
 
         if error_count == 0 and pending_count == 0:
             if disabled_count:
@@ -410,8 +432,21 @@ class AdminPanelView(discord.ui.LayoutView):
                 f"**{normal_count} 個正常 · {pending_count} 個待設定 · "
                 f"{error_count} 個異常{disabled_suffix}**"
             )
+            if disabled_text:
+                health_text += f"\n-# {disabled_text}"
 
         setup_items: list[tuple[str, bool]] = []
+        if ai_access_enabled:
+            setup_items.append(
+                (
+                    "AI 白名單",
+                    self.codex_access.state_available
+                    and bool(self.codex_access.channel_ids)
+                    and bool(
+                        self.codex_access.role_ids or self.codex_access.user_ids
+                    ),
+                )
+            )
         if self.temp_voice_enabled:
             setup_items.append(
                 (
