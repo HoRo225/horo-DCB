@@ -358,6 +358,45 @@ class BridgeLifecycleTest(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("raw rpc", json.dumps(status))
 
 
+    async def test_mapping_write_failure_stops_queued_and_later_chats_until_fresh_store_recovery(self):
+        old_key = "guild:1:thread:9"
+        self.store.set(old_key, "old-thread", updated_at=1)
+        durable = self.store.path.read_bytes()
+        self.codex.gates["start"] = asyncio.Event()
+        first = self.chat_task()
+        await asyncio.wait_for(self.codex.entered["start"].wait(), 0.3)
+        queued = self.chat_task()
+        await settle()
+        with patch("src.codex_bridge.os.replace", side_effect=OSError("mapping write failed")) as replace:
+            self.codex.gates["start"].set()
+            results = await asyncio.wait_for(asyncio.gather(first, queued, return_exceptions=True), 0.3)
+            later = "unexpected success"
+            try:
+                await asyncio.wait_for(self.service.chat(old_key, "A", "later", ()), 0.3)
+            except BridgeRequestError as error:
+                later = error.code
+            status = await asyncio.wait_for(self.service.status(), 0.3)
+            self.assertTrue(all(isinstance(result, BridgeRequestError) and result.code == "unavailable" for result in results))
+            self.assertEqual(len(self.codex.started), 1, "queued work called the SDK again after mapping persistence failed")
+            self.assertEqual(self.codex.resumed, [], "later work resumed an SDK thread while storage was unavailable")
+            self.assertEqual(replace.call_count, 1, "mapping writes continued after the first failure")
+            self.assertEqual(later, "unavailable")
+            self.assertFalse(status["available"])
+            self.assertEqual(status.get("last_error"), "unavailable")
+            self.assertEqual(self.exits, [], "storage failure must not cause a restart loop")
+            self.assertEqual(self.store.get(old_key), "old-thread")
+            self.assertIsNone(self.store.get("guild:1:thread:2"))
+            self.assertEqual(self.store.path.read_bytes(), durable)
+        repaired_codex = ControlledCodex()
+        repaired = CodexService(repaired_codex, ThreadStore(self.store.path), timeout_seconds=1)
+        repaired.fatal_exit = self.exits.append
+        reply = await asyncio.wait_for(repaired.chat(old_key, "A", "after repair", ()), 0.3)
+        self.assertEqual(reply, "answer")
+        self.assertEqual(repaired_codex.started, [])
+        self.assertEqual([entry[0] for entry in repaired_codex.resumed], ["old-thread"])
+        self.assertTrue((await asyncio.wait_for(repaired.status(), 0.3))["available"])
+        self.assertEqual(self.exits, [])
+
     async def test_transport_closed_recycles_without_auth_or_quota_misclassification(self):
         for target_phase in ("start", "resume", "turn", "run", "account", "archive"):
             with self.subTest(phase=target_phase):
