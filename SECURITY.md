@@ -2,7 +2,7 @@
 
 ## Supported version
 
-Until versioned releases exist, security fixes target the current default branch. Locally modified runtime images and expired rollback artifacts are unsupported.
+Security fixes target the current default branch and the recorded deployed revision. Deployments must use an immutable CI-verified image whose source commit is available in this repository. Unrecorded local runtime modifications and expired rollback artifacts are unsupported.
 
 ## Reporting
 
@@ -23,7 +23,7 @@ The following are secrets and must never be committed, logged or pasted into sup
 
 ## Security boundaries
 
-Codex access is permanently restricted by an exact Guild, persisted parent Channels and one or more non-default Role IDs. Legacy exact User IDs may authorize only until the first Role set is persisted; they must never bypass an existing Role allowlist. DM and non-allowlisted events must not call the bridge. Role changes must archive existing Guild conversations before the new access set becomes active. Programmatic execution must not be exposed as a public Bot feature.
+Codex access is permanently restricted by an exact Guild, persisted parent Channels and one or more non-default Role IDs. Legacy exact User IDs apply only to explicit v1/v2 bootstrap state; v3 always uses roles, including an empty set that denies everyone. A corrupt or unreadable state must remain in denied role mode until both channels and roles are repaired. Removing a state file is not a repair procedure; keep AI disabled while restoring valid authorization. DM and non-allowlisted events must not call the bridge. Role changes must serialize through one shared mutation lock, invalidate accepted generations, cancel and wait for old work, then durably detach mappings and best-effort archive before the new access set becomes active. Member roles must be refreshed when cache freshness is unavailable. Success and error output remain registered and revocation-aware until delivery ends. Programmatic execution must not be exposed as a public Bot feature.
 
 The bridge:
 
@@ -32,7 +32,10 @@ The bridge:
 - leaves only /healthz unauthenticated and returns no account details there;
 - validates JSON shape, IDs, text length, image media type and total size;
 - uses constant-time token comparison;
-- returns fixed error codes and never raw SDK or RPC content.
+- returns fixed error codes and never raw SDK or RPC content;
+- bounds active/queued work, total deadlines and cancellation cleanup;
+- refuses further chat writes after mapping persistence failure while retaining the original durable state;
+- handles disconnected callers and unresponsive RPC workers without replaying prompts.
 
 Bot and sidecar have separate Volumes and secrets. Both run non-root with a read-only root filesystem and no-new-privileges. The sidecar uses a read-only Codex sandbox, deny-all approvals, no inherited shell environment, no MCP, no local memories, no connectors, no subagents and no shell or write actions.
 
@@ -50,7 +53,7 @@ All members with an allowlisted Role intentionally share the same persistent Cod
 
 Python, discord.py, aiohttp, openai-codex, the bundled Codex runtime and Docker may affect security without local source changes. Dependabot output is review input, not deployment approval.
 
-A runtime dependency or image digest update requires a clean build, pip check, complete automated tests, Compose isolation verification and a disposable live Codex gate. Production receives the complete verified OCI image; do not rebuild on the image-only host.
+A runtime dependency or image digest update requires a clean build, pip check, complete automated tests, Compose isolation verification and a disposable live Codex gate. Production receives the exact image exported by the successful isolated CI run, including source/revision labels and a verified archive checksum; do not rebuild on the image-only host.
 
 ## Incident containment
 
@@ -60,7 +63,7 @@ If the bridge behaves unexpectedly:
 2. preserve logs without copying prompts or OAuth files;
 3. rotate CODEX_BRIDGE_TOKEN;
 4. revoke and recreate Codex authentication when credential exposure is possible;
-5. restore the last verified compose and images if within rollback;
+5. restore the last verified compose and images if within rollback, keeping AI disabled if missing/corrupt/empty-role state could trigger an older image's legacy fallback;
 6. verify Discord, Calendar, Steam, voice and Server Activity before reopening access.
 
 Do not delete bot_data, codex_data or legacy rollback Volumes during containment unless the exact destructive target and recovery impact have been confirmed.
