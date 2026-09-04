@@ -308,13 +308,15 @@ class CodexService:
             except asyncio.CancelledError:
                 # Repeated cancellation must preserve the stream until its terminal event.
                 continue
-        undrained = any(not task.done() or task.cancelled() for task in tasks)
+        must_exit = any(not task.done() or task.cancelled() for task in tasks)
         for task in tasks:
             if not task.done():
                 task.cancel()
             elif not task.cancelled():
-                task.exception()
-        if undrained:
+                error = task.exception()
+                if (task is cleanup and error is not None) or isinstance(error, TransportClosedError):
+                    must_exit = True
+        if must_exit:
             self._fatal()
 
     async def status(self) -> dict[str, object]:
