@@ -13,42 +13,13 @@ fail() {
 command -v docker >/dev/null 2>&1 || fail "Docker is required."
 docker compose version >/dev/null 2>&1 || fail "Docker Compose v2 is required."
 
-random_hex() {
-    byte_count=$1
-    if command -v openssl >/dev/null 2>&1; then
-        openssl rand -hex "$byte_count"
-        return
-    fi
-    od -An -N "$byte_count" -tx1 /dev/urandom | tr -d ' \n'
-}
-
-replace_env_value() {
-    key=$1
-    value=$2
-    temporary_file=$(mktemp "${TMPDIR:-/tmp}/horo-dcb-env.XXXXXX")
-    awk -v key="$key" -v value="$value" '
-        BEGIN { replaced = 0 }
-        index($0, key "=") == 1 {
-            print key "=" value
-            replaced = 1
-            next
-        }
-        { print }
-        END {
-            if (!replaced) {
-                print key "=" value
-            }
-        }
-    ' .env > "$temporary_file"
-    mv "$temporary_file" .env
-}
-
 if [ -e .env ]; then
     printf '%s\n' "Existing .env preserved; no values were overwritten."
 else
     [ -f .env.example ] || fail ".env.example is missing."
     cp .env.example .env
-    replace_env_value CODEX_BRIDGE_TOKEN "$(random_hex 32)"
+    token=$(od -An -N 32 -tx1 /dev/urandom | tr -d ' \n')
+    sed -i "s/^CODEX_BRIDGE_TOKEN=.*/CODEX_BRIDGE_TOKEN=$token/" .env
     printf '%s\n' "Created .env with a local Codex bridge token."
 fi
 chmod 600 .env

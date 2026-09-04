@@ -20,11 +20,6 @@ jobs:
       - name: Check out source
         uses: actions/checkout@v7
 
-      - name: Verify Docker toolchain
-        run: |
-          docker version
-          docker compose version
-
       - name: Exercise fresh-clone setup
         run: |
           set -eu
@@ -56,7 +51,6 @@ jobs:
 
       - name: Validate Compose isolation
         run: |
-          docker compose config --quiet
           docker compose config --format json > /tmp/horo-compose.json
           python - <<'PY'
           import json
