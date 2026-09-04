@@ -788,7 +788,7 @@ class AdminPanelViewTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_activity_recent_escapes_event_type_and_never_renders_mentions_or_details(self):
         events = [
-            StoredActivityEvent(100 + index, "gateway", "message", "**edit**", 123, 456, 789, 987)
+            StoredActivityEvent(100 + index, "**edit**", 123, 456, 789, 987)
             for index in range(12)
         ]
         self.activity.get_recent_events.return_value = events

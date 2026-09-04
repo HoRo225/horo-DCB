@@ -55,8 +55,6 @@ class ActivitySummary:
 @dataclass(frozen=True, slots=True)
 class StoredActivityEvent:
     occurred_at: int
-    source: str
-    category: str
     event_type: str
     actor_id: int | None
     target_id: int | None
@@ -201,7 +199,6 @@ class ServerActivityMonitor:
 
     def _connect(self) -> sqlite3.Connection:
         connection = sqlite3.connect(self.db_path, timeout=5)
-        connection.execute("PRAGMA foreign_keys=ON")
         connection.execute("PRAGMA busy_timeout=5000")
         connection.execute("PRAGMA synchronous=NORMAL")
         return connection
@@ -452,7 +449,7 @@ class ServerActivityMonitor:
             parameters.append(filter_key)
         parameters.append(limit)
         with closing(self._connect()) as connection:
-            rows = connection.execute(f"SELECT occurred_at,source,category,event_type,actor_id,target_id,channel_id,message_id FROM server_activity_events WHERE {where} ORDER BY occurred_at DESC,id DESC LIMIT ?", parameters).fetchall()
+            rows = connection.execute(f"SELECT occurred_at,event_type,actor_id,target_id,channel_id,message_id FROM server_activity_events WHERE {where} ORDER BY occurred_at DESC,id DESC LIMIT ?", parameters).fetchall()
         return [StoredActivityEvent(*row) for row in rows]
 
     def _emit(self, guild: Any, category: str, event_type: str, **values: Any) -> None:
