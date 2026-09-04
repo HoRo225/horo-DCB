@@ -13,7 +13,7 @@ import unittest
 from unittest.mock import AsyncMock, Mock, patch
 
 import discord
-from aiohttp import TCPConnector
+from aiohttp import ClientSession, TCPConnector
 from aiohttp.test_utils import TestClient, TestServer
 from aiohttp.web_log import AccessLogger
 from openai_codex import TransportClosedError
@@ -1160,9 +1160,12 @@ class RuntimeHttpSafetyTest(unittest.IsolatedAsyncioTestCase):
             service.fatal_exit = exits.append
             app = create_app("a" * 64, service)
             options = self.launch_options(app)
-            http = TestClient(TestServer(app, handler_cancellation=options.get("handler_cancellation", False)))
-            await http.start_server()
-            request = asyncio.create_task(http.post("/v1/chat", json={
+            runner = bridge.web.AppRunner(app, handler_cancellation=options.get("handler_cancellation", False))
+            await runner.setup()
+            await bridge.web.TCPSite(runner, "127.0.0.1", 0).start()
+            base_url = f"http://127.0.0.1:{runner.addresses[0][1]}"
+            http = ClientSession()
+            request = asyncio.create_task(http.post(base_url + "/v1/chat", json={
                 "conversation_key": "guild:1:thread:2", "display_name": "A",
                 "text": "private prompt", "images": [],
             }, headers={"Authorization": "Bearer " + "a" * 64}))
@@ -1185,6 +1188,7 @@ class RuntimeHttpSafetyTest(unittest.IsolatedAsyncioTestCase):
                 codex.gates["run"].set()
                 await stop_tasks([request])
                 await asyncio.wait_for(http.close(), 1)
+                await asyncio.wait_for(runner.cleanup(), 1)
 
     async def test_bot_real_http_bridge_and_sdk_keep_shared_thread_output_serialized(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -1256,13 +1260,18 @@ class RuntimeHttpSafetyTest(unittest.IsolatedAsyncioTestCase):
         app = create_app("a" * 64, service)
         options = self.launch_options(app)
         logger = logging.getLogger("horo.tests.health.access")
-        http = TestClient(TestServer(
+        # TestServer discards constructor runner options and forces cancellation.
+        # Use the same native runner path as serve so main's options reach HTTP.
+        runner = bridge.web.AppRunner(
             app, access_log=logger,
             access_log_class=options.get("access_log_class", AccessLogger),
-        ), connector=TCPConnector(force_close=True))
-        await http.start_server()
+        )
+        await runner.setup()
+        await bridge.web.TCPSite(runner, "127.0.0.1", 0).start()
+        base_url = f"http://127.0.0.1:{runner.addresses[0][1]}"
+        http = ClientSession(connector=TCPConnector(force_close=True))
         async def probe(path="/healthz"):
-            response = await http.get(path)
+            response = await http.get(base_url + path)
             await response.read()
             await settle()
             return response
@@ -1292,6 +1301,7 @@ class RuntimeHttpSafetyTest(unittest.IsolatedAsyncioTestCase):
                 self.assertNotIn("private", "\n".join(logs.output))
         finally:
             await asyncio.wait_for(http.close(), 1)
+            await asyncio.wait_for(runner.cleanup(), 1)
 
 
 if __name__ == "__main__":
