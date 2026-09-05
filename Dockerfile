@@ -1,4 +1,4 @@
-FROM python:3.14.7-slim-bookworm@sha256:d893452fcd120ea9a7233972c85ea868255bde289a636fe76ff090427fe8fac9
+FROM python:3.14.7-slim-bookworm@sha256:9ab8d9c8514b44f90cf0029dd42fdd7e9e211e639c8b995304cc04568dee900f
 
 ARG VCS_REF
 LABEL org.opencontainers.image.source="https://github.com/HoRo225/horo-DCB" \
