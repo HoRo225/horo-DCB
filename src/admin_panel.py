@@ -11,12 +11,6 @@ from src.codex_bridge_client import (
     CodexBridgeClient,
     CodexRuntimeStatus,
 )
-from src.server_activity import (
-    ActivitySummary,
-    ServerActivityMonitor,
-    ServerActivityStatus,
-    StoredActivityEvent,
-)
 from src.steam_free_games import (
     SteamConfigurationError,
     SteamFetchResult,
@@ -32,7 +26,6 @@ MAIN_PAGES = (
     ("overview", "總覽", "控制台首頁"),
     ("ai", "AI 助手", "Codex OAuth 與對話"),
     ("modules", "功能模組", "臨時語音與 Steam 免費遊戲"),
-    ("activity", "伺服器活動", "活動監聽與稽核紀錄"),
 )
 MODULE_PAGES = (
     ("voice", "臨時語音", "入口頻道與同步狀態"),
@@ -145,29 +138,6 @@ class _SteamRoleSelect(discord.ui.RoleSelect):
             await view.handle_steam_role_select(interaction, tuple(self.values))
 
 
-class _ActivityFilterSelect(discord.ui.Select["AdminPanelView"]):
-    def __init__(self, current: str) -> None:
-        options = (
-            ("all", "全部"),
-            ("admin", "管理"),
-            ("member", "成員"),
-            ("message", "訊息"),
-            ("voice", "語音"),
-        )
-        super().__init__(
-            placeholder="篩選活動",
-            options=[
-                discord.SelectOption(label=label, value=value, default=value == current)
-                for value, label in options
-            ],
-        )
-
-    async def callback(self, interaction: discord.Interaction) -> None:
-        view = self.view
-        if isinstance(view, AdminPanelView):
-            await view.handle_action(interaction, f"activity_filter:{self.values[0]}")
-
-
 class AdminPanelView(discord.ui.LayoutView):
     def __init__(
         self,
@@ -182,7 +152,6 @@ class AdminPanelView(discord.ui.LayoutView):
         user_role_ids: frozenset[int] = frozenset(),
         temp_voice_enabled: bool = True,
         steam_free_games_enabled: bool = True,
-        server_activity: ServerActivityMonitor | None = None,
     ) -> None:
         super().__init__(timeout=15 * 60)
         self.user_id = user_id
@@ -195,11 +164,6 @@ class AdminPanelView(discord.ui.LayoutView):
         self.user_role_ids = user_role_ids
         self.temp_voice_enabled = temp_voice_enabled
         self.steam_free_games_enabled = steam_free_games_enabled
-        self.server_activity = server_activity
-        self.activity_filter = "all"
-        self._activity_summary: ActivitySummary | None = None
-        self._activity_recent: tuple[StoredActivityEvent, ...] = ()
-        self._activity_error = False
         self._overview_updated_at = int(time.time())
         self.page = "overview"
         self._render_overview()
@@ -375,20 +339,6 @@ class AdminPanelView(discord.ui.LayoutView):
         else:
             statuses.append(("Steam 免費遊戲", "正常", ""))
 
-        activity_status = (
-            self.server_activity.get_runtime_status()
-            if self.server_activity is not None
-            else None
-        )
-        if activity_status is None:
-            statuses.append(("伺服器活動", "停用", "依設定停用"))
-        elif not activity_status.available:
-            statuses.append(("伺服器活動", "異常", "活動儲存空間不可用"))
-        elif activity_status.dropped_event_count:
-            statuses.append(("伺服器活動", "異常", "有活動紀錄因佇列已滿而遺失"))
-        else:
-            statuses.append(("伺服器活動", "正常", ""))
-
         normal_count = sum(status == "正常" for _name, status, _detail in statuses)
         pending_count = sum(status == "待設定" for _name, status, _detail in statuses)
         error_count = sum(status == "異常" for _name, status, _detail in statuses)
@@ -403,8 +353,6 @@ class AdminPanelView(discord.ui.LayoutView):
             disabled_features.append("臨時語音")
         if not self.steam_free_games_enabled:
             disabled_features.append("Steam 自動通知")
-        if self.server_activity is None:
-            disabled_features.append("伺服器活動")
         if len(disabled_features) > 1:
             disabled_details.append(
                 f"{'、'.join(disabled_features[:-1])}與 {disabled_features[-1]}依設定停用"
@@ -424,7 +372,7 @@ class AdminPanelView(discord.ui.LayoutView):
                 health_text = (
                     "## 系統狀態\n"
                     "**全部正常**\n"
-                    "-# AI 助手、臨時語音、Steam 免費遊戲與伺服器活動皆可用"
+                    "-# AI 助手、臨時語音與 Steam 免費遊戲皆可用"
                 )
         else:
             disabled_suffix = f" · {disabled_count} 個停用" if disabled_count else ""
@@ -508,92 +456,6 @@ class AdminPanelView(discord.ui.LayoutView):
             )
         )
         self._set_container(*children)
-
-    def _render_activity(self) -> None:
-        self.page = "activity"
-        status: ServerActivityStatus | None = (
-            self.server_activity.get_runtime_status()
-            if self.server_activity is not None
-            else None
-        )
-        children: list[discord.ui.Item] = [
-            self._title("伺服器活動", "活動監聽與稽核紀錄"),
-            discord.ui.Separator(spacing=discord.SeparatorSpacing.large),
-            self._main_select("activity"),
-            discord.ui.ActionRow(_ActivityFilterSelect(self.activity_filter)),
-            discord.ui.Separator(),
-        ]
-        if status is None:
-            state_text = "## 目前狀態\n**依設定停用**\n-# 不會讀取活動資料 · 保存期限 30 天"
-        elif self._activity_error or not status.available:
-            state_text = "## 目前狀態\n**目前無法取得伺服器活動**\n-# 請稍後重新整理 · 保存期限 30 天"
-        else:
-            state_text = (
-                "## 目前狀態\n"
-                "**活動監聽正常**\n"
-                f"-# 30 天保存 · 佇列 {status.queue_size} / {status.queue_capacity} · "
-                f"已遺失 {status.dropped_event_count} 筆"
-            )
-        children.append(discord.ui.TextDisplay(state_text))
-
-        if status is not None and status.available and not self._activity_error:
-            summary = self._activity_summary or ActivitySummary()
-            children.extend(
-                (
-                    self._gap(),
-                    discord.ui.TextDisplay(
-                        "## 最近 24 小時\n"
-                        f"**總計 {summary.total}**　管理 {summary.admin}　成員 {summary.member}　"
-                        f"訊息 {summary.message}　語音 {summary.voice}　其他 {summary.other}"
-                    ),
-                    self._gap(),
-                    discord.ui.TextDisplay("## 最近活動"),
-                )
-            )
-            if not self._activity_recent:
-                children.append(discord.ui.TextDisplay("-# 尚無活動紀錄。"))
-            else:
-                for event in self._activity_recent[:10]:
-                    ids = " ".join(
-                        f"{name}={value}"
-                        for name, value in (
-                            ("actor", event.actor_id),
-                            ("target", event.target_id),
-                            ("channel", event.channel_id),
-                            ("message", event.message_id),
-                        )
-                        if value is not None
-                    )
-                    event_type = discord.utils.escape_markdown(event.event_type)
-                    suffix = f" · {ids}" if ids else ""
-                    children.append(
-                        discord.ui.TextDisplay(
-                            f"<t:{event.occurred_at}:f> · **{event_type}**{suffix}"
-                        )
-                    )
-        children.append(self._row(_PanelButton("refresh", "重新整理"), self._close_button()))
-        self._set_container(*children)
-
-    async def _refresh_activity(self) -> None:
-        if self.server_activity is None:
-            self._activity_summary = None
-            self._activity_recent = ()
-            self._activity_error = False
-            return
-        try:
-            summary = await self.server_activity.get_summary(self.guild_id)
-            recent = await self.server_activity.get_recent_events(
-                self.guild_id, self.activity_filter, limit=10
-            )
-        except Exception:
-            logging.error("管理控制台讀取伺服器活動失敗。")
-            self._activity_summary = None
-            self._activity_recent = ()
-            self._activity_error = True
-        else:
-            self._activity_summary = summary
-            self._activity_recent = tuple(recent[:10])
-            self._activity_error = False
 
     def _render_ai(self, note: str | None = None) -> None:
         self.page = "ai"
@@ -883,8 +745,6 @@ class AdminPanelView(discord.ui.LayoutView):
             self._render_voice()
         elif page == "steam":
             self._render_steam()
-        elif page == "activity":
-            self._render_activity()
         else:
             self._render_overview()
 
@@ -1038,19 +898,6 @@ class AdminPanelView(discord.ui.LayoutView):
         )
 
     async def handle_action(self, interaction: discord.Interaction, action: str) -> None:
-        if action == "activity" or action.startswith("activity_filter:"):
-            if action.startswith("activity_filter:"):
-                requested_filter = action.partition(":")[2]
-                if requested_filter in {"all", "admin", "member", "message", "voice"}:
-                    self.activity_filter = requested_filter
-            await interaction.response.defer()
-            await self._refresh_activity()
-            self._render_activity()
-            await interaction.edit_original_response(
-                view=self,
-                allowed_mentions=discord.AllowedMentions.none(),
-            )
-            return
         if action in ("overview", "modules", "voice", "steam"):
             self._render_page(action)
             await self._edit(interaction)
@@ -1066,14 +913,6 @@ class AdminPanelView(discord.ui.LayoutView):
             return
         if action == "refresh":
             await interaction.response.defer()
-            if self.page == "activity":
-                await self._refresh_activity()
-                self._render_activity()
-                await interaction.edit_original_response(
-                    view=self,
-                    allowed_mentions=discord.AllowedMentions.none(),
-                )
-                return
             if self.page in ("overview", "ai"):
                 await self._refresh_ai_status()
             if self.page == "overview":

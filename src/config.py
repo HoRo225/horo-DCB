@@ -80,7 +80,6 @@ class AppConfig:
     temp_voice_enabled: bool
     steam_free_games_enabled: bool
     ai_text_display_enabled: bool
-    server_activity_enabled: bool
 
     @classmethod
     def from_env(cls) -> AppConfig:
@@ -115,9 +114,5 @@ class AppConfig:
             ai_text_display_enabled=env_flag(
                 "AI_TEXT_DISPLAY_ENABLED",
                 default=True,
-            ),
-            server_activity_enabled=env_flag(
-                "SERVER_ACTIVITY_ENABLED",
-                default=False,
             ),
         )

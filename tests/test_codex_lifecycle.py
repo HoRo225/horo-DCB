@@ -104,7 +104,7 @@ class AccessRecoveryTest(unittest.TestCase):
                 codex_enabled=True, codex_allowed_guild_id=10,
                 codex_allowed_channel_id=20, codex_allowed_user_ids=frozenset({30}),
                 temp_voice_enabled=False, steam_free_games_enabled=False,
-                ai_text_display_enabled=True, server_activity_enabled=False,
+                ai_text_display_enabled=True,
             )
             output = io.StringIO()
             with patch("src.preflight.AppConfig.from_env", return_value=config), patch("sys.stdout", output):

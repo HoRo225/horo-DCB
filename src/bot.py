@@ -29,7 +29,6 @@ from src.discord_output import (
     split_discord_message,
     split_discord_text_display,
 )
-from src.server_activity import ServerActivityMonitor
 from src.steam_free_games import SteamFreeGamesNotifier
 from src.temp_voice import TempVoiceManager
 
@@ -189,7 +188,6 @@ class HoroBot(discord.Client):
         temp_voice: TempVoiceManager,
         steam_free_games: SteamFreeGamesNotifier,
         calendar: CalendarManager,
-        server_activity: ServerActivityMonitor | None = None,
         *,
         ai_text_display_enabled: bool = AI_TEXT_DISPLAY_ENABLED,
         temp_voice_enabled: bool = TEMP_VOICE_ENABLED,
@@ -197,7 +195,7 @@ class HoroBot(discord.Client):
     ) -> None:
         intents = discord.Intents.default()
         intents.message_content = True
-        intents.members = server_activity is not None
+        intents.members = True
         super().__init__(
             intents=intents,
             allowed_mentions=discord.AllowedMentions.none(),
@@ -207,7 +205,6 @@ class HoroBot(discord.Client):
         self.temp_voice = temp_voice
         self.steam_free_games = steam_free_games
         self.calendar = calendar
-        self.server_activity = server_activity
         self.ai_text_display_enabled = ai_text_display_enabled
         self.temp_voice_enabled = temp_voice_enabled
         self.steam_free_games_enabled = steam_free_games_enabled
@@ -253,7 +250,6 @@ class HoroBot(discord.Client):
                     codex_status=codex_status,
                     temp_voice=self.temp_voice,
                     steam_free_games=self.steam_free_games,
-                    server_activity=self.server_activity,
                     temp_voice_enabled=self.temp_voice_enabled,
                     steam_free_games_enabled=self.steam_free_games_enabled,
                 ),
@@ -283,11 +279,6 @@ class HoroBot(discord.Client):
 
     async def setup_hook(self) -> None:
         await self.codex.start()
-        if self.server_activity is not None:
-            try:
-                await self.server_activity.start()
-            except Exception:
-                logging.error("Server activity event handling failed.")
         self.add_view(self.calendar.persistent_board_view())
         await self.calendar.start(self)
         if self.steam_free_games_enabled:
@@ -308,19 +299,8 @@ class HoroBot(discord.Client):
             await close_service(self.steam_free_games)
             await close_service(self.calendar)
             await close_service(self.codex)
-            if self.server_activity is not None:
-                await close_service(self.server_activity)
         finally:
             await super().close()
-
-    def _record_server_activity(self, method_name: str, *args: Any) -> None:
-        monitor = self.server_activity
-        if monitor is None:
-            return
-        try:
-            getattr(monitor, method_name)(*args)
-        except Exception:
-            logging.error("Server activity event handling failed.")
 
     async def on_ready(self) -> None:
         logging.info("Discord Bot 已登入：%s", self.user)
@@ -331,13 +311,6 @@ class HoroBot(discord.Client):
             await self.temp_voice.reconcile(self.guilds)
 
     async def on_guild_join(self, guild: discord.Guild) -> None:
-        server_activity = self.server_activity
-        if server_activity is not None:
-            try:
-                await server_activity.enable_guild(guild.id)
-            except Exception:
-                logging.error("Server activity guild enable failed.")
-
         if not self.temp_voice_enabled:
             return
         try:
@@ -351,7 +324,6 @@ class HoroBot(discord.Client):
         before: discord.VoiceState,
         after: discord.VoiceState,
     ) -> None:
-        HoroBot._record_server_activity(self, "record_voice", member, before, after)
         if self.temp_voice_enabled:
             await self.temp_voice.handle_voice_state_update(member, before, after)
 
@@ -387,7 +359,6 @@ class HoroBot(discord.Client):
             logging.error("Codex channel archive failed.")
 
     async def on_raw_message_delete(self, payload: discord.RawMessageDeleteEvent) -> None:
-        HoroBot._record_server_activity(self, "record_message", "message_delete", payload)
         if payload.guild_id is not None:
             await self.calendar.handle_board_message_delete(
                 payload.guild_id,
@@ -395,17 +366,7 @@ class HoroBot(discord.Client):
                 payload.message_id,
             )
 
-    async def on_raw_bulk_message_delete(
-        self,
-        payload: discord.RawBulkMessageDeleteEvent,
-    ) -> None:
-        HoroBot._record_server_activity(self, "record_bulk_message_delete", payload)
-
-    async def on_raw_message_edit(self, payload: discord.RawMessageUpdateEvent) -> None:
-        HoroBot._record_server_activity(self, "record_message", "message_edit", payload)
-
     async def on_raw_thread_delete(self, payload: discord.RawThreadDeleteEvent) -> None:
-        HoroBot._record_server_activity(self, "record_thread", "thread_delete", payload)
         if type(payload.guild_id) is int:
             try:
                 await self.codex.archive_scope(payload.guild_id, payload.thread_id)
@@ -413,13 +374,6 @@ class HoroBot(discord.Client):
                 logging.error("Codex thread archive failed.")
 
     async def on_guild_remove(self, guild: discord.Guild) -> None:
-        server_activity = self.server_activity
-        if server_activity is not None:
-            try:
-                await server_activity.delete_guild(guild.id)
-            except Exception:
-                logging.error("Server activity guild cleanup failed.")
-
         try:
             self.calendar.delete_guild(guild.id)
         except Exception:
@@ -476,17 +430,6 @@ class HoroBot(discord.Client):
         return "success" if sent_chunks else "unavailable"
 
     async def on_message(self, message: discord.Message) -> None:
-        if (
-            getattr(message, "guild", None) is not None
-            and not getattr(message.author, "bot", False)
-            and getattr(message, "webhook_id", None) is None
-        ):
-            HoroBot._record_server_activity(
-                self,
-                "record_message",
-                "message_create",
-                message,
-            )
         if message.author.bot or message.webhook_id is not None or self.user is None:
             return
 
@@ -565,13 +508,12 @@ class HoroBot(discord.Client):
                             if self.codex_access.mode == "roles":
                                 guild = message.guild
                                 author = None
-                                if getattr(getattr(self, "intents", None), "members", False):
-                                    author = guild.get_member(message.author.id)
-                                if author is None:
-                                    try:
-                                        author = await asyncio.wait_for(guild.fetch_member(message.author.id), 2)
-                                    except (discord.HTTPException, TimeoutError, AttributeError):
-                                        return False
+                                try:
+                                    author = await asyncio.wait_for(
+                                        guild.fetch_member(message.author.id), 2
+                                    )
+                                except (discord.HTTPException, TimeoutError, AttributeError):
+                                    return False
                                 if author is None:
                                     return False
                             return job.current and codex_conversation_key_for_message(
@@ -632,17 +574,7 @@ class HoroBot(discord.Client):
                 outcome, queue_ms, images_ms, sdk_ms, discord_ms,
             )
 
-    async def on_audit_log_entry_create(self, entry: discord.AuditLogEntry) -> None:
-        HoroBot._record_server_activity(self, "record_audit", entry)
-
-    async def on_member_join(self, member: discord.Member) -> None:
-        HoroBot._record_server_activity(self, "record_member", "member_join", member)
-
-    async def on_raw_member_remove(self, payload: discord.RawMemberRemoveEvent) -> None:
-        HoroBot._record_server_activity(self, "record_raw_member_remove", payload)
-
     async def on_member_update(self, before: discord.Member, after: discord.Member) -> None:
-        HoroBot._record_server_activity(self, "record_member", "member_update", before, after)
         guild_id = getattr(getattr(after, "guild", None), "id", None)
         if type(guild_id) is int and self.codex_access.mode == "roles":
             roles = {role.id for role in after.roles}
@@ -651,39 +583,6 @@ class HoroBot(discord.Client):
                     await self.codex.cancel_member(guild_id, after.id)
                 except CodexBridgeError:
                     logging.error("Codex revoked member cleanup failed.")
-
-    async def on_raw_reaction_add(self, payload: discord.RawReactionActionEvent) -> None:
-        HoroBot._record_server_activity(self, "record_reaction", "reaction_add", payload)
-
-    async def on_raw_reaction_remove(self, payload: discord.RawReactionActionEvent) -> None:
-        HoroBot._record_server_activity(self, "record_reaction", "reaction_remove", payload)
-
-    async def on_raw_reaction_clear(self, payload: discord.RawReactionClearEvent) -> None:
-        HoroBot._record_server_activity(self, "record_reaction", "reaction_clear", payload)
-
-    async def on_raw_reaction_clear_emoji(self, payload: discord.RawReactionClearEmojiEvent) -> None:
-        HoroBot._record_server_activity(self, "record_reaction", "reaction_clear_emoji", payload)
-
-    async def on_raw_poll_vote_add(self, payload: discord.RawPollVoteActionEvent) -> None:
-        HoroBot._record_server_activity(self, "record_poll_vote", "poll_vote_add", payload)
-
-    async def on_raw_poll_vote_remove(self, payload: discord.RawPollVoteActionEvent) -> None:
-        HoroBot._record_server_activity(self, "record_poll_vote", "poll_vote_remove", payload)
-
-    async def on_thread_create(self, thread: discord.Thread) -> None:
-        HoroBot._record_server_activity(self, "record_thread", "thread_create", thread)
-
-    async def on_thread_update(self, before: discord.Thread, after: discord.Thread) -> None:
-        HoroBot._record_server_activity(self, "record_thread", "thread_update", after)
-
-    async def on_scheduled_event_user_add(self, event: discord.ScheduledEvent, user: discord.User) -> None:
-        HoroBot._record_server_activity(self, "record_scheduled_subscriber", "scheduled_event_user_add", event, user)
-
-    async def on_scheduled_event_user_remove(self, event: discord.ScheduledEvent, user: discord.User) -> None:
-        HoroBot._record_server_activity(self, "record_scheduled_subscriber", "scheduled_event_user_remove", event, user)
-
-    async def on_automod_action(self, execution: discord.AutoModAction) -> None:
-        HoroBot._record_server_activity(self, "record_automod", execution)
 
 
 def main() -> None:
@@ -704,9 +603,6 @@ def main() -> None:
         config.codex_allowed_user_ids,
         state_path=DEFAULT_CODEX_ACCESS_STATE_PATH,
     )
-    server_activity = (
-        ServerActivityMonitor() if config.server_activity_enabled else None
-    )
     temp_voice = TempVoiceManager()
     steam_free_games = SteamFreeGamesNotifier()
     calendar = CalendarManager()
@@ -716,7 +612,6 @@ def main() -> None:
         temp_voice,
         steam_free_games,
         calendar=calendar,
-        server_activity=server_activity,
         ai_text_display_enabled=config.ai_text_display_enabled,
         temp_voice_enabled=config.temp_voice_enabled,
         steam_free_games_enabled=config.steam_free_games_enabled,

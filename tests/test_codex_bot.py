@@ -140,7 +140,6 @@ class CodexBotRoutingTest(unittest.IsolatedAsyncioTestCase):
             user=SimpleNamespace(id=99),
             codex_access=CodexAccess(True, 10, 20, frozenset({30})),
             codex=codex,
-            server_activity=None,
             _send_ai_answer=AsyncMock(),
         )
 
@@ -170,7 +169,6 @@ class CodexBotRoutingTest(unittest.IsolatedAsyncioTestCase):
             user=SimpleNamespace(id=99),
             codex_access=CodexAccess(True, 10, 20, frozenset({30})),
             codex=codex,
-            server_activity=None,
             _send_ai_answer=AsyncMock(),
         )
 
@@ -202,7 +200,6 @@ class CodexBotRoutingTest(unittest.IsolatedAsyncioTestCase):
             user=SimpleNamespace(id=99),
             codex_access=CodexAccess(True, 10, 20, frozenset({30})),
             codex=codex,
-            server_activity=None,
             _send_ai_answer=AsyncMock(),
         )
         image = "data:image/png;base64,iVBORw0KGgo="
@@ -226,7 +223,6 @@ class CodexBotRoutingTest(unittest.IsolatedAsyncioTestCase):
                     user=SimpleNamespace(id=99),
                     codex_access=CodexAccess(True, 10, 20, frozenset({30})),
                     codex=codex,
-                    server_activity=None,
                     _send_ai_answer=AsyncMock(),
                 )
 
@@ -247,7 +243,6 @@ class CodexBotRoutingTest(unittest.IsolatedAsyncioTestCase):
             user=SimpleNamespace(id=99),
             codex_access=CodexAccess(True, 10, 20, frozenset({30})),
             codex=codex,
-            server_activity=None,
             _send_ai_answer=AsyncMock(),
         )
 
@@ -261,7 +256,7 @@ class CodexBotRoutingTest(unittest.IsolatedAsyncioTestCase):
 class CodexArchiveRoutingTest(unittest.IsolatedAsyncioTestCase):
     async def test_thread_delete_archives_matching_conversation(self):
         codex = SimpleNamespace(archive_scope=AsyncMock())
-        bot = SimpleNamespace(codex=codex, server_activity=None)
+        bot = SimpleNamespace(codex=codex)
         payload = SimpleNamespace(guild_id=10, thread_id=20)
 
         await HoroBot.on_raw_thread_delete(bot, payload)
@@ -286,7 +281,6 @@ class CodexArchiveRoutingTest(unittest.IsolatedAsyncioTestCase):
         codex = SimpleNamespace(archive_scope=AsyncMock())
         bot = SimpleNamespace(
             codex=codex,
-            server_activity=None,
             calendar=SimpleNamespace(delete_guild=lambda _guild_id: None),
             temp_voice=None,
             temp_voice_enabled=False,

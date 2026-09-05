@@ -16,7 +16,6 @@ class CodexConfigTest(unittest.TestCase):
             temp_voice_enabled=True,
             steam_free_games_enabled=True,
             ai_text_display_enabled=True,
-            server_activity_enabled=False,
         )
 
         rendered = repr(config)
@@ -44,7 +43,6 @@ class CodexConfigTest(unittest.TestCase):
         self.assertFalse(config.temp_voice_enabled)
         self.assertFalse(config.steam_free_games_enabled)
         self.assertTrue(config.ai_text_display_enabled)
-        self.assertFalse(config.server_activity_enabled)
 
     def test_bridge_token_is_required_even_when_codex_chat_is_disabled(self):
         with patch.dict(

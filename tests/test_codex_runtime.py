@@ -18,7 +18,6 @@ class CodexRuntimeWiringTest(unittest.TestCase):
             codex_allowed_channel_id=20,
             codex_allowed_user_ids=frozenset({30}),
             codex_bridge_token="a" * 64,
-            server_activity_enabled=False,
             temp_voice_enabled=False,
             steam_free_games_enabled=False,
             ai_text_display_enabled=True,
@@ -30,7 +29,6 @@ class CodexRuntimeWiringTest(unittest.TestCase):
             patch("src.bot.TempVoiceManager") as voice_class,
             patch("src.bot.SteamFreeGamesNotifier") as steam_class,
             patch("src.bot.CalendarManager") as calendar_class,
-            patch("src.bot.ServerActivityMonitor") as activity_class,
             patch("src.bot.CodexAccess") as access_class,
             patch("src.bot.HoroBot") as bot_class,
         ):
@@ -47,14 +45,12 @@ class CodexRuntimeWiringTest(unittest.TestCase):
             frozenset({30}),
             state_path=DEFAULT_CODEX_ACCESS_STATE_PATH,
         )
-        activity_class.assert_not_called()
         bot_class.assert_called_once_with(
             codex_class.return_value,
             access_class.return_value,
             voice_class.return_value,
             steam_class.return_value,
             calendar=calendar_class.return_value,
-            server_activity=None,
             ai_text_display_enabled=True,
             temp_voice_enabled=False,
             steam_free_games_enabled=False,
@@ -88,6 +84,7 @@ class CodexBotLifecycleTest(unittest.IsolatedAsyncioTestCase):
         await bot.on_ready()
 
         steam.start.assert_not_called()
+        self.assertTrue(bot.intents.members)
         temp_voice.reconcile.assert_not_awaited()
 
     async def test_setup_starts_codex_and_close_closes_it(self):
@@ -100,7 +97,6 @@ class CodexBotLifecycleTest(unittest.IsolatedAsyncioTestCase):
         steam = SimpleNamespace(start=lambda _bot: None, close=AsyncMock())
         bot = object.__new__(HoroBot)
         bot.codex = codex
-        bot.server_activity = None
         bot.calendar = calendar
         bot.steam_free_games = steam
         bot.steam_free_games_enabled = False

@@ -22,7 +22,6 @@ class PreflightTest(unittest.TestCase):
             temp_voice_enabled=False,
             steam_free_games_enabled=False,
             ai_text_display_enabled=True,
-            server_activity_enabled=True,
         )
         with tempfile.TemporaryDirectory() as temp_dir:
             state_path = Path(temp_dir) / "codex_access.json"
@@ -53,7 +52,7 @@ class PreflightTest(unittest.TestCase):
         self.assertFalse(payload["temp_voice_enabled"])
         self.assertFalse(payload["steam_free_games_enabled"])
         self.assertTrue(payload["ai_text_display_enabled"])
-        self.assertTrue(payload["server_activity_enabled"])
+        self.assertNotIn("server_activity_enabled", payload)
 
 
     def test_missing_seed_and_persisted_channel_reports_unconfigured(self):
@@ -67,7 +66,6 @@ class PreflightTest(unittest.TestCase):
             temp_voice_enabled=False,
             steam_free_games_enabled=False,
             ai_text_display_enabled=True,
-            server_activity_enabled=False,
         )
         with tempfile.TemporaryDirectory() as temp_dir:
             output = io.StringIO()

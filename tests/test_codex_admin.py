@@ -45,7 +45,6 @@ class CodexAdminPanelTest(unittest.IsolatedAsyncioTestCase):
             codex_status=self.status,
             temp_voice=voice,
             steam_free_games=steam,
-            server_activity=None,
         )
 
     def test_ai_page_reports_codex_runtime_without_legacy_router_fields(self):

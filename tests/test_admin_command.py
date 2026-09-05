@@ -6,21 +6,19 @@ from unittest.mock import AsyncMock
 from src.admin_panel import AdminPanelView
 from src.bot import HoroBot
 from src.codex_bridge_client import CodexAccess, CodexRuntimeStatus
-from src.server_activity import ServerActivityStatus
 from src.steam_free_games import SteamGuildStatus
 from src.temp_voice import TempVoiceGuildStatus
 
 
 class AdminCommandTest(unittest.IsolatedAsyncioTestCase):
     @staticmethod
-    def make_bot(codex=None, server_activity=None):
+    def make_bot(codex=None):
         return HoroBot(
             codex or SimpleNamespace(get_runtime_status=AsyncMock()),
             CodexAccess(True, 10, 20, frozenset({1})),
             SimpleNamespace(),
             SimpleNamespace(),
             SimpleNamespace(),
-            server_activity=server_activity,
         )
 
     async def test_control_panel_command_is_registered_for_administrators(self):
@@ -55,9 +53,6 @@ class AdminCommandTest(unittest.IsolatedAsyncioTestCase):
         steam = SimpleNamespace(
             get_guild_status=lambda _guild_id: SteamGuildStatus(True, 900, 456, 1)
         )
-        server_activity = SimpleNamespace(
-            get_runtime_status=lambda: ServerActivityStatus(True, 0, 100, 0)
-        )
         access = CodexAccess(True, 10, 20, frozenset({1}))
         bot = HoroBot(
             codex,
@@ -65,7 +60,6 @@ class AdminCommandTest(unittest.IsolatedAsyncioTestCase):
             temp_voice,
             steam,
             SimpleNamespace(),
-            server_activity=server_activity,
         )
         interaction = SimpleNamespace(
             guild=SimpleNamespace(id=10),
@@ -96,7 +90,6 @@ class AdminCommandTest(unittest.IsolatedAsyncioTestCase):
         codex.get_runtime_status.assert_awaited_once_with()
         kwargs = interaction.edit_original_response.await_args.kwargs
         self.assertIsInstance(kwargs["view"], AdminPanelView)
-        self.assertIs(kwargs["view"].server_activity, server_activity)
         self.assertIs(kwargs["view"].codex_access, access)
         self.assertEqual(kwargs["view"].user_role_ids, frozenset({70, 80}))
         self.assertTrue(kwargs["view"].has_components_v2())
@@ -104,7 +97,7 @@ class AdminCommandTest(unittest.IsolatedAsyncioTestCase):
         self.assertIn("AI 助手", rendered)
         self.assertIn("臨時語音", rendered)
         self.assertIn("Steam 免費遊戲", rendered)
-        self.assertIn("伺服器活動", rendered)
+        self.assertNotIn("伺服器活動", rendered)
         self.assertFalse(kwargs["allowed_mentions"].everyone)
         self.assertFalse(kwargs["allowed_mentions"].users)
         self.assertFalse(kwargs["allowed_mentions"].roles)

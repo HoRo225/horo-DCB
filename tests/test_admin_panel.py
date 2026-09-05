@@ -6,7 +6,6 @@ import discord
 
 from src.admin_panel import MAX_STEAM_OFFERS_SHOWN, AdminPanelView
 from src.codex_bridge_client import CodexAccess, CodexRuntimeStatus
-from src.server_activity import ActivitySummary, ServerActivityStatus, StoredActivityEvent
 from src.steam_free_games import SteamFetchResult, SteamGuildStatus, SteamOffer
 from src.temp_voice import TempVoiceGuildStatus
 
@@ -107,16 +106,6 @@ class FakeSteam:
         )
 
 
-class FakeActivity:
-    def __init__(self, status=None, summary=None, recent=()):
-        self.status = status or ServerActivityStatus(True, 2, 100, 0)
-        self.get_summary = AsyncMock(return_value=summary or ActivitySummary())
-        self.get_recent_events = AsyncMock(return_value=list(recent))
-
-    def get_runtime_status(self):
-        return self.status
-
-
 class AdminPanelViewTest(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
         self.codex_status = CodexRuntimeStatus(
@@ -136,7 +125,6 @@ class AdminPanelViewTest(unittest.IsolatedAsyncioTestCase):
         )
         self.temp_voice = FakeTempVoice()
         self.steam = FakeSteam()
-        self.activity = FakeActivity()
         self.view = AdminPanelView(
             user_id=1,
             guild_id=10,
@@ -145,7 +133,6 @@ class AdminPanelViewTest(unittest.IsolatedAsyncioTestCase):
             codex_status=self.codex_status,
             temp_voice=self.temp_voice,
             steam_free_games=self.steam,
-            server_activity=self.activity,
         )
 
     @staticmethod
@@ -212,12 +199,12 @@ class AdminPanelViewTest(unittest.IsolatedAsyncioTestCase):
     def selected(select):
         return [option["value"] for option in select["options"] if option.get("default")]
 
-    def test_overview_shows_health_setup_and_activity_without_detail(self):
+    def test_overview_shows_health_and_setup_without_internal_detail(self):
         self.assertTrue(self.view.has_components_v2())
         text = self.text(self.view)
         self.assertIn("# 管理控制台\n-# 系統狀態與管理工具", text)
         self.assertIn("## 系統狀態\n**全部正常**", text)
-        self.assertIn("伺服器活動皆可用", text)
+        self.assertIn("AI 助手、臨時語音與 Steam 免費遊戲皆可用", text)
         self.assertNotIn("## 需要注意", text)
         self.assertIn("## 設定\n**3 / 3 已設定**", text)
         self.assertIn("Steam 通知目前追蹤 1 款活動", text)
@@ -248,7 +235,7 @@ class AdminPanelViewTest(unittest.IsolatedAsyncioTestCase):
         self.view._render_overview()
         text = self.text(self.view)
 
-        self.assertIn("**2 個正常 · 1 個待設定 · 1 個異常**", text)
+        self.assertIn("**1 個正常 · 1 個待設定 · 1 個異常**", text)
         self.assertIn("## 需要注意", text)
         self.assertIn("**AI 助手 · 異常**", text)
         self.assertIn("Codex bridge 無法連線", text)
@@ -266,7 +253,7 @@ class AdminPanelViewTest(unittest.IsolatedAsyncioTestCase):
         self.view._render_overview()
         text = self.text(self.view)
 
-        self.assertIn("**3 個正常 · 1 個待設定 · 0 個異常**", text)
+        self.assertIn("**2 個正常 · 1 個待設定 · 0 個異常**", text)
         self.assertIn("**Steam 免費遊戲 · 待設定**", text)
         self.assertIn("通知頻道尚未綁定", text)
         self.assertIn("## 設定\n**2 / 3 已設定**", text)
@@ -319,7 +306,6 @@ class AdminPanelViewTest(unittest.IsolatedAsyncioTestCase):
                     codex_status=self.codex_status,
                     temp_voice=self.temp_voice,
                     steam_free_games=self.steam,
-                    server_activity=self.activity,
                 )
                 text = self.text(view)
                 self.assertIn(heading, text)
@@ -361,7 +347,7 @@ class AdminPanelViewTest(unittest.IsolatedAsyncioTestCase):
         self.view._render_overview()
         text = self.text(self.view)
 
-        self.assertIn("**2 個正常 · 0 個待設定 · 2 個異常**", text)
+        self.assertIn("**1 個正常 · 0 個待設定 · 2 個異常**", text)
         self.assertIn("臨時語音功能已停用", text)
         self.assertIn("通知功能已停用", text)
         self.assertIn("## 設定\n**1 / 3 已設定**", text)
@@ -399,6 +385,15 @@ class AdminPanelViewTest(unittest.IsolatedAsyncioTestCase):
         self.temp_voice.reconcile.assert_not_awaited()
         self.steam.fetch_current_offers.assert_not_awaited()
 
+    def test_main_navigation_excludes_retired_activity(self):
+        self.assertEqual(
+            [
+                option["value"]
+                for option in self.selects(self.view)[0]["options"]
+            ],
+            ["overview", "ai", "modules"],
+        )
+
     def test_main_select_sits_right_below_the_large_separator(self):
         for page, render in (
             ("overview", self.view._render_overview),
@@ -406,7 +401,6 @@ class AdminPanelViewTest(unittest.IsolatedAsyncioTestCase):
             ("modules", self.view._render_modules),
             ("voice", self.view._render_voice),
             ("steam", self.view._render_steam),
-            ("activity", self.view._render_activity),
         ):
             with self.subTest(page=page):
                 render()
@@ -431,8 +425,6 @@ class AdminPanelViewTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.selected(self.selects(self.view)[0]), ["ai"])
         self.view._render_modules()
         self.assertEqual(self.selected(self.selects(self.view)[0]), ["modules"])
-        self.view._render_activity()
-        self.assertEqual(self.selected(self.selects(self.view)[0]), ["activity"])
 
     def test_module_select_only_exists_on_the_modules_branch(self):
         self.assertEqual(len(self.selects(self.view)), 1)
@@ -941,7 +933,6 @@ class AdminPanelViewTest(unittest.IsolatedAsyncioTestCase):
             temp_voice=self.temp_voice,
             steam_free_games=self.steam,
             temp_voice_enabled=False,
-            server_activity=self.activity,
         )
         view._render_voice()
 
@@ -965,7 +956,6 @@ class AdminPanelViewTest(unittest.IsolatedAsyncioTestCase):
             steam_free_games=self.steam,
             temp_voice_enabled=False,
             steam_free_games_enabled=False,
-            server_activity=self.activity,
         )
 
         text = self.text(view)
@@ -982,124 +972,6 @@ class AdminPanelViewTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(interaction.response.defer_count, 1)
         self.assertEqual(len(interaction.original_edits), 1)
         self.assertIn("Deponia", self.text(self.view))
-
-    def test_activity_constructor_and_page_use_components_v2(self):
-        self.view._render_activity()
-        self.assertTrue(self.view.has_components_v2())
-        self.assertEqual(self.view.page, "activity")
-        self.assertIn("# 伺服器活動\n-# 活動監聽與稽核紀錄", self.text(self.view))
-        self.assertEqual(self.selected(self.selects(self.view)[0]), ["activity"])
-        self.assertEqual(self.selected(self.selects(self.view)[1]), ["all"])
-        self.assertEqual(
-            [option["value"] for option in self.selects(self.view)[1]["options"]],
-            ["all", "admin", "member", "message", "voice"],
-        )
-
-    def test_overview_reports_activity_normal_disabled_unavailable_and_dropped(self):
-        self.assertIn("**全部正常**", self.text(self.view))
-
-        disabled = AdminPanelView(
-            user_id=1,
-            guild_id=10,
-            codex_client=self.codex_client,
-            codex_access=self.codex_access,
-            codex_status=self.codex_status, temp_voice=self.temp_voice,
-            steam_free_games=self.steam,
-        )
-        disabled_text = self.text(disabled)
-        self.assertIn("已啟用功能正常", disabled_text)
-        self.assertIn("伺服器活動依設定停用", disabled_text)
-        self.assertNotIn("**伺服器活動 · 異常**", disabled_text)
-
-        self.activity.status = ServerActivityStatus(False, 0, 100, 0)
-        self.view._render_overview()
-        self.assertIn("**伺服器活動 · 異常**", self.text(self.view))
-        self.assertIn("活動儲存空間不可用", self.text(self.view))
-
-        self.activity.status = ServerActivityStatus(True, 4, 100, 3)
-        self.view._render_overview()
-        self.assertIn("**伺服器活動 · 異常**", self.text(self.view))
-        self.assertIn("有活動紀錄因佇列已滿而遺失", self.text(self.view))
-
-    async def test_activity_navigation_queries_summary_and_recent_and_edits_same_message(self):
-        self.activity.get_summary.return_value = ActivitySummary(12, 1, 2, 3, 4, 2)
-        interaction = FakeInteraction()
-
-        await self.view.handle_action(interaction, "activity")
-
-        self.activity.get_summary.assert_awaited_once_with(10)
-        self.activity.get_recent_events.assert_awaited_once_with(10, "all", limit=10)
-        self.assertEqual(interaction.response.defer_count, 1)
-        self.assertEqual(interaction.response.edits, [])
-        self.assertEqual(len(interaction.original_edits), 1)
-        allowed = interaction.original_edits[0]["allowed_mentions"]
-        self.assertFalse(allowed.everyone)
-        self.assertFalse(allowed.users)
-        self.assertFalse(allowed.roles)
-        text = self.text(self.view)
-        self.assertIn("30 天保存 · 佇列 2 / 100 · 已遺失 0 筆", text)
-        self.assertIn("**總計 12**", text)
-        self.assertIn("管理 1", text)
-        self.assertIn("成員 2", text)
-        self.assertIn("訊息 3", text)
-        self.assertIn("語音 4", text)
-        self.assertIn("其他 2", text)
-
-    async def test_activity_filter_and_refresh_query_current_filter(self):
-        await self.view.handle_action(FakeInteraction(), "activity_filter:message")
-        self.activity.get_recent_events.assert_awaited_once_with(10, "message", limit=10)
-        self.assertEqual(self.selected(self.selects(self.view)[1]), ["message"])
-
-        self.activity.get_recent_events.reset_mock()
-        interaction = FakeInteraction()
-        await self.view.handle_action(interaction, "refresh")
-        self.activity.get_recent_events.assert_awaited_once_with(10, "message", limit=10)
-        self.assertEqual(interaction.response.defer_count, 1)
-        self.assertEqual(len(interaction.original_edits), 1)
-
-    async def test_disabled_activity_page_does_not_query_database(self):
-        view = AdminPanelView(
-            user_id=1,
-            guild_id=10,
-            codex_client=self.codex_client,
-            codex_access=self.codex_access,
-            codex_status=self.codex_status, temp_voice=self.temp_voice,
-            steam_free_games=self.steam, server_activity=None,
-        )
-        interaction = FakeInteraction()
-        await view.handle_action(interaction, "activity")
-        self.activity.get_summary.assert_not_awaited()
-        self.activity.get_recent_events.assert_not_awaited()
-        self.assertIn("**依設定停用**", self.text(view))
-        self.assertIn("保存期限 30 天", self.text(view))
-
-    async def test_activity_query_failure_logs_generic_message_and_renders_safely(self):
-        self.activity.get_summary.side_effect = RuntimeError("SECRET DATABASE DETAIL")
-        with self.assertLogs(level="ERROR") as captured:
-            await self.view.handle_action(FakeInteraction(), "activity")
-
-        self.assertEqual(captured.output, ["ERROR:root:管理控制台讀取伺服器活動失敗。"])
-        text = self.text(self.view)
-        self.assertIn("目前無法取得伺服器活動", text)
-        self.assertNotIn("SECRET DATABASE DETAIL", text)
-        self.assertNotIn("最近 24 小時", text)
-
-    async def test_activity_recent_escapes_event_type_and_never_renders_mentions_or_details(self):
-        events = [
-            StoredActivityEvent(100 + index, "**edit**", 123, 456, 789, 987)
-            for index in range(12)
-        ]
-        self.activity.get_recent_events.return_value = events
-
-        await self.view.handle_action(FakeInteraction(), "activity")
-
-        text = self.text(self.view)
-        self.assertEqual(text.count(r"\*\*edit\*\*"), 10)
-        self.assertIn("actor=123 target=456 channel=789 message=987", text)
-        self.assertNotIn("<@", text)
-        self.assertNotIn("<#", text)
-        self.assertNotIn("details_json", text)
-
 
 if __name__ == "__main__":
     unittest.main()

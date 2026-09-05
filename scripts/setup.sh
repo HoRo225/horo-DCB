@@ -39,7 +39,7 @@ Setup files are ready.
 7. In Discord, use /控制台 → AI 助手 to select 1-25 text channels and roles.
 
 Codex stores OAuth and persistent thread state only in codex_data. The Bot does
-not mount that volume. The selected AI channels and roles are stored in bot_data. Fresh
-installs keep voice, Steam automation, and Server Activity disabled until their
-documented switches are enabled.
+not mount that volume. The selected AI channels and roles are stored in bot_data.
+Fresh installs keep voice and Steam automation disabled until their documented
+switches are enabled.
 EOF

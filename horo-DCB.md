@@ -78,7 +78,7 @@ Device login 由 SDK 的 login_chatgpt_device_code 執行；horo-DCB 不解析�
 
 ## 6. Persistent data
 
-bot_data 保留 Calendar、Steam、temporary voice 與 Server Activity 狀態。既有 Semantic Memory SQLite 不做 migration，新 image 不會開啟或修改它。
+bot_data 只保留 Codex Channel／Role access、Calendar、Steam 與 temporary voice 狀態。Bot 不使用 app-owned SQLite，也不保存 Guild 活動紀錄。
 
 codex_data 包含 Codex OAuth cache 與 horo_threads.json：
 
@@ -124,11 +124,10 @@ mapping 使用候選 dict、temporary file、chmod 0600 與 os.replace；持久�
 | src/calendar_events.py | Calendar 看板、Modal、人工建立／修改 |
 | src/steam_free_games.py | Steam 排程與通知 |
 | src/temp_voice.py | 臨時語音 |
-| src/server_activity.py | 獨立 activity state |
 | src/discord_images.py | Discord 圖片驗證與 data URL |
 | src/discord_output.py | Markdown splitting 與 Components V2 |
 
-已刪除 AIClient、AgentTools、ChatManager、SemanticMemory 與 9Router image。Calendar／Steam 不暴露為自然語言 tool。
+已刪除 AIClient、AgentTools、ChatManager、SemanticMemory、Server Activity 與 9Router。Members intent 僅供白名單角色即時撤權，不保存成員事件。Calendar／Steam 不暴露為自然語言 tool。
 
 ## 9. Verification gates
 
@@ -150,6 +149,6 @@ horo-server 保存隔離原始碼 worktree；建置與測試使用 GitHub Action
 4. 設定 mode 0600 的 .env 與精確 allowlist。
 5. 停舊 Bot，啟動 codex 並等待 healthy，再啟動新 Bot。
 6. 完成 owner-only chat、resume、Web Search、三種圖片、控制台與非 AI smoke。
-7. 七天內保留舊 compose、images 與 Volumes。
+7. 七天內保留前一個 Codex-era compose／image 與現行 Volumes；不保留 pre-Codex／9Router／app-owned SQLite 回復點。
 
-保留既有 JSON 版本。回滾停止新服務、恢復舊 compose／image，保留 codex_data 與其他模組的最新資料。若授權檔缺失、損壞或為 v3 空角色，舊版啟動前維持 AI 停用，避免 legacy 回退；不用整份 volume 回復來處理程式回滾。回復點至少保留至本批切換後七天，舊 9Router／Semantic Memory 清理仍須人工確認。
+保留既有 JSON 版本。回滾停止新服務、恢復 Codex-era compose／image，保留 codex_data 與其他模組的最新資料。若授權檔缺失、損壞或為 v3 空角色，舊版啟動前維持 AI 停用，避免 legacy 回退；不用整份 volume 回復來處理程式回滾。pre-Codex／9Router 與舊 Semantic Memory 不再提供回滾。

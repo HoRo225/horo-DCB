@@ -73,8 +73,7 @@ for key in \
     CODEX_ENABLED \
     TEMP_VOICE_ENABLED \
     STEAM_FREE_GAMES_ENABLED \
-    AI_TEXT_DISPLAY_ENABLED \
-    SERVER_ACTIVITY_ENABLED
+    AI_TEXT_DISPLAY_ENABLED
 do
     value=$(read_env_value "$key")
     normalized=$(printf '%s' "$value" | tr '[:upper:]' '[:lower:]')

@@ -34,23 +34,23 @@ Bot 與 sidecar 使用同一個 immutable image、不同 command 和不同 Volum
 - Codex live Web Search 與 Markdown 來源連結。
 - Discord Calendar 看板、Modal、人工建立／修改活動。
 - Steam 限時免費排程、通知與控制台。
-- 臨時語音、Server Activity、Discord Components V2 與長訊息分段。
+- 臨時語音、Discord Components V2 與長訊息分段。
 
 暫停：
 
 - 自然語言 Calendar 查詢或草稿。
 - 自然語言 Steam 查詢。
-- Semantic Memory 與頻道旁聽 history。
 - Web 搜尋圖片 Gallery。
 
 Codex 失敗會顯示固定安全訊息，不會 fallback 到其他模型服務。
+Semantic Memory、Server Activity 與 9Router 已永久退役，不保留歷史資料。
 
 ## 安裝
 
 需求：
 
 - Docker Engine 與 Docker Compose v2。
-- Discord Application、Bot Token 與 Message Content Intent。
+- Discord Application、Bot Token、Message Content Intent 與 Server Members Intent；Members intent 只用於白名單角色被移除時立即取消 Codex 工作。
 - 可使用 Codex 的 ChatGPT 帳號；實際方案額度、device login、持久 resume、live search 與圖片能力必須在部署前真人驗證。
 
 以下先在隔離 Linux 來源工作區產生範例設定。實際憑證只放在目標部署主機；GitHub Actions 使用假設定建置與測試，不做 device login 或連線真人服務：
@@ -107,7 +107,6 @@ docker compose up -d
 | AI_TEXT_DISPLAY_ENABLED | 1 | Discord Components V2 文字輸出。 |
 | TEMP_VOICE_ENABLED | 0 | 臨時語音。 |
 | STEAM_FREE_GAMES_ENABLED | 0 | Steam 限免通知。 |
-| SERVER_ACTIVITY_ENABLED | 0 | Server Activity 持久記錄。 |
 
 CODEX_ENABLED=0 時 allowlist 可留空，但 Codex sidecar 固定存在，因此 CODEX_BRIDGE_TOKEN 必須始終有效；設為 1 時 Guild 必須有效，頻道與角色可在啟動後由控制台設定。尚未完成任何有效授權組合時 AI 一律拒絕請求。Bridge URL 固定為 http://codex:8765，不是部署選項。
 
@@ -125,7 +124,7 @@ Thread mapping：
 guild:<guild_id>:thread:<thread_id>
 ~~~
 
-只有 mention Bot 或 reply Bot 的直接互動會寫入對應 Codex thread。Thread ID 保存於 codex_data 的 horo_threads.json，採原子寫入與 mode 0600。Bot 或 sidecar restart 後可 resume；不搬移舊 Semantic Memory。
+只有 mention Bot 或 reply Bot 的直接互動會寫入對應 Codex thread。Thread ID 保存於 codex_data 的 horo_threads.json，採原子寫入與 mode 0600。Bot 或 sidecar restart 後可 resume。
 
 圖片限制：
 
@@ -196,4 +195,4 @@ Runtime image 建置時執行 pip check，完成後移除 pip。CI 另外驗證 
 
 切換前保留舊 compose、舊 image 與必要狀態回復點至少七天，自實際切換起算。既有 mapping v1 與 access v2／v3 格式保留；回滾優先還原 image／compose，不整批覆蓋 bot_data。
 
-舊版可能對空 v3 角色回退至 legacy 使用者。回滾前若授權檔缺失、損壞或角色為空，先維持 AI 停用，保留資料並修復有效授權，再重新開放。刪除授權檔不是修復方式。七天後的舊 9Router／Semantic Memory 清理仍須人工確認。
+舊版可能對空 v3 角色回退至 legacy 使用者。回滾前若授權檔缺失、損壞或角色為空，先維持 AI 停用，保留資料並修復有效授權，再重新開放。刪除授權檔不是修復方式。pre-Codex／9Router 回滾點與舊 Semantic Memory 已永久退役。
