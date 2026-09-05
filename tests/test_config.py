@@ -1,7 +1,7 @@
 import unittest
 from unittest.mock import patch
 
-from src.config import AppConfig, env_flag, positive_int_env, required_env
+from src.config import env_flag, required_env
 
 
 class ConfigHelpersTest(unittest.TestCase):
@@ -39,12 +39,3 @@ class ConfigHelpersTest(unittest.TestCase):
         with patch.dict("src.config.os.environ", {"FLAG": "maybe"}, clear=True):
             with self.assertRaisesRegex(RuntimeError, "FLAG"):
                 env_flag("FLAG", default=False)
-
-    def test_positive_int_env_validates_values(self):
-        with patch.dict("src.config.os.environ", {}, clear=True):
-            self.assertEqual(positive_int_env("SIZE", default=768), 768)
-        for value in ("0", "-1", "1.5", "not-a-number"):
-            with self.subTest(value=value):
-                with patch.dict("src.config.os.environ", {"SIZE": value}, clear=True):
-                    with self.assertRaisesRegex(RuntimeError, "SIZE"):
-                        positive_int_env("SIZE", default=768)

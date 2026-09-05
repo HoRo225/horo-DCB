@@ -5,7 +5,7 @@ from unittest.mock import AsyncMock, Mock, patch
 import discord
 
 from src.admin_panel import MAX_STEAM_OFFERS_SHOWN, AdminPanelView
-from src.codex_bridge_client import CodexRuntimeStatus
+from src.codex_bridge_client import CodexAccess, CodexRuntimeStatus
 from src.server_activity import ActivitySummary, ServerActivityStatus, StoredActivityEvent
 from src.steam_free_games import SteamFetchResult, SteamGuildStatus, SteamOffer
 from src.temp_voice import TempVoiceGuildStatus
@@ -44,8 +44,14 @@ class FakeResponse:
 
 
 class FakeInteraction:
-    def __init__(self, *, user_id=1, guild_id=10, administrator=True, response_done=False):
-        self.user = SimpleNamespace(id=user_id)
+    def __init__(
+        self, *, user_id=1, role_ids=(), guild_id=10,
+        administrator=True, response_done=False,
+    ):
+        self.user = SimpleNamespace(
+            id=user_id,
+            roles=[SimpleNamespace(id=role_id) for role_id in role_ids],
+        )
         self.guild_id = guild_id
         self.guild = SimpleNamespace(id=guild_id) if guild_id is not None else None
         self.permissions = SimpleNamespace(administrator=administrator)
@@ -54,6 +60,14 @@ class FakeInteraction:
 
     async def edit_original_response(self, **kwargs):
         self.original_edits.append(kwargs)
+
+
+def make_role(role_id, *, guild_id=10, default=False):
+    return SimpleNamespace(
+        id=role_id,
+        guild=SimpleNamespace(id=guild_id),
+        is_default=lambda: default,
+    )
 
 
 class FakeTempVoice:
@@ -114,9 +128,11 @@ class AdminPanelViewTest(unittest.IsolatedAsyncioTestCase):
             "live",
             3,
         )
+        self.codex_access = CodexAccess(True, 10, 20, frozenset({1}))
         self.codex_client = SimpleNamespace(
             internal_value="SENSITIVE_VALUE",
             get_runtime_status=AsyncMock(return_value=self.codex_status),
+            archive_scope=AsyncMock(),
         )
         self.temp_voice = FakeTempVoice()
         self.steam = FakeSteam()
@@ -125,6 +141,7 @@ class AdminPanelViewTest(unittest.IsolatedAsyncioTestCase):
             user_id=1,
             guild_id=10,
             codex_client=self.codex_client,
+            codex_access=self.codex_access,
             codex_status=self.codex_status,
             temp_voice=self.temp_voice,
             steam_free_games=self.steam,
@@ -175,6 +192,22 @@ class AdminPanelViewTest(unittest.IsolatedAsyncioTestCase):
             if component.get("type") == discord.ComponentType.string_select.value
         ]
 
+    @classmethod
+    def channel_selects(cls, view):
+        return [
+            component
+            for component in cls.all_components(view)
+            if component.get("type") == discord.ComponentType.channel_select.value
+        ]
+
+    @classmethod
+    def role_selects(cls, view):
+        return [
+            component
+            for component in cls.all_components(view)
+            if component.get("type") == discord.ComponentType.role_select.value
+        ]
+
     @staticmethod
     def selected(select):
         return [option["value"] for option in select["options"] if option.get("default")]
@@ -186,7 +219,7 @@ class AdminPanelViewTest(unittest.IsolatedAsyncioTestCase):
         self.assertIn("## 系統狀態\n**全部正常**", text)
         self.assertIn("伺服器活動皆可用", text)
         self.assertNotIn("## 需要注意", text)
-        self.assertIn("## 設定\n**2 / 2 已設定**", text)
+        self.assertIn("## 設定\n**3 / 3 已設定**", text)
         self.assertIn("Steam 通知目前追蹤 1 款活動", text)
         self.assertRegex(text, r"狀態更新 <t:\d+:R>")
         self.assertNotIn("GPT 5.6 Luna", text)
@@ -222,7 +255,7 @@ class AdminPanelViewTest(unittest.IsolatedAsyncioTestCase):
         self.assertIn("**臨時語音 · 待設定**", text)
         self.assertIn("入口頻道尚未綁定", text)
         self.assertNotIn("**Steam 免費遊戲 · 正常**", text)
-        self.assertIn("## 設定\n**1 / 2 已設定**", text)
+        self.assertIn("## 設定\n**2 / 3 已設定**", text)
         self.assertIn("尚未完成：臨時語音入口", text)
 
     def test_overview_reports_steam_unconfigured_as_pending(self):
@@ -236,9 +269,64 @@ class AdminPanelViewTest(unittest.IsolatedAsyncioTestCase):
         self.assertIn("**3 個正常 · 1 個待設定 · 0 個異常**", text)
         self.assertIn("**Steam 免費遊戲 · 待設定**", text)
         self.assertIn("通知頻道尚未綁定", text)
-        self.assertIn("## 設定\n**1 / 2 已設定**", text)
+        self.assertIn("## 設定\n**2 / 3 已設定**", text)
         self.assertIn("尚未完成：Steam 通知頻道", text)
         self.assertIn("Steam 通知目前追蹤 0 款活動", text)
+
+    def test_overview_reports_disabled_unconfigured_and_corrupt_ai_access(self):
+        corrupt = CodexAccess(True, 10, 20, frozenset({1}))
+        corrupt.state_available = False
+        cases = (
+            (
+                "disabled",
+                CodexAccess(False, 10, 20, frozenset({1})),
+                "**AI 助手 · 停用**",
+                "AI 對話目前依設定停用",
+            ),
+            (
+                "other_guild",
+                CodexAccess(True, 11, 20, frozenset({1})),
+                "**AI 助手 · 停用**",
+                "此伺服器不在 AI 白名單",
+            ),
+            (
+                "missing_channels",
+                CodexAccess(True, 10, None, frozenset({1})),
+                "**AI 助手 · 待設定**",
+                "白名單頻道尚未設定",
+            ),
+            (
+                "missing_mode",
+                CodexAccess(True, 10, 20, frozenset()),
+                "**AI 助手 · 待設定**",
+                "白名單身分組或舊使用者尚未設定",
+            ),
+            (
+                "corrupt",
+                corrupt,
+                "**AI 助手 · 異常**",
+                "白名單狀態檔不可用",
+            ),
+        )
+
+        for name, access, heading, detail in cases:
+            with self.subTest(name=name):
+                view = AdminPanelView(
+                    user_id=1,
+                    guild_id=10,
+                    codex_client=self.codex_client,
+                    codex_access=access,
+                    codex_status=self.codex_status,
+                    temp_voice=self.temp_voice,
+                    steam_free_games=self.steam,
+                    server_activity=self.activity,
+                )
+                text = self.text(view)
+                self.assertIn(heading, text)
+                self.assertIn(detail, text)
+                if "待設定" in heading or "異常" in heading:
+                    self.assertIn("AI 白名單", text)
+                    self.assertNotIn("## 系統狀態\n**全部正常**", text)
 
     def test_overview_reports_unauthenticated_codex_as_pending(self):
         self.view.codex_status = CodexRuntimeStatus(
@@ -276,7 +364,7 @@ class AdminPanelViewTest(unittest.IsolatedAsyncioTestCase):
         self.assertIn("**2 個正常 · 0 個待設定 · 2 個異常**", text)
         self.assertIn("臨時語音功能已停用", text)
         self.assertIn("通知功能已停用", text)
-        self.assertIn("## 設定\n**0 / 2 已設定**", text)
+        self.assertIn("## 設定\n**1 / 3 已設定**", text)
         self.assertIn("尚未完成：臨時語音入口 · Steam 通知頻道", text)
         self.assertIn("Steam 通知活動追蹤狀態無法取得", text)
 
@@ -468,6 +556,212 @@ class AdminPanelViewTest(unittest.IsolatedAsyncioTestCase):
         self.assertIn("**Unknown · 未登入**", text)
         self.assertNotIn("9Router", text)
 
+    def test_ai_page_has_multi_text_channel_selector_with_current_defaults(self):
+        self.codex_access.set_channels(10, frozenset({20, 21}))
+        self.view._render_ai()
+
+        channel_selects = self.channel_selects(self.view)
+        self.assertEqual(len(channel_selects), 1)
+        self.assertEqual(channel_selects[0]["min_values"], 1)
+        self.assertEqual(channel_selects[0]["max_values"], 25)
+        self.assertEqual(
+            channel_selects[0]["channel_types"],
+            [discord.ChannelType.text.value],
+        )
+        self.assertEqual(
+            channel_selects[0]["default_values"],
+            [
+                {"id": 20, "type": "channel"},
+                {"id": 21, "type": "channel"},
+            ],
+        )
+        self.assertIn("白名單頻道 2 個", self.text(self.view))
+        self.assertIn("<#20> <#21>", self.text(self.view))
+
+    def test_ai_page_shows_legacy_user_mode_and_current_operator_status(self):
+        self.view._render_ai()
+
+        role_select = self.role_selects(self.view)[0]
+        self.assertEqual(role_select["min_values"], 1)
+        self.assertEqual(role_select["max_values"], 25)
+        self.assertEqual(role_select.get("default_values", []), [])
+        text = self.text(self.view)
+        self.assertIn("暫用舊使用者白名單（1 人）", text)
+        self.assertIn("目前操作者：已允許", text)
+
+    def test_ai_page_preselects_roles_and_reports_operator_access(self):
+        self.codex_access.set_roles(10, frozenset({70, 80}))
+        self.view.user_role_ids = frozenset({60, 80})
+
+        self.view._render_ai()
+
+        role_select = self.role_selects(self.view)[0]
+        self.assertEqual(
+            role_select["default_values"],
+            [
+                {"id": 70, "type": "role"},
+                {"id": 80, "type": "role"},
+            ],
+        )
+        text = self.text(self.view)
+        self.assertIn("白名單身分組 2 個", text)
+        self.assertIn("<@&70> <@&80>", text)
+        self.assertIn("目前操作者：已允許", text)
+
+        self.view.user_role_ids = frozenset({60})
+        self.view._render_ai()
+        self.assertIn("目前操作者：未允許", self.text(self.view))
+
+    async def test_role_change_archives_before_applying_new_roles(self):
+        self.codex_access.set_roles(10, frozenset({70}))
+        interaction = FakeInteraction(role_ids=(80,))
+        roles = (make_role(80),)
+
+        async def archive(guild_id):
+            self.assertEqual(guild_id, 10)
+            self.assertEqual(self.codex_access.role_ids, frozenset({70}))
+            self.assertFalse(
+                self.codex_access.allows(10, 20, 1, frozenset({70}))
+            )
+
+        self.codex_client.archive_scope.side_effect = archive
+
+        await self.view.handle_codex_role_select(interaction, roles)
+
+        self.assertEqual(self.codex_access.role_ids, frozenset({80}))
+        self.codex_client.archive_scope.assert_awaited_once_with(10)
+        self.assertIn("已更新 1 個白名單身分組", self.text(self.view))
+        self.assertIn("目前操作者：已允許", self.text(self.view))
+
+    async def test_role_archive_failure_keeps_old_roles(self):
+        self.codex_access.set_roles(10, frozenset({70}))
+        interaction = FakeInteraction(role_ids=(80,))
+        self.codex_client.archive_scope.side_effect = RuntimeError("SENSITIVE_DETAIL")
+
+        with self.assertLogs(level="ERROR"):
+            await self.view.handle_codex_role_select(
+                interaction,
+                (make_role(80),),
+            )
+
+        self.assertEqual(self.codex_access.role_ids, frozenset({70}))
+        text = self.text(self.view)
+        self.assertIn("角色設定未變更", text)
+        self.assertNotIn("SENSITIVE_DETAIL", text)
+
+    async def test_role_select_rejects_default_or_other_guild_role(self):
+        for role in (
+            make_role(10, default=True),
+            make_role(80, guild_id=11),
+        ):
+            with self.subTest(role_id=role.id):
+                interaction = FakeInteraction(role_ids=(role.id,))
+
+                await self.view.handle_codex_role_select(interaction, (role,))
+
+                self.assertEqual(self.codex_access.role_ids, frozenset())
+                self.codex_client.archive_scope.assert_not_awaited()
+                self.assertIn("只能選擇目前伺服器的一般身分組", self.text(self.view))
+
+    async def test_adding_channel_does_not_archive_existing_conversations(self):
+        interaction = FakeInteraction()
+        channels = (
+            SimpleNamespace(id=20, type=discord.ChannelType.text, guild=interaction.guild),
+            SimpleNamespace(id=21, type=discord.ChannelType.text, guild=interaction.guild),
+        )
+
+        await self.view.handle_codex_channel_select(interaction, channels)
+
+        self.assertTrue(self.codex_access.allows(10, 20, 1))
+        self.assertTrue(self.codex_access.allows(10, 21, 1))
+        self.codex_client.archive_scope.assert_not_awaited()
+        self.assertIn("已更新 2 個白名單頻道", self.text(self.view))
+
+    async def test_removing_channel_archives_guild_while_access_is_suspended(self):
+        self.codex_access.set_channels(10, frozenset({20, 21}))
+        interaction = FakeInteraction()
+        channels = (
+            SimpleNamespace(id=21, type=discord.ChannelType.text, guild=interaction.guild),
+        )
+
+        async def archive(guild_id):
+            self.assertEqual(guild_id, 10)
+            self.assertFalse(self.codex_access.allows(10, 21, 1))
+
+        self.codex_client.archive_scope.side_effect = archive
+
+        await self.view.handle_codex_channel_select(interaction, channels)
+
+        self.assertTrue(self.codex_access.allows(10, 21, 1))
+        self.assertFalse(self.codex_access.allows(10, 20, 1))
+        self.codex_client.archive_scope.assert_awaited_once_with(10)
+        self.assertEqual(interaction.response.defer_count, 1)
+        self.assertEqual(len(interaction.original_edits), 1)
+        self.assertIn("已更新 1 個白名單頻道並封存舊對話", self.text(self.view))
+
+    async def test_same_channels_are_saved_without_archiving(self):
+        interaction = FakeInteraction()
+        channels = (
+            SimpleNamespace(id=20, type=discord.ChannelType.text, guild=interaction.guild),
+        )
+
+        await self.view.handle_codex_channel_select(interaction, channels)
+
+        self.codex_client.archive_scope.assert_not_awaited()
+        self.assertTrue(self.codex_access.allows(10, 20, 1))
+        self.assertIn("目前已設定 1 個白名單頻道", self.text(self.view))
+
+    async def test_archive_failure_keeps_new_channel_and_reports_safe_warning(self):
+        self.codex_access.set_channels(10, frozenset({20, 21}))
+        interaction = FakeInteraction()
+        channels = (
+            SimpleNamespace(id=21, type=discord.ChannelType.text, guild=interaction.guild),
+        )
+        self.codex_client.archive_scope.side_effect = RuntimeError("SENSITIVE_DETAIL")
+
+        with self.assertLogs(level="ERROR"):
+            await self.view.handle_codex_channel_select(interaction, channels)
+
+        self.assertTrue(self.codex_access.allows(10, 21, 1))
+        text = self.text(self.view)
+        self.assertIn("舊對話封存失敗", text)
+        self.assertNotIn("SENSITIVE_DETAIL", text)
+
+    async def test_channel_select_rejects_voice_or_other_guild(self):
+        for channels in (
+            (
+                SimpleNamespace(
+                    id=21,
+                    type=discord.ChannelType.voice,
+                    guild=SimpleNamespace(id=10),
+                ),
+            ),
+            (
+                SimpleNamespace(
+                    id=22,
+                    type=discord.ChannelType.text,
+                    guild=SimpleNamespace(id=11),
+                ),
+            ),
+        ):
+            with self.subTest(channel_id=channels[0].id):
+                interaction = FakeInteraction()
+
+                await self.view.handle_codex_channel_select(interaction, channels)
+
+                self.assertTrue(self.codex_access.allows(10, 20, 1))
+                self.codex_client.archive_scope.assert_not_awaited()
+                self.assertIn("只能選擇目前伺服器的一般文字頻道", self.text(self.view))
+
+    def test_other_guild_cannot_use_channel_selector(self):
+        self.view.guild_id = 11
+
+        self.view._render_ai()
+
+        channel_select = self.channel_selects(self.view)[0]
+        self.assertTrue(channel_select["disabled"])
+        self.assertIn("此伺服器不在 AI 白名單", self.text(self.view))
+
     def test_voice_note_is_markdown_escaped(self):
         self.view._render_voice("**粗體**")
         text = self.text(self.view)
@@ -642,6 +936,7 @@ class AdminPanelViewTest(unittest.IsolatedAsyncioTestCase):
             user_id=1,
             guild_id=10,
             codex_client=self.codex_client,
+            codex_access=self.codex_access,
             codex_status=self.codex_status,
             temp_voice=self.temp_voice,
             steam_free_games=self.steam,
@@ -664,6 +959,7 @@ class AdminPanelViewTest(unittest.IsolatedAsyncioTestCase):
             user_id=1,
             guild_id=10,
             codex_client=self.codex_client,
+            codex_access=self.codex_access,
             codex_status=self.codex_status,
             temp_voice=self.temp_voice,
             steam_free_games=self.steam,
@@ -675,7 +971,7 @@ class AdminPanelViewTest(unittest.IsolatedAsyncioTestCase):
         text = self.text(view)
         self.assertIn("已啟用功能正常", text)
         self.assertIn("臨時語音與 Steam 自動通知依設定停用", text)
-        self.assertIn("## 設定\n**無需設定**", text)
+        self.assertIn("## 設定\n**1 / 1 已設定**", text)
         self.assertNotIn("## 需要注意", text)
 
     async def test_steam_query_only_fetches_and_edits_original_response(self):
@@ -706,6 +1002,7 @@ class AdminPanelViewTest(unittest.IsolatedAsyncioTestCase):
             user_id=1,
             guild_id=10,
             codex_client=self.codex_client,
+            codex_access=self.codex_access,
             codex_status=self.codex_status, temp_voice=self.temp_voice,
             steam_free_games=self.steam,
         )
@@ -765,6 +1062,7 @@ class AdminPanelViewTest(unittest.IsolatedAsyncioTestCase):
             user_id=1,
             guild_id=10,
             codex_client=self.codex_client,
+            codex_access=self.codex_access,
             codex_status=self.codex_status, temp_voice=self.temp_voice,
             steam_free_games=self.steam, server_activity=None,
         )
@@ -788,7 +1086,7 @@ class AdminPanelViewTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_activity_recent_escapes_event_type_and_never_renders_mentions_or_details(self):
         events = [
-            StoredActivityEvent(100 + index, "gateway", "message", "**edit**", 123, 456, 789, 987)
+            StoredActivityEvent(100 + index, "**edit**", 123, 456, 789, 987)
             for index in range(12)
         ]
         self.activity.get_recent_events.return_value = events

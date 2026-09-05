@@ -1,9 +1,12 @@
 from types import SimpleNamespace
 import unittest
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, Mock, patch
 
 from src.bot import HoroBot, main
-from src.codex_bridge_client import CodexAccess
+from src.codex_bridge_client import (
+    DEFAULT_CODEX_ACCESS_STATE_PATH,
+    CodexAccess,
+)
 
 
 class CodexRuntimeWiringTest(unittest.TestCase):
@@ -28,6 +31,7 @@ class CodexRuntimeWiringTest(unittest.TestCase):
             patch("src.bot.SteamFreeGamesNotifier") as steam_class,
             patch("src.bot.CalendarManager") as calendar_class,
             patch("src.bot.ServerActivityMonitor") as activity_class,
+            patch("src.bot.CodexAccess") as access_class,
             patch("src.bot.HoroBot") as bot_class,
         ):
             main()
@@ -36,10 +40,17 @@ class CodexRuntimeWiringTest(unittest.TestCase):
             "http://codex:8765",
             config.codex_bridge_token,
         )
+        access_class.assert_called_once_with(
+            True,
+            10,
+            20,
+            frozenset({30}),
+            state_path=DEFAULT_CODEX_ACCESS_STATE_PATH,
+        )
         activity_class.assert_not_called()
         bot_class.assert_called_once_with(
             codex_class.return_value,
-            CodexAccess(True, 10, 20, frozenset({30})),
+            access_class.return_value,
             voice_class.return_value,
             steam_class.return_value,
             calendar=calendar_class.return_value,
@@ -55,6 +66,30 @@ class CodexRuntimeWiringTest(unittest.TestCase):
 
 
 class CodexBotLifecycleTest(unittest.IsolatedAsyncioTestCase):
+    async def test_temp_voice_and_steam_default_to_dormant(self):
+        codex = SimpleNamespace(start=AsyncMock())
+        temp_voice = SimpleNamespace(reconcile=AsyncMock())
+        steam = SimpleNamespace(start=Mock())
+        calendar = SimpleNamespace(
+            persistent_board_view=lambda: object(),
+            start=AsyncMock(),
+        )
+        bot = HoroBot(
+            codex,
+            CodexAccess(True, 10, 20, frozenset({30})),
+            temp_voice,
+            steam,
+            calendar,
+        )
+        bot.tree.sync = AsyncMock()
+        bot.add_view = Mock()
+
+        await bot.setup_hook()
+        await bot.on_ready()
+
+        steam.start.assert_not_called()
+        temp_voice.reconcile.assert_not_awaited()
+
     async def test_setup_starts_codex_and_close_closes_it(self):
         codex = SimpleNamespace(start=AsyncMock(), close=AsyncMock())
         calendar = SimpleNamespace(

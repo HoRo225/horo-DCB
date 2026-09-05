@@ -15,14 +15,16 @@ codex 的 8765 port 不發布到 host。兩個 container 都以 UID/GID 10001、
 
 1. Discord event 進入 HoroBot。
 2. 只接受直接 mention Bot 或 reply Bot。
-3. DM 直接拒絕；Guild、parent Channel 與 User 必須全部命中 allowlist。
+3. DM 直接拒絕；Guild、parent Channel 與至少一個 Member Role 必須命中 allowlist。
 4. Bot 驗證文字與附件，建立 conversation key。
 5. Bot 透過固定 http://codex:8765 與 Bearer token 呼叫 bridge。
 6. Sidecar 驗證 token、JSON schema、文字與 data URL 上限。
 7. 首次對話建立 Codex thread；後續依 mapping resume。
 8. 回覆經既有 Discord splitting／TextDisplay 輸出。
 
-一般 Channel 依 User 分開 thread；Discord Thread 中所有 allowlisted 使用者共用該 Thread 的 Codex thread。旁觀訊息不會同步。
+白名單 Guild 由環境固定；1–25 個頻道與角色由 `/控制台` 保存於 `bot_data/codex_access.json`。version 1／2 可直接讀取並暫用 legacy User IDs，第一次保存角色後寫成 version 3 並永久只依角色授權。v3 空角色仍屬角色模式並拒絕全部；正常 legacy 模式保存 v2。角色變更先暫停、提升設定世代並取消舊工作，再移除 mapping、best-effort 封存，成功保存後才套用。
+
+一般 Channel 依 User 分開 thread；Discord Thread 中所有合資格角色成員共用該 Thread 的 Codex thread。旁觀訊息不會同步。
 
 ## 3. Trust boundaries
 
@@ -31,6 +33,8 @@ Bot 看不到 CODEX_HOME 或 codex_data。Sidecar 看不到 DISCORD_TOKEN、bot_
 Bridge log 不記錄 prompt、圖片、Bearer token、OAuth email 或完整 Codex exception。回 Discord 的錯誤為固定繁體中文文字，不包含 RPC payload 或 OAuth 狀態。
 
 使用者文字、圖片與 Web Search 結果都視為不可信資料。永久 allowlist 是必要安全邊界，不得改成公開 Bot。
+
+頻道／角色狀態檔採 versioned JSON、mode 0600 與原子替換；只有真正不存在的檔案能採用 legacy 啟動種子，其他讀取錯誤 fail closed。管理員修復時必須依序設定頻道與角色；僅設定頻道會保存 v3 空角色，重啟後仍拒絕舊使用者。
 
 ## 4. Bridge contract
 
@@ -42,7 +46,7 @@ GET /healthz 不需 token，只回：
 
 未登入或 runtime 不可用時回 503 與 not_ready。
 
-GET /v1/status 需要 Bearer token，回傳 available、authenticated、plan、sdk_version、runtime_version、web_search 與 thread_count，不回傳 email 或 OAuth token。
+GET /v1/status 需要 Bearer token，回傳 available、authenticated、plan、sdk_version、runtime_version、web_search、thread_count，以及 bridge 自有的 active_requests、queued_requests、last_error。Client 對缺少的新欄位採安全預設，控制台另外呈現 Bot 工作數；兩層數值不相加。不回傳 email、OAuth token 或對話內容。
 
 POST /v1/chat：
 
@@ -55,7 +59,7 @@ POST /v1/chat：
 }
 ~~~
 
-成功只回 reply。錯誤只使用 invalid_request、unauthorized、usage_limit_or_unavailable、auth_required、unavailable 或 timeout。
+成功只回 reply。錯誤只使用 invalid_request、unauthorized、usage_limit_or_unavailable、auth_required、unavailable、timeout 或 busy；busy 回 HTTP 429。Authorization 非 ASCII 也回固定 401。
 
 POST /v1/archive 接受 guild_id 與選用的 channel_id，移除符合 mapping，並透過公開 thread_archive best-effort archive。
 
@@ -66,7 +70,7 @@ POST /v1/archive 接受 guild_id 與選用的 channel_id，移除符合 mapping�
 - openai-codex==0.147.0
 - openai-codex-cli-bin==0.147.0
 
-不指定 model 或 reasoning effort，讓 ChatGPT 帳號使用可用預設。CodexConfig 固定 ChatGPT login、file credential store、live Web Search、禁止 startup update，並停用 apps、goals、hooks、memories、multi-agent、remote plugin、shell snapshot、shell tool 與 unified exec。
+程式沿用 Codex config 的 model 與 reasoning effort；horo-laptop 目前設定為 gpt-5.6-luna／medium。CodexConfig 固定 ChatGPT login、file credential store、live Web Search、禁止 startup update，並停用 apps、goals、hooks、memories、multi-agent、remote plugin、shell snapshot、shell tool 與 unified exec。
 
 每個 thread 使用 Sandbox.read_only、ApprovalMode.deny_all、空白 /app/codex-workspace 與 shell_environment_policy.inherit=none。沒有 MCP server、filesystem write、connector、subagent 或 write action。
 
@@ -90,7 +94,7 @@ codex_data 包含 Codex OAuth cache 與 horo_threads.json：
 }
 ~~~
 
-mapping 使用 temporary file、chmod 0600 與 os.replace。格式或 version 錯誤時 startup fail closed，不覆寫損壞檔案。
+mapping 使用候選 dict、temporary file、chmod 0600 與 os.replace；持久化成功後才更新記憶體。格式或 version 錯誤時 startup fail closed，不覆寫損壞檔案。寫入失敗鎖定儲存不可用，後續與等待中的聊天不得再開 SDK 工作或寫檔；修復後由新程序載入原本有效 mapping。
 
 刪除 Channel／Thread 或離開 Guild 時只移除對應 mapping 並 archive thread。清除整個 codex_data 才會同時移除 OAuth 與所有本機 thread state。
 
@@ -101,18 +105,22 @@ mapping 使用 temporary file、chmod 0600 與 os.replace。格式或 version �
 - text 最多 4,000 字元，空文字必須至少有一張圖。
 - 圖片僅 JPEG、PNG、WebP；最多 4 張、單張 8 MiB、總計 16 MiB。
 - HTTP body 上限 24 MiB。
-- 同一 conversation 序列化；不同 conversation 可並行。
-- turn timeout 後 interrupt，不 retry。
+- 每程序最多 2 個 active／4 個 waiting；同 key 最多額外等待 1 個，同 key 持有權涵蓋 Discord 成功與錯誤輸出。
+- queue 30 秒、images 15 秒、整個 SDK start／resume／turn／run 120 秒；Bot 總工作期限 150 秒，取消或錯誤通知最多另加 5 秒。
+- 工作進入 SDK 前登記；archive 先封鎖範圍、取消並等待工作，再移除 matching mapping，避免在途 start 重新建立資料。
+- SDK 初始化 30 秒、status RPC 2 秒；Bot status HTTP 3 秒、chat HTTP 125 秒。
+- 有 handle 的生成逾時會 bounded interrupt；無回應的 RPC、TransportClosedError 或中斷失敗回收程序。登入／額度錯誤只回報；不 retry 原始問題。
+- 關閉、HTTP 斷線、角色撤銷與設定世代改變均會取消工作，重複取消不打斷清理。
 
 ## 8. Module ownership
 
 | Module | Responsibility |
 | --- | --- |
 | src/config.py | 唯一 Bot environment parser 與 fail-closed validation |
-| src/codex_bridge_client.py | allowlist、conversation key、cooldown、bridge HTTP |
+| src/codex_bridge_client.py | 明確授權模式、共用 admission／取消、設定世代、cooldown 與 bridge HTTP |
 | src/codex_bridge.py | SDK lifecycle、thread store、HTTP boundary、error normalization |
 | src/bot.py | Discord composition root 與 direct-interaction routing |
-| src/admin_panel.py | 唯讀 Codex／非 AI runtime status |
+| src/admin_panel.py | Codex／非 AI 狀態與受共用鎖保護的頻道／角色設定 |
 | src/calendar_events.py | Calendar 看板、Modal、人工建立／修改 |
 | src/steam_free_games.py | Steam 排程與通知 |
 | src/temp_voice.py | 臨時語音 |
@@ -132,16 +140,16 @@ Build gate 必須通過 Compose config、shared image build、完整 unittest、
 
 ## 10. Deployment
 
-horo-server 負責 source、測試與 candidate build。horo-laptop 是 image-only 正式環境，不保留 Git checkout。
+horo-server 保存隔離原始碼 worktree；建置與測試使用 GitHub Actions 一次性 Linux／Docker runner，通過後匯出同一 image artifact。horo-PC／horo-server／正式 horo-laptop 不執行專案測試。horo-laptop 是 image-only 正式環境，不保留 Git checkout。
 
 切換順序：
 
-1. 建置、測試並以完整 OCI archive 搬移 image。
+1. 從通過完整 CI 的 push commit 下載候選 artifact，驗證 archive SHA-256 與 OCI source／revision，再以完整 OCI archive 搬移 image。
 2. 比對兩端 image ID、architecture 與 RootFS layers。
-3. 在 laptop 的 codex_data 完成 device login。
+3. 保留 laptop 的 codex_data；只在首次啟用或登入失效時完成 device login。
 4. 設定 mode 0600 的 .env 與精確 allowlist。
 5. 停舊 Bot，啟動 codex 並等待 healthy，再啟動新 Bot。
 6. 完成 owner-only chat、resume、Web Search、三種圖片、控制台與非 AI smoke。
 7. 七天內保留舊 compose、images 與 Volumes。
 
-沒有資料 migration。回滾只需停止新服務、還原舊 compose／images 並驗證舊服務；codex_data 保留供診斷。七天後清理舊 9Router 與 semantic_memory.sqlite3 必須再次人工確認。
+保留既有 JSON 版本。回滾停止新服務、恢復舊 compose／image，保留 codex_data 與其他模組的最新資料。若授權檔缺失、損壞或為 v3 空角色，舊版啟動前維持 AI 停用，避免 legacy 回退；不用整份 volume 回復來處理程式回滾。回復點至少保留至本批切換後七天，舊 9Router／Semantic Memory 清理仍須人工確認。

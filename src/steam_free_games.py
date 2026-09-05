@@ -100,7 +100,7 @@ class SteamFreeGamesNotifier:
             poll_interval_seconds=self._poll_interval_seconds,
             channel_id=state.channel_id if state is not None else None,
             active_app_count=len(state.active_app_ids) if state is not None else 0,
-            role_ids=tuple(sorted(getattr(state, "role_ids", ()))) if state is not None else (),
+            role_ids=tuple(sorted(state.role_ids)) if state is not None else (),
         )
 
     def _load_state(self) -> dict[int, _GuildState]:

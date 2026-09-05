@@ -4,7 +4,7 @@
 
 Use an isolated branch or worktree. Keep the diff focused, preserve unrelated user changes, and write the smallest test that proves each non-trivial behavior before implementation.
 
-The supported build and test path is Docker; do not install project packages on the workstation:
+Build and test only in a disposable Linux/Docker sandbox; this project uses the existing GitHub-hosted Ubuntu runner. Do not install project packages or run project tests on horo-PC, horo-server, or production horo-laptop. The following commands belong in that sandbox:
 
 ~~~sh
 sh scripts/setup.sh
@@ -25,14 +25,16 @@ Runtime code must continue to work as UID/GID 10001 with a read-only root filesy
 - Bot must not mount codex_data or receive CODEX_HOME.
 - Sidecar must not mount bot_data or receive DISCORD_TOKEN.
 - Never log prompts, images, Bearer tokens, OAuth email or raw SDK/RPC errors.
-- Keep the Discord Guild／Channel／User allowlist fail closed.
+- Keep Guild／Channel／Role authorization fail closed. v1/v2 legacy bootstrap is explicit; v3 empty roles and corrupt-state recovery must never reactivate legacy users.
+- Keep accepted work registered through success/error output; scope changes cancel stale generations before mapping detach. Do not recancel a task already cleaning up.
+- Bound SDK RPC and shutdown paths, including blocking executor workers. Authentication or quota errors must not restart the sidecar.
 - Do not add API-key, 9Router or automatic retry fallback.
 - Do not add MCP, local memories, shell, write actions or extra agents without a separate reviewed design.
 - Calendar and Steam remain UI／scheduler features, not natural-language tools.
 
 ## Dependencies
 
-requirements.txt is the only Python dependency manifest. Direct and transitive packages are fully pinned; do not add a second requirements file or lock file.
+requirements.txt is the only Python dependency manifest. Direct and transitive packages are fully pinned; do not add a second requirements file or lock file. Exact-bound SDK/CLI and Pydantic/core versions are reviewed together against parent package metadata; do not merge independent child version bumps. CI derives expected versions from this manifest.
 
 Changes to openai-codex, openai-codex-cli-bin, Python or the base-image digest require:
 
@@ -55,4 +57,4 @@ When changing a non-AI feature, retain its focused regression tests. When deleti
 
 Update README.md, horo-DCB.md and SECURITY.md when trust boundaries, data retention, user-visible features or rollout steps change.
 
-Production horo-laptop is image-only. Source builds occur on horo-server, and images move as complete OCI archives. Do not deploy from an uncommitted tree, delete rollback artifacts inside the seven-day window, or clean old Volumes without a separate explicit confirmation.
+Production horo-laptop is image-only. Edit source in an isolated horo-server worktree; CI builds, tests and exports the exact candidate image with source/revision labels, image metadata and archive checksum. Deploy that complete OCI archive without rebuilding it. Preserve the prior compose/image and necessary state recovery points for at least seven days from cutover. Do not restore whole data volumes as part of an image rollback or clean old volumes without explicit confirmation.

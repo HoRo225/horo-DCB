@@ -31,27 +31,13 @@ def env_flag(name: str, *, default: bool) -> bool:
     raise RuntimeError(f"{name} 必須是 1/0、true/false、yes/no 或 on/off")
 
 
-def positive_int_env(name: str, *, default: int) -> int:
-    raw = os.environ.get(name, str(default)).strip()
-    try:
-        value = int(raw)
-    except ValueError as exc:
-        raise RuntimeError(f"{name} 必須是正整數") from exc
-    if value <= 0:
-        raise RuntimeError(f"{name} 必須是正整數")
-    return value
-
-
 def _optional_positive_int_env(name: str) -> int | None:
     raw = os.environ.get(name, "").strip()
     if not raw:
         return None
     if raw[0] == "0" or any(character not in "0123456789" for character in raw):
         raise RuntimeError(f"{name} 必須是正整數")
-    value = int(raw)
-    if value <= 0:
-        raise RuntimeError(f"{name} 必須是正整數")
-    return value
+    return int(raw)
 
 
 def _positive_int_set_env(name: str) -> frozenset[int]:
@@ -67,18 +53,15 @@ def _positive_int_set_env(name: str) -> frozenset[int]:
             or any(character not in "0123456789" for character in cleaned)
         ):
             raise RuntimeError(f"{name} 必須是逗號分隔的正整數")
-        value = int(cleaned)
-        if value <= 0:
-            raise RuntimeError(f"{name} 必須是逗號分隔的正整數")
-        values.append(value)
+        values.append(int(cleaned))
     if len(values) != len(set(values)):
         raise RuntimeError(f"{name} 不得包含重複值")
     return frozenset(values)
 
 
 def _bridge_token_env() -> str:
-    token = os.environ.get("CODEX_BRIDGE_TOKEN", "").strip()
-    if token and (
+    token = required_env("CODEX_BRIDGE_TOKEN")
+    if (
         len(token) != 64
         or any(character not in "0123456789abcdef" for character in token)
     ):
@@ -109,8 +92,6 @@ class AppConfig:
         if codex_enabled:
             for name, value in (
                 ("CODEX_ALLOWED_GUILD_ID", guild_id),
-                ("CODEX_ALLOWED_CHANNEL_ID", channel_id),
-                ("CODEX_ALLOWED_USER_IDS", user_ids),
                 ("CODEX_BRIDGE_TOKEN", bridge_token),
             ):
                 if not value:
@@ -125,11 +106,11 @@ class AppConfig:
             codex_bridge_token=bridge_token,
             temp_voice_enabled=env_flag(
                 "TEMP_VOICE_ENABLED",
-                default=True,
+                default=False,
             ),
             steam_free_games_enabled=env_flag(
                 "STEAM_FREE_GAMES_ENABLED",
-                default=True,
+                default=False,
             ),
             ai_text_display_enabled=env_flag(
                 "AI_TEXT_DISPLAY_ENABLED",

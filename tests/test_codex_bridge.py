@@ -29,14 +29,231 @@ from src.codex_bridge_client import (
 
 
 class CodexAccessTest(unittest.TestCase):
-    def test_allowlist_requires_exact_guild_channel_and_user(self):
+    def test_allowlist_accepts_multiple_channels_with_exact_guild_and_user(self):
         access = CodexAccess(True, 10, 20, frozenset({30, 40}))
+        access.set_channels(10, frozenset({20, 21}))
 
         self.assertTrue(access.allows(10, 20, 30))
+        self.assertTrue(access.allows(10, 21, 40))
         self.assertFalse(access.allows(11, 20, 30))
-        self.assertFalse(access.allows(10, 21, 30))
+        self.assertFalse(access.allows(10, 22, 30))
         self.assertFalse(access.allows(10, 20, 31))
         self.assertFalse(CodexAccess(False, 10, 20, frozenset({30})).allows(10, 20, 30))
+
+    def test_selected_channels_persist_and_override_environment_seed(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "codex_access.json"
+            access = CodexAccess(
+                True,
+                10,
+                20,
+                frozenset({30}),
+                state_path=path,
+            )
+
+            previous = access.set_channels(10, frozenset({21, 22}))
+
+            self.assertEqual(previous, frozenset({20}))
+            self.assertFalse(access.allows(10, 20, 30))
+            self.assertTrue(access.allows(10, 21, 30))
+            self.assertTrue(access.allows(10, 22, 30))
+            self.assertEqual(
+                json.loads(path.read_text(encoding="utf-8")),
+                {"version": 2, "guild_id": 10, "channel_ids": [21, 22]},
+            )
+            self.assertEqual(os.stat(path).st_mode & 0o777, 0o600)
+
+            restarted = CodexAccess(
+                True,
+                10,
+                99,
+                frozenset({30}),
+                state_path=path,
+            )
+
+        self.assertTrue(restarted.allows(10, 21, 30))
+        self.assertTrue(restarted.allows(10, 22, 30))
+        self.assertFalse(restarted.allows(10, 99, 30))
+
+    def test_version_one_state_loads_as_single_channel(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "codex_access.json"
+            path.write_text(
+                json.dumps({"version": 1, "guild_id": 10, "channel_id": 20}),
+                encoding="utf-8",
+            )
+
+            access = CodexAccess(
+                True,
+                10,
+                99,
+                frozenset({30}),
+                state_path=path,
+            )
+
+        self.assertEqual(access.channel_ids, frozenset({20}))
+        self.assertEqual(access.role_ids, frozenset())
+        self.assertTrue(access.allows(10, 20, 30))
+        self.assertFalse(access.allows(10, 99, 30))
+
+    def test_version_two_state_loads_channels_with_legacy_user_fallback(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "codex_access.json"
+            path.write_text(
+                json.dumps({"version": 2, "guild_id": 10, "channel_ids": [20, 21]}),
+                encoding="utf-8",
+            )
+
+            access = CodexAccess(
+                True,
+                10,
+                99,
+                frozenset({30}),
+                state_path=path,
+            )
+
+        self.assertEqual(access.channel_ids, frozenset({20, 21}))
+        self.assertEqual(access.role_ids, frozenset())
+        self.assertTrue(access.allows(10, 20, 30, frozenset()))
+        self.assertFalse(access.allows(10, 20, 31, frozenset({70})))
+
+    def test_corrupt_channel_state_requires_channels_then_roles_for_recovery(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "codex_access.json"
+            path.write_text("{", encoding="utf-8")
+            access = CodexAccess(
+                True,
+                10,
+                20,
+                frozenset({30}),
+                state_path=path,
+            )
+
+            self.assertFalse(access.state_available)
+            self.assertEqual(access.channel_ids, frozenset())
+            self.assertEqual(access.role_ids, frozenset())
+            self.assertFalse(access.allows(10, 20, 30))
+
+            access.set_channels(10, frozenset({22, 23}))
+
+            self.assertTrue(access.state_available)
+            self.assertFalse(access.allows(10, 22, 30))
+            self.assertFalse(access.allows(10, 23, 30))
+            access.set_roles(10, frozenset({70}))
+            self.assertTrue(access.allows(10, 22, 31, frozenset({70})))
+
+    def test_boolean_guild_id_in_state_fails_closed(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "codex_access.json"
+            path.write_text(
+                json.dumps({"version": 1, "guild_id": True, "channel_id": 20}),
+                encoding="utf-8",
+            )
+
+            access = CodexAccess(
+                True,
+                1,
+                20,
+                frozenset({30}),
+                state_path=path,
+            )
+
+        self.assertFalse(access.state_available)
+        self.assertFalse(access.allows(1, 20, 30))
+
+    def test_boolean_version_in_state_fails_closed(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "codex_access.json"
+            path.write_text(
+                json.dumps({"version": True, "guild_id": 10, "channel_id": 20}),
+                encoding="utf-8",
+            )
+
+            access = CodexAccess(
+                True,
+                10,
+                20,
+                frozenset({30}),
+                state_path=path,
+            )
+
+        self.assertFalse(access.state_available)
+        self.assertFalse(access.allows(10, 20, 30))
+
+    def test_roles_replace_legacy_users_and_persist_version_three(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "codex_access.json"
+            access = CodexAccess(
+                True,
+                10,
+                20,
+                frozenset({30}),
+                state_path=path,
+            )
+
+            previous = access.set_roles(10, frozenset({70, 80}))
+
+            self.assertEqual(previous, frozenset())
+            self.assertFalse(access.allows(10, 20, 30, frozenset()))
+            self.assertTrue(access.allows(10, 20, 31, frozenset({60, 80})))
+            self.assertFalse(access.allows(10, 20, 31, frozenset({60})))
+            self.assertEqual(
+                json.loads(path.read_text(encoding="utf-8")),
+                {
+                    "version": 3,
+                    "guild_id": 10,
+                    "channel_ids": [20],
+                    "role_ids": [70, 80],
+                },
+            )
+
+            restarted = CodexAccess(
+                True,
+                10,
+                99,
+                frozenset({30}),
+                state_path=path,
+            )
+
+        self.assertEqual(restarted.role_ids, frozenset({70, 80}))
+        self.assertFalse(restarted.allows(10, 20, 30, frozenset()))
+        self.assertTrue(restarted.allows(10, 20, 31, frozenset({70})))
+
+    def test_role_set_rejects_empty_default_boolean_and_over_limit(self):
+        access = CodexAccess(True, 10, 20, frozenset({30}))
+
+        for role_ids in (
+            frozenset(),
+            frozenset({10}),
+            frozenset({True}),
+            frozenset(range(20, 46)),
+        ):
+            with self.subTest(role_ids=role_ids):
+                with self.assertRaises(ValueError):
+                    access.set_roles(10, role_ids)
+
+    def test_roles_cannot_be_saved_before_channels_are_configured(self):
+        access = CodexAccess(True, 10, None, frozenset({30}))
+
+        with self.assertRaises(ValueError):
+            access.set_roles(10, frozenset({70}))
+
+    def test_channel_set_must_contain_one_to_twenty_five_positive_ids(self):
+        access = CodexAccess(True, 10, 20, frozenset({30}))
+
+        for channel_ids in (frozenset(), frozenset(range(1, 27)), frozenset({True})):
+            with self.subTest(channel_ids=channel_ids):
+                with self.assertRaises(ValueError):
+                    access.set_channels(10, channel_ids)
+
+    def test_suspension_temporarily_denies_access(self):
+        access = CodexAccess(True, 10, 20, frozenset({30}))
+
+        access.suspend()
+        self.assertFalse(access.allows(10, 20, 30))
+        access.resume()
+
+        self.assertTrue(access.allows(10, 20, 30))
 
     def test_conversation_keys_separate_normal_users_and_share_threads(self):
         self.assertEqual(
@@ -60,14 +277,6 @@ class CodexClientGateTest(unittest.TestCase):
         self.assertTrue(client.try_start_request(10, now=100))
         self.assertFalse(client.try_start_request(10, now=104.9))
         self.assertTrue(client.try_start_request(10, now=105))
-
-    def test_conversation_lock_is_stable_per_key(self):
-        client = CodexBridgeClient("http://codex:8765", "a" * 64)
-
-        first = client.conversation_lock("guild:1:thread:2")
-
-        self.assertIs(first, client.conversation_lock("guild:1:thread:2"))
-        self.assertIsNot(first, client.conversation_lock("guild:1:thread:3"))
 
 
 class ThreadStoreTest(unittest.TestCase):
@@ -204,6 +413,27 @@ class ChatPayloadTest(unittest.TestCase):
                     validate_chat_payload(payload)
 
 
+class FakeTurnHandle:
+    def __init__(self, thread, inputs):
+        self.thread = thread
+        self.inputs = inputs
+        self.run_waiter = None
+
+    async def run(self):
+        self.run_waiter = asyncio.create_task(self.thread._run_inputs(self.inputs))
+        try:
+            return await self.run_waiter
+        except asyncio.CancelledError:
+            if not getattr(self.thread, "interrupted", False):
+                raise
+            return SimpleNamespace(final_response=None)
+
+    async def interrupt(self):
+        self.thread.interrupted = True
+        if self.run_waiter is not None:
+            self.run_waiter.cancel()
+
+
 class FakeThread:
     def __init__(self, thread_id, replies):
         self.id = thread_id
@@ -211,17 +441,17 @@ class FakeThread:
         self.calls = []
         self.interrupted = False
 
-    async def run(self, inputs):
+    async def turn(self, inputs):
         self.calls.append(inputs)
+        return FakeTurnHandle(self, inputs)
+
+    async def _run_inputs(self, inputs):
         reply = self.replies.pop(0)
         if isinstance(reply, BaseException):
             raise reply
         if isinstance(reply, asyncio.Event):
             await reply.wait()
         return SimpleNamespace(final_response=reply)
-
-    async def interrupt(self):
-        self.interrupted = True
 
 
 class FakeCodex:
@@ -263,7 +493,10 @@ class ParallelThread:
         self.owner = owner
         self.id = thread_id
 
-    async def run(self, _inputs):
+    async def turn(self, inputs):
+        return FakeTurnHandle(self, inputs)
+
+    async def _run_inputs(self, _inputs):
         self.owner.active += 1
         self.owner.max_active = max(self.owner.max_active, self.owner.active)
         self.owner.entered += 1
@@ -484,6 +717,58 @@ class FakeBridgeService:
 
     async def archive_scope(self, guild_id, channel_id=None):
         self.archive_calls.append((guild_id, channel_id))
+
+
+class RecordingRequestSession:
+    closed = False
+    status = 200
+
+    def __init__(self):
+        self.path = ""
+        self.timeouts = []
+
+    def request(self, _method, url, **kwargs):
+        self.path = url
+        self.timeouts.append(kwargs.get("timeout"))
+        return self
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, _exc_type, _exc, _traceback):
+        return None
+
+    async def json(self):
+        if self.path.endswith("/v1/chat"):
+            return {"reply": "answer"}
+        return {
+            "available": True,
+            "authenticated": True,
+            "plan": "free",
+            "sdk_version": "0.147.0",
+            "runtime_version": "0.147.0",
+            "web_search": "live",
+            "thread_count": 1,
+        }
+
+
+class CodexBridgeClientStatusTest(unittest.IsolatedAsyncioTestCase):
+    async def test_status_uses_three_second_timeout_separate_from_chat_timeout(self):
+        client = CodexBridgeClient(
+            "http://codex:8765",
+            "d" * 64,
+            timeout_seconds=125,
+        )
+        session = RecordingRequestSession()
+        client._session = session
+
+        status = await client.get_runtime_status()
+        reply = await client.chat("guild:1:thread:2", "Steven", "hello", ())
+
+        self.assertTrue(status.available)
+        self.assertEqual(reply, "answer")
+        self.assertNotIn(None, session.timeouts)
+        self.assertEqual([timeout.total for timeout in session.timeouts], [3, 125])
 
 
 class BridgeHttpTest(unittest.IsolatedAsyncioTestCase):

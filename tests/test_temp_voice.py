@@ -18,11 +18,20 @@ from src.temp_voice import (
 class FakeVoiceChannel:
     type = discord.ChannelType.voice
 
-    def __init__(self, channel_id, name, guild, category=None, permissions=None):
+    def __init__(
+        self,
+        channel_id,
+        name,
+        guild,
+        category=None,
+        permissions=None,
+        overwrites=None,
+    ):
         self.id = channel_id
         self.name = name
         self.guild = guild
         self.category = category
+        self.overwrites = overwrites or {}
         self.members = []
         self.deleted = False
         self.permission_calls = []
@@ -40,9 +49,11 @@ class FakeVoiceChannel:
         return self._permissions
 
     async def set_permissions(self, target, *, reason=None, **permissions):
+        self.guild.api_calls.append("set_permissions")
         self.permission_calls.append(permissions)
 
     async def delete(self, *, reason=None):
+        self.guild.api_calls.append("delete")
         self.deleted = True
         self.guild._channels.pop(self.id, None)
 
@@ -55,6 +66,7 @@ class FakeGuild:
         )
         self._channels = {}
         self.created_channels = []
+        self.api_calls = []
         self._next_channel_id = 100
 
     @property
@@ -67,12 +79,21 @@ class FakeGuild:
     def get_channel(self, channel_id):
         return self._channels.get(channel_id)
 
-    async def create_voice_channel(self, name, *, category=None, reason=None):
+    async def create_voice_channel(
+        self,
+        name,
+        *,
+        category=None,
+        overwrites=None,
+        reason=None,
+    ):
+        self.api_calls.append("create_voice_channel")
         channel = FakeVoiceChannel(
             self._next_channel_id,
             name,
             self,
             category=category,
+            overwrites=overwrites,
         )
         self._next_channel_id += 1
         self.add_channel(channel)
@@ -91,6 +112,7 @@ class FakeMember:
             channel.members.append(self)
 
     async def move_to(self, channel, *, reason=None):
+        self.guild.api_calls.append("move_to")
         if self.channel is not None and self in self.channel.members:
             self.channel.members.remove(self)
         self.channel = channel
@@ -218,13 +240,20 @@ class TempVoiceManagerTest(unittest.IsolatedAsyncioTestCase):
 
         self.assertFalse(self.state_path.exists())
 
-    async def test_join_entry_creates_child_grants_owner_controls_and_moves_member(self):
+    async def test_join_entry_atomically_copies_category_and_replaces_owner_permissions(self):
         guild = FakeGuild()
-        category = object()
+        restricted_role = object()
+        restricted_overwrite = discord.PermissionOverwrite(
+            view_channel=False,
+            connect=False,
+        )
+        category = SimpleNamespace(overwrites={restricted_role: restricted_overwrite})
         entry = self.make_entry(guild, category=category)
         manager = TempVoiceManager(self.state_path)
         await self.bind_existing_entry(manager, guild)
         member = FakeMember(123, "HoRo", guild, channel=entry)
+        category_owner_overwrite = discord.PermissionOverwrite(speak=False)
+        category.overwrites[member] = category_owner_overwrite
 
         await manager.handle_voice_state_update(
             member,
@@ -237,14 +266,24 @@ class TempVoiceManagerTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(created.name, "▍HoRo 的語音-🔊")
         self.assertIs(created.category, category)
         self.assertIs(member.channel, created)
+        self.assertEqual(guild.api_calls, ["create_voice_channel", "move_to"])
+        self.assertEqual(created.permission_calls, [])
 
-        permissions = created.permission_calls[0]
-        self.assertTrue(permissions["manage_channels"])
-        self.assertTrue(permissions["move_members"])
-        self.assertTrue(permissions["mute_members"])
-        self.assertTrue(permissions["deafen_members"])
-        self.assertTrue(permissions["view_channel"])
-        self.assertTrue(permissions["connect"])
+        self.assertIsNot(created.overwrites, category.overwrites)
+        self.assertFalse(created.overwrites[restricted_role].view_channel)
+        self.assertFalse(created.overwrites[restricted_role].connect)
+        owner_overwrite = created.overwrites[member]
+        self.assertIsNone(owner_overwrite.speak)
+        self.assertTrue(owner_overwrite.manage_channels)
+        self.assertTrue(owner_overwrite.move_members)
+        self.assertTrue(owner_overwrite.mute_members)
+        self.assertTrue(owner_overwrite.deafen_members)
+        self.assertTrue(owner_overwrite.view_channel)
+        self.assertTrue(owner_overwrite.connect)
+
+        self.assertIsNone(category_owner_overwrite.manage_channels)
+        self.assertIsNone(category_owner_overwrite.view_channel)
+        self.assertFalse(category_owner_overwrite.speak)
 
         state = self.read_state()
         self.assertEqual(state["version"], 2)
@@ -549,22 +588,13 @@ class TempVoiceManagerTest(unittest.IsolatedAsyncioTestCase):
         self.assertIs(member.channel, entry)
         self.assertEqual(self.read_state()["children"], [])
 
-    async def test_failed_creation_cleanup_is_tracked_and_retried(self):
+    async def test_failed_persistence_deletes_untracked_atomic_child(self):
         guild = FakeGuild()
         entry = self.make_entry(guild)
         manager = TempVoiceManager(self.state_path)
         await self.bind_existing_entry(manager, guild)
         member = FakeMember(123, "HoRo", guild, channel=entry)
-        child = FakeVoiceChannel(20, "失敗流程頻道", guild)
-        guild.add_channel(child)
-        guild.create_voice_channel = AsyncMock(return_value=child)
-        response = SimpleNamespace(status=403, reason="Forbidden", headers={})
-        child.set_permissions = AsyncMock(
-            side_effect=discord.Forbidden(response, "set permissions failed")
-        )
-        child.delete = AsyncMock(
-            side_effect=discord.Forbidden(response, "delete failed")
-        )
+        manager._persist_state = Mock(side_effect=OSError("write failed"))
 
         await manager.handle_voice_state_update(
             member,
@@ -572,19 +602,53 @@ class TempVoiceManagerTest(unittest.IsolatedAsyncioTestCase):
             FakeVoiceState(entry),
         )
 
+        child = guild.created_channels[0]
+        self.assertTrue(child.deleted)
+        self.assertIs(member.channel, entry)
+        self.assertFalse(manager.get_guild_status(guild.id).state_available)
+        self.assertEqual(manager.get_guild_status(guild.id).tracked_child_count, 0)
+        self.assertEqual(self.read_state()["children"], [])
+
+    async def test_failed_move_and_cleanup_keeps_atomic_child_persisted(self):
+        guild = FakeGuild()
+        entry = self.make_entry(guild)
+        manager = TempVoiceManager(self.state_path)
+        await self.bind_existing_entry(manager, guild)
+        member = FakeMember(123, "HoRo", guild, channel=entry)
+        response = SimpleNamespace(status=403, reason="Forbidden", headers={})
+
+        async def fail_move(channel, *, reason=None):
+            self.assertEqual(
+                self.read_state()["children"],
+                [
+                    {
+                        "channel_id": channel.id,
+                        "guild_id": guild.id,
+                        "owner_id": member.id,
+                    }
+                ],
+            )
+            raise discord.Forbidden(response, "move failed")
+
+        member.move_to = fail_move
+        with patch.object(
+            FakeVoiceChannel,
+            "delete",
+            AsyncMock(side_effect=discord.Forbidden(response, "delete failed")),
+        ):
+            await manager.handle_voice_state_update(
+                member,
+                FakeVoiceState(None),
+                FakeVoiceState(entry),
+            )
+
+        child = guild.created_channels[0]
+        self.assertEqual(child.permission_calls, [])
         self.assertEqual(
             self.read_state()["children"],
             [{"channel_id": child.id, "guild_id": guild.id, "owner_id": member.id}],
         )
         self.assertEqual(manager.get_guild_status(guild.id).tracked_child_count, 1)
-
-        entry.members.remove(member)
-        member.channel = None
-        child.delete = AsyncMock()
-        await manager.reconcile([guild])
-
-        child.delete.assert_awaited_once()
-        self.assertEqual(self.read_state()["children"], [])
 
     def test_state_parser_rejects_boolean_ids(self):
         for value in (True, False):

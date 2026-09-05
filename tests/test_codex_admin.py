@@ -3,7 +3,7 @@ import unittest
 from unittest.mock import AsyncMock
 
 from src.admin_panel import AdminPanelView
-from src.codex_bridge_client import CodexRuntimeStatus
+from src.codex_bridge_client import CodexAccess, CodexRuntimeStatus
 
 
 class CodexAdminPanelTest(unittest.IsolatedAsyncioTestCase):
@@ -18,7 +18,8 @@ class CodexAdminPanelTest(unittest.IsolatedAsyncioTestCase):
             3,
         )
         self.client = SimpleNamespace(
-            get_runtime_status=AsyncMock(return_value=self.status)
+            get_runtime_status=AsyncMock(return_value=self.status),
+            archive_scope=AsyncMock(),
         )
         voice = SimpleNamespace(
             get_guild_status=lambda _guild_id: SimpleNamespace(
@@ -40,6 +41,7 @@ class CodexAdminPanelTest(unittest.IsolatedAsyncioTestCase):
             user_id=1,
             guild_id=10,
             codex_client=self.client,
+            codex_access=CodexAccess(True, 10, 20, frozenset({1})),
             codex_status=self.status,
             temp_voice=voice,
             steam_free_games=steam,

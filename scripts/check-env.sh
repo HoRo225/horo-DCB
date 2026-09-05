@@ -86,9 +86,12 @@ done
 
 if is_true "$(read_env_value CODEX_ENABLED)"; then
     validate_positive_id CODEX_ALLOWED_GUILD_ID
-    validate_positive_id CODEX_ALLOWED_CHANNEL_ID
+    channel=$(read_env_value CODEX_ALLOWED_CHANNEL_ID)
+    if [ -n "$channel" ]; then
+        validate_positive_id CODEX_ALLOWED_CHANNEL_ID
+    fi
     users=$(read_env_value CODEX_ALLOWED_USER_IDS)
-    if ! printf '%s\n' "$users" | awk -F, '
+    if [ -n "$users" ] && ! printf '%s\n' "$users" | awk -F, '
         NF == 0 { exit 1 }
         {
             delete seen
