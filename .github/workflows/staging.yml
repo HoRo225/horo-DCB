@@ -23,7 +23,7 @@ jobs:
       CODEX_ENABLED: "1"
       CODEX_ALLOWED_GUILD_ID: ${{ secrets.STAGING_GUILD_ID }}
       CODEX_BRIDGE_TOKEN: ${{ secrets.STAGING_CODEX_BRIDGE_TOKEN }}
-      STAGING_CODEX_DIR: ${{ runner.temp }}/horo-dcb-staging-codex
+      STAGING_CODEX_DIR: /tmp/horo-dcb-staging-codex-${{ github.run_id }}
       COMPOSE_PROJECT_NAME: horo-dcb-staging-${{ github.run_id }}
     steps:
       - name: Checkout requested revision
