@@ -1,0 +1,64 @@
+services:
+  bot:
+    image: horo-dcb:local
+    init: true
+    restart: unless-stopped
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    environment:
+      DISCORD_TOKEN: ${DISCORD_TOKEN:?DISCORD_TOKEN is required}
+      CODEX_ENABLED: ${CODEX_ENABLED:-0}
+      CODEX_ALLOWED_GUILD_ID: ${CODEX_ALLOWED_GUILD_ID:-}
+      CODEX_BRIDGE_TOKEN: ${CODEX_BRIDGE_TOKEN:?CODEX_BRIDGE_TOKEN is required}
+      AI_TEXT_DISPLAY_ENABLED: ${AI_TEXT_DISPLAY_ENABLED:-1}
+      TEMP_VOICE_ENABLED: ${TEMP_VOICE_ENABLED:-0}
+      STEAM_FREE_GAMES_ENABLED: ${STEAM_FREE_GAMES_ENABLED:-0}
+    volumes:
+      - bot_data:/app/data
+    tmpfs:
+      - /tmp:size=16m,mode=1777
+    stop_grace_period: 30s
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "3"
+
+  codex:
+    image: horo-dcb:local
+    command: ["python", "-m", "src.codex_bridge", "serve"]
+    init: true
+    restart: unless-stopped
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    environment:
+      CODEX_HOME: /app/codex
+      CODEX_BRIDGE_TOKEN: ${CODEX_BRIDGE_TOKEN:?CODEX_BRIDGE_TOKEN is required}
+    volumes:
+      - codex_data:/app/codex
+    tmpfs:
+      - /tmp:size=16m,mode=1777
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - >-
+          import urllib.request;
+          urllib.request.urlopen('http://127.0.0.1:8765/healthz', timeout=3).read()
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
+    stop_grace_period: 30s
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "3"
+
+volumes:
+  bot_data:
+  codex_data:

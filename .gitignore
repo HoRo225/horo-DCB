@@ -1,0 +1,98 @@
+# Environment files
+.env
+.env.*
+*.env
+!.env.example
+.envrc
+.direnv/
+
+# Credentials and local authentication
+.ssh/
+.codex/
+*.pem
+*.key
+*.p12
+*.pfx
+auth.json
+credentials.json
+token.json
+base_instructions.txt
+prompts/
+
+# Logs
+*.log
+*.transcript
+
+# Operating system files
+.DS_Store
+Thumbs.db
+
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.venv/
+.coverage
+coverage.xml
+htmlcov/
+
+# Runtime state
+*.sqlite
+*.sqlite-*
+*.sqlite3
+*.sqlite3-*
+*.db
+*.db-*
+data/
+bot_data/
+codex_data/
+codex-workspace/
+codex_access.json
+calendar_board.json
+steam_free_games.json
+temp_voice_channels.json
+horo_threads.json
+volumes/
+
+# Private media
+*.gif
+*.ico
+*.jpeg
+*.jpg
+*.mp3
+*.mp4
+*.png
+*.svg
+*.wav
+*.webp
+
+# Local editor and agent state
+.vscode/
+.idea/
+.ai-bridge/
+.superpowers/
+.review/
+
+# Local-only project documents
+AGENTS.md
+SERVER.md
+ARCHITECTURE_AUDIT_*.md
+docs/operations.md
+docs/history/
+docs/plans/
+docs/superpowers/
+
+# Local delivery, backup, and scratch files
+/artifacts/
+/backups/
+/downloads/
+/history/
+/releases/
+/scratch/
+horo-dcb-bot-reliability-*.tar.gz
+image-identity.json
+SHA256SUMS
+deployment-record*.txt
+*.bundle

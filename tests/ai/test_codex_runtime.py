@@ -1,0 +1,110 @@
+from types import SimpleNamespace
+import unittest
+from unittest.mock import AsyncMock, Mock, patch
+
+from src.bot import HoroBot, main
+from src.ai.access import DEFAULT_CODEX_ACCESS_STATE_PATH, CodexAccess
+from tests.support.access import configured_access
+
+
+class CodexRuntimeWiringTest(unittest.TestCase):
+    def test_main_wires_codex_without_legacy_ai_services(self):
+        config = SimpleNamespace(
+            discord_token="discord",
+            codex_enabled=True,
+            codex_allowed_guild_id=10,
+            codex_bridge_token="a" * 64,
+            temp_voice_enabled=False,
+            steam_free_games_enabled=False,
+            ai_text_display_enabled=True,
+        )
+
+        with (
+            patch("src.bot.AppConfig.from_env", return_value=config),
+            patch("src.bot.CodexBridgeClient") as codex_class,
+            patch("src.bot.TempVoiceManager") as voice_class,
+            patch("src.bot.SteamFreeGamesNotifier") as steam_class,
+            patch("src.bot.CalendarManager") as calendar_class,
+            patch("src.bot.CodexAccess") as access_class,
+            patch("src.bot.HoroBot") as bot_class,
+        ):
+            main()
+
+        codex_class.assert_called_once_with(
+            "http://codex:8765",
+            config.codex_bridge_token,
+        )
+        access_class.assert_called_once_with(
+            True,
+            10,
+            state_path=DEFAULT_CODEX_ACCESS_STATE_PATH,
+        )
+        bot_class.assert_called_once_with(
+            codex_class.return_value,
+            access_class.return_value,
+            voice_class.return_value,
+            steam_class.return_value,
+            calendar=calendar_class.return_value,
+            ai_text_display_enabled=True,
+            temp_voice_enabled=False,
+            steam_free_games_enabled=False,
+        )
+        bot_class.return_value.run.assert_called_once_with(
+            "discord",
+            log_handler=None,
+        )
+
+
+class CodexBotLifecycleTest(unittest.IsolatedAsyncioTestCase):
+    async def test_temp_voice_and_steam_default_to_dormant(self):
+        codex = SimpleNamespace(start=AsyncMock())
+        temp_voice = SimpleNamespace(reconcile=AsyncMock())
+        steam = SimpleNamespace(start=Mock())
+        calendar = SimpleNamespace(
+            persistent_board_view=lambda: object(),
+            start=AsyncMock(),
+        )
+        bot = HoroBot(
+            codex,
+            configured_access(True, 10, channel_ids=(20,)),
+            temp_voice,
+            steam,
+            calendar,
+        )
+        bot.tree.sync = AsyncMock()
+        bot.add_view = Mock()
+
+        await bot.setup_hook()
+        await bot.on_ready()
+
+        steam.start.assert_not_called()
+        temp_voice.reconcile.assert_not_awaited()
+
+    async def test_setup_starts_codex_and_close_closes_it(self):
+        codex = SimpleNamespace(start=AsyncMock(), close=AsyncMock())
+        calendar = SimpleNamespace(
+            persistent_board_view=lambda: object(),
+            start=AsyncMock(),
+            close=AsyncMock(),
+        )
+        steam = SimpleNamespace(start=lambda _bot: None, close=AsyncMock())
+        bot = object.__new__(HoroBot)
+        bot.codex = codex
+        bot.calendar = calendar
+        bot.steam_free_games = steam
+        bot.steam_free_games_enabled = False
+        bot.tree = SimpleNamespace(sync=AsyncMock())
+        bot.add_view = lambda _view: None
+
+        await HoroBot.setup_hook(bot)
+        with patch("src.bot.discord.Client.close", AsyncMock()) as discord_close:
+            await HoroBot.close(bot)
+
+        codex.start.assert_awaited_once_with()
+        codex.close.assert_awaited_once_with()
+        calendar.close.assert_awaited_once_with()
+        discord_close.assert_awaited_once_with()
+
+
+if __name__ == "__main__":
+    unittest.main()
