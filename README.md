@@ -38,16 +38,9 @@ Pull Request 必須通過完整 unittest suite 與 runtime image 邊界檢查。
 HORO_DCB_IMAGE=ghcr.io/horo225/horo-dcb@sha256:<digest>
 ```
 
-正式主機只需要 Docker、Compose、`compose.yaml`、私有 `.env` 與 named volumes，不需要 Git checkout、測試或 build tools。
+正式主機只保留 Docker、Compose、`compose.yaml`、私有 `.env` 與 named volumes，不保留 Git checkout、測試、build context 或開發工具。部署由 GitHub Actions 經短命 Tailscale 身分完成。
 
-## 首次私有設定
-
-1. 在正式主機 `.env` 填入 Discord token、Guild 設定及精確 image digest。
-2. 將 Codex base instructions 寫入 `codex_data` 的 `/app/codex/base_instructions.txt`；檔案須為 UTF-8、非空、一般檔案、權限 `0600`，且不超過 16 KiB。
-3. 以 Compose 執行 `python -m src.codex_bridge login` 完成 Codex 登入。
-4. 執行 `sh scripts/check-env.sh` 後再啟動服務。
-
-本 repository 不包含任何實際秘密、prompt 或正式部署資料。
+正式 Discord token、Codex OAuth、base instructions、Guild 設定與 runtime state 只存在 production 主機的私有設定或 Docker volumes；本 repository 不包含這些資料與維運程序。
 
 ## 授權
 
