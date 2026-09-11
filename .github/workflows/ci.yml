@@ -67,7 +67,7 @@ jobs:
 
   deploy:
     name: deploy-production
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && vars.PRODUCTION_ENABLED == 'true'
     needs: publish
     runs-on: ubuntu-latest
     timeout-minutes: 15
