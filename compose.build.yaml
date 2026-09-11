@@ -1,3 +1,5 @@
 services:
   bot:
-    build: .
+    build:
+      context: .
+      target: runtime

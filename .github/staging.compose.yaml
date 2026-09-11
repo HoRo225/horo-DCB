@@ -1,0 +1,4 @@
+services:
+  codex:
+    volumes:
+      - ${STAGING_CODEX_DIR:?STAGING_CODEX_DIR is required}:/app/codex

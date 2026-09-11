@@ -1,6 +1,6 @@
 services:
   bot:
-    image: horo-dcb:local
+    image: ${HORO_DCB_IMAGE:?HORO_DCB_IMAGE is required}
     init: true
     restart: unless-stopped
     read_only: true
@@ -26,7 +26,7 @@ services:
         max-file: "3"
 
   codex:
-    image: horo-dcb:local
+    image: ${HORO_DCB_IMAGE:?HORO_DCB_IMAGE is required}
     command: ["python", "-m", "src.codex_bridge", "serve"]
     init: true
     restart: unless-stopped
