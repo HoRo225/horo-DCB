@@ -1,0 +1,143 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  IMAGE: ghcr.io/horo225/horo-dcb
+
+jobs:
+  test-runtime:
+    name: test-runtime
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+
+      - name: Run the complete test suite
+        run: docker build --target test --build-arg VCS_REF="$GITHUB_SHA" .
+
+      - name: Build and verify the runtime image
+        run: |
+          docker build --target runtime --build-arg VCS_REF="$GITHUB_SHA" -t horo-dcb:runtime .
+          docker run --rm --entrypoint python horo-dcb:runtime -c "import importlib.util, os, pathlib; assert os.getuid() == 10001; assert not pathlib.Path('/app/tests').exists(); assert importlib.util.find_spec('pip') is None; import src.bot, src.codex_bridge"
+
+  publish:
+    name: publish-ghcr
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: test-runtime
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      image_ref: ${{ steps.push.outputs.image_ref }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+
+      - name: Log in to GHCR
+        run: echo "$GITHUB_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and publish immutable image
+        id: push
+        run: |
+          tag="$IMAGE:sha-$GITHUB_SHA"
+          docker build --target runtime --build-arg VCS_REF="$GITHUB_SHA" -t "$tag" .
+          output="$(docker push "$tag")"
+          printf '%s\n' "$output"
+          digest="$(printf '%s\n' "$output" | awk '/digest: sha256:/ { for (i=1; i<=NF; i++) if ($i == "digest:") print $(i+1) }' | tail -n 1)"
+          test -n "$digest"
+          echo "image_ref=$IMAGE@$digest" >> "$GITHUB_OUTPUT"
+
+  deploy:
+    name: deploy-production
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: publish
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment: production
+    concurrency:
+      group: production
+      cancel-in-progress: false
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: Checkout deployment manifest
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+
+      - name: Join the tailnet
+        uses: tailscale/github-action@306e68a486fd2350f2bfc3b19fcd143891a4a2d8 # v4
+        with:
+          oauth-client-id: ${{ secrets.TS_OAUTH_CLIENT_ID }}
+          audience: ${{ secrets.TS_AUDIENCE }}
+          tags: tag:github-deploy
+          ping: ${{ secrets.PRODUCTION_HOST }}
+
+      - name: Upload Compose manifest
+        env:
+          PRODUCTION_HOST: ${{ secrets.PRODUCTION_HOST }}
+        run: |
+          base64 -w 0 compose.yaml | tailscale ssh "horo@$PRODUCTION_HOST" "umask 077; base64 -d > /srv/projects/horo-DCB/compose.yaml.next"
+
+      - name: Deploy exact image digest
+        env:
+          IMAGE_REF: ${{ needs.publish.outputs.image_ref }}
+          PRODUCTION_HOST: ${{ secrets.PRODUCTION_HOST }}
+        run: |
+          tailscale ssh "horo@$PRODUCTION_HOST" "bash -s -- '$IMAGE_REF'" <<'REMOTE'
+          set -eu
+          image_ref=$1
+          prefix='ghcr.io/horo225/horo-dcb@sha256:'
+          case "$image_ref" in "$prefix"*) ;; *) exit 2 ;; esac
+          digest=${image_ref#"$prefix"}
+          test ${#digest} -eq 64
+          case "$digest" in *[!0-9a-f]*) exit 2 ;; esac
+
+          cd /srv/projects/horo-DCB
+          test -f .env
+          test -f compose.yaml.next
+          docker pull "$image_ref"
+          umask 077
+          awk -v image="$image_ref" '
+            BEGIN { found=0 }
+            /^HORO_DCB_IMAGE=/ { print "HORO_DCB_IMAGE=" image; found=1; next }
+            { print }
+            END { if (!found) print "HORO_DCB_IMAGE=" image }
+          ' .env > .env.next
+          docker compose --env-file .env.next -f compose.yaml.next config --quiet
+          mv .env.next .env
+          mv compose.yaml.next compose.yaml
+          docker compose pull
+          docker compose up -d --remove-orphans
+
+          i=0
+          while test $i -lt 18; do
+            bot_id=$(docker compose ps -q bot)
+            codex_id=$(docker compose ps -q codex)
+            if test -n "$bot_id" && test -n "$codex_id" \
+              && test "$(docker inspect -f '{{.State.Running}}' "$bot_id")" = true \
+              && test "$(docker inspect -f '{{.State.Health.Status}}' "$codex_id")" = healthy; then
+              exit 0
+            fi
+            i=$((i + 1))
+            sleep 10
+          done
+          exit 1
+          REMOTE

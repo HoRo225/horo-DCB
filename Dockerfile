@@ -1,4 +1,4 @@
-FROM python:3.14.7-slim-bookworm@sha256:d893452fcd120ea9a7233972c85ea868255bde289a636fe76ff090427fe8fac9
+FROM python:3.14.7-slim-bookworm@sha256:d893452fcd120ea9a7233972c85ea868255bde289a636fe76ff090427fe8fac9 AS base
 
 ARG VCS_REF
 LABEL org.opencontainers.image.source="https://github.com/HoRo225/horo-DCB" \
@@ -26,8 +26,13 @@ RUN groupadd --gid 10001 bot \
     && chown bot:bot /app/data /app/codex /app/codex-workspace \
     && chmod 700 /app/data /app/codex \
     && chmod 500 /app/codex-workspace
-COPY --chown=bot:bot src ./src
-COPY --chown=bot:bot tests ./tests
 
+COPY --chown=bot:bot src ./src
 USER bot
+
+FROM base AS test
+COPY --chown=bot:bot tests ./tests
+RUN python -m unittest discover -s tests -t . -v
+
+FROM base AS runtime
 CMD ["python", "-m", "src.bot"]
