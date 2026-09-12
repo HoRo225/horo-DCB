@@ -172,7 +172,7 @@ class HoroBot(discord.Client):
             await self.calendar.refresh_guild(guild)
 
     async def on_guild_channel_delete(self, channel: discord.abc.GuildChannel) -> None:
-        self.calendar.handle_channel_delete(channel.guild.id, channel.id)
+        await self.calendar.handle_channel_delete(channel.guild.id, channel.id)
         if self.temp_voice_enabled:
             try:
                 await self.temp_voice.handle_channel_delete(channel)
@@ -194,7 +194,7 @@ class HoroBot(discord.Client):
 
     async def on_guild_remove(self, guild: discord.Guild) -> None:
         try:
-            self.calendar.delete_guild(guild.id)
+            await self.calendar.delete_guild(guild.id)
         except Exception:
             logging.error("Calendar guild cleanup failed.")
 

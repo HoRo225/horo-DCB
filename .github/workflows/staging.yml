@@ -33,8 +33,9 @@ jobs:
 
       - name: Test and build
         run: |
-          docker build --target test --build-arg VCS_REF="$GITHUB_SHA" .
-          docker build --target runtime --build-arg VCS_REF="$GITHUB_SHA" -t "$HORO_DCB_IMAGE" .
+          revision="$(git rev-parse HEAD)"
+          docker build --target test --build-arg VCS_REF="$revision" .
+          docker build --target runtime --build-arg VCS_REF="$revision" -t "$HORO_DCB_IMAGE" .
 
       - name: Prepare ephemeral Codex state
         env:

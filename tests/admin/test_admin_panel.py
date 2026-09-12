@@ -1,3 +1,4 @@
+import asyncio
 from types import SimpleNamespace
 import unittest
 from unittest.mock import AsyncMock, Mock, patch
@@ -966,6 +967,89 @@ class AdminPanelViewTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(interaction.response.defer_count, 1)
         self.assertEqual(len(interaction.original_edits), 1)
         self.assertIn("Deponia", self.text(self.view))
+
+    async def test_pending_steam_query_cannot_overwrite_close_or_page_change(self):
+        for next_action, expected_page in (("close", "closed"), ("modules", "modules")):
+            with self.subTest(next_action=next_action):
+                entered = asyncio.Event()
+                release = asyncio.Event()
+
+                async def fetch():
+                    entered.set()
+                    await release.wait()
+                    return SteamFetchResult(frozenset({1}), (make_offer(),))
+
+                self.steam.fetch_current_offers = AsyncMock(side_effect=fetch)
+                pending_interaction = FakeInteraction()
+                pending = asyncio.create_task(
+                    self.view.handle_action(pending_interaction, "steam_query")
+                )
+                await entered.wait()
+
+                await self.view.handle_action(FakeInteraction(), next_action)
+                release.set()
+                await pending
+
+                self.assertEqual(self.view.page, expected_page)
+                self.assertEqual(pending_interaction.original_edits, [])
+
+    async def test_new_steam_query_supersedes_an_older_result(self):
+        entered = asyncio.Event()
+        release = asyncio.Event()
+        calls = 0
+
+        async def fetch():
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                entered.set()
+                await release.wait()
+                return SteamFetchResult(
+                    frozenset({1}),
+                    (make_offer(app_id=1, name="Old result"),),
+                )
+            return SteamFetchResult(
+                frozenset({2}),
+                (make_offer(app_id=2, name="New result"),),
+            )
+
+        self.steam.fetch_current_offers = AsyncMock(side_effect=fetch)
+        old_interaction = FakeInteraction()
+        old = asyncio.create_task(self.view.handle_action(old_interaction, "steam_query"))
+        await entered.wait()
+
+        await self.view.handle_action(FakeInteraction(), "steam_query")
+        release.set()
+        await old
+
+        self.assertIn("New result", self.text(self.view))
+        self.assertNotIn("Old result", self.text(self.view))
+        self.assertEqual(old_interaction.original_edits, [])
+
+    async def test_close_is_published_after_an_edit_already_in_progress(self):
+        edit_entered = asyncio.Event()
+        release_edit = asyncio.Event()
+        query_interaction = FakeInteraction()
+
+        async def blocked_edit(**kwargs):
+            edit_entered.set()
+            await release_edit.wait()
+            query_interaction.original_edits.append(kwargs)
+
+        query_interaction.edit_original_response = blocked_edit
+        query = asyncio.create_task(
+            self.view.handle_action(query_interaction, "steam_query")
+        )
+        await edit_entered.wait()
+        close_interaction = FakeInteraction()
+        close = asyncio.create_task(self.view.handle_action(close_interaction, "close"))
+        await asyncio.sleep(0)
+        release_edit.set()
+        await asyncio.gather(query, close)
+
+        self.assertEqual(self.view.page, "closed")
+        self.assertEqual(len(close_interaction.response.edits), 1)
+        self.assertTrue(self.buttons(self.view)["已關閉"]["disabled"])
 
 
 if __name__ == "__main__":

@@ -164,10 +164,13 @@ class CodexBridgeClient:
         text: str,
         images: tuple[str, ...],
     ) -> str:
-        if asyncio.current_task() not in self._admission.jobs:
+        job = self._admission.jobs.get(asyncio.current_task())
+        if job is None:
             async with self.accepted_request(key) as job:
                 async with asyncio.timeout_at(job.deadline):
                     return await self.chat(key, text, images)
+        if job.key != key:
+            raise CodexBridgeError("invalid_request")
         body = await self._request(
             "POST",
             "/v1/chat",

@@ -752,6 +752,18 @@ class CodexBridgeClientStatusTest(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn(None, session.timeouts)
         self.assertEqual([timeout.total for timeout in session.timeouts], [3, 125])
 
+    async def test_chat_rejects_a_different_key_than_the_accepted_job(self):
+        client = CodexBridgeClient("http://codex:8765", "d" * 64)
+        session = RecordingRequestSession()
+        client._session = session
+
+        async with client.accepted_request("guild:1:thread:2"):
+            with self.assertRaises(CodexBridgeError) as caught:
+                await client.chat("guild:9:thread:8", "hello", ())
+
+        self.assertEqual(caught.exception.code, "invalid_request")
+        self.assertEqual(session.timeouts, [])
+
 
 class BridgeHttpTest(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):

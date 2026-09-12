@@ -180,7 +180,10 @@ async def send_ai_answer(
                     allowed_mentions=discord.AllowedMentions.none(),
                 )
             sent_count += 1
-    except discord.HTTPException:
+    except discord.HTTPException as exc:
+        if exc.status in {403, 404}:
+            logging.error("Discord AI TextDisplay 回覆無法送達。")
+            return "unavailable"
         logging.error("Discord AI TextDisplay 回覆送出失敗，改用原生文字。")
         remaining = "".join(display_chunks[sent_count:])
         return await _send_native_ai_chunks(

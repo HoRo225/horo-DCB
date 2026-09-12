@@ -273,7 +273,7 @@ class CodexArchiveRoutingTest(unittest.IsolatedAsyncioTestCase):
         codex = SimpleNamespace(archive_scope=AsyncMock())
         bot = SimpleNamespace(
             codex=codex,
-            calendar=SimpleNamespace(handle_channel_delete=lambda *_args: None),
+            calendar=SimpleNamespace(handle_channel_delete=AsyncMock()),
             temp_voice=None,
             temp_voice_enabled=False,
         )
@@ -287,7 +287,7 @@ class CodexArchiveRoutingTest(unittest.IsolatedAsyncioTestCase):
         codex = SimpleNamespace(archive_scope=AsyncMock())
         bot = SimpleNamespace(
             codex=codex,
-            calendar=SimpleNamespace(delete_guild=lambda _guild_id: None),
+            calendar=SimpleNamespace(delete_guild=AsyncMock()),
             temp_voice=None,
             temp_voice_enabled=False,
         )
@@ -367,7 +367,7 @@ class RetainedEventRoutingTest(unittest.IsolatedAsyncioTestCase):
         voice.reconcile.assert_awaited_once_with([guild], prune_absent=False)
 
     async def test_guild_cleanup_keeps_other_services_when_calendar_fails(self):
-        def fail_calendar(_guild_id):
+        async def fail_calendar(_guild_id):
             raise RuntimeError("private state detail")
         calendar = SimpleNamespace(delete_guild=fail_calendar)
         voice = SimpleNamespace(delete_guild=AsyncMock())

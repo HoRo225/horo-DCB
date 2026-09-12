@@ -41,6 +41,7 @@ class CalendarManager:
         self._state_available = True
         self._bindings: dict[int, CalendarBinding] = {}
         self._locks: defaultdict[int, asyncio.Lock] = defaultdict(asyncio.Lock)
+        self._versions: defaultdict[int, int] = defaultdict(int)
         self._client: discord.Client | None = None
         self._task: asyncio.Task[None] | None = None
         try:
@@ -245,6 +246,7 @@ class CalendarManager:
         *,
         actor_id: int,
     ) -> CalendarBinding:
+        version = self._versions[guild.id]
         async with self._locks[guild.id]:
             if not self._state_available:
                 raise CalendarUserError("行事曆狀態目前不可用，無法綁定。")
@@ -259,6 +261,9 @@ class CalendarManager:
                 )
             except (discord.Forbidden, discord.HTTPException) as exc:
                 raise CalendarUserError("Bot 無法在指定頻道建立行事曆看板。") from exc
+            if version != self._versions[guild.id]:
+                await self._safe_delete_message(channel, message.id)
+                raise CalendarUserError("行事曆頻道已變更，請重新綁定。")
             old_binding = self._bindings.get(guild.id)
             new_bindings = dict(self._bindings)
             new_binding = CalendarBinding(guild.id, channel.id, message.id)
@@ -296,6 +301,7 @@ class CalendarManager:
     async def refresh_guild(self, guild: discord.Guild) -> bool:
         if not self._state_available:
             return False
+        version = self._versions[guild.id]
         async with self._locks[guild.id]:
             binding = self._bindings.get(guild.id)
             if binding is None:
@@ -325,6 +331,9 @@ class CalendarManager:
                         view=view,
                         allowed_mentions=discord.AllowedMentions.none(),
                     )
+                    if version != self._versions[guild.id]:
+                        await self._safe_delete_message(channel, replacement.id)
+                        return False
                     new_bindings = dict(self._bindings)
                     new_bindings[guild.id] = CalendarBinding(
                         guild.id,
@@ -363,27 +372,30 @@ class CalendarManager:
         if guild is not None:
             await self.refresh_guild(guild)
 
-    def handle_channel_delete(self, guild_id: int, channel_id: int) -> None:
-        binding = self.get_binding(guild_id)
-        if binding is None or binding.channel_id != channel_id:
-            return
-        new_bindings = dict(self._bindings)
-        new_bindings.pop(guild_id, None)
-        try:
-            self._commit_bindings(new_bindings)
-        except CalendarUserError:
-            pass
+    async def handle_channel_delete(self, guild_id: int, channel_id: int) -> None:
+        self._versions[guild_id] += 1
+        async with self._locks[guild_id]:
+            binding = self.get_binding(guild_id)
+            if binding is None or binding.channel_id != channel_id:
+                return
+            new_bindings = dict(self._bindings)
+            new_bindings.pop(guild_id, None)
+            try:
+                self._commit_bindings(new_bindings)
+            except CalendarUserError:
+                pass
 
-    def delete_guild(self, guild_id: int) -> None:
-        if guild_id not in self._bindings:
-            return
-        new_bindings = dict(self._bindings)
-        new_bindings.pop(guild_id, None)
-        try:
-            self._commit_bindings(new_bindings)
-        except CalendarUserError:
-            pass
-        self._locks.pop(guild_id, None)
+    async def delete_guild(self, guild_id: int) -> None:
+        self._versions[guild_id] += 1
+        async with self._locks[guild_id]:
+            if guild_id not in self._bindings:
+                return
+            new_bindings = dict(self._bindings)
+            new_bindings.pop(guild_id, None)
+            try:
+                self._commit_bindings(new_bindings)
+            except CalendarUserError:
+                pass
 
     def board_interaction_is_current(self, interaction: discord.Interaction) -> bool:
         if interaction.guild_id is None or interaction.message is None:

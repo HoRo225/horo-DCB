@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 import time
 
@@ -170,6 +171,8 @@ class AdminPanelView(discord.ui.LayoutView):
         self.temp_voice_enabled = temp_voice_enabled
         self.steam_free_games_enabled = steam_free_games_enabled
         self._overview_updated_at = int(time.time())
+        self._operation = 0
+        self._edit_lock = asyncio.Lock()
         self.page = "overview"
         self._render_overview()
 
@@ -276,8 +279,12 @@ class AdminPanelView(discord.ui.LayoutView):
             f"-# {channel} · 每 {int(status.poll_interval_seconds // 60)} 分鐘檢查 · 狀態正常"
         )
 
-    async def _refresh_ai_status(self) -> None:
-        self.codex_status = await load_codex_status(self.codex_client)
+    async def _refresh_ai_status(self, operation: int | None = None) -> bool:
+        status = await load_codex_status(self.codex_client)
+        if operation is not None and operation != self._operation:
+            return False
+        self.codex_status = status
+        return True
 
     def _render_overview(self) -> None:
         self.page = "overview"
@@ -732,19 +739,47 @@ class AdminPanelView(discord.ui.LayoutView):
         else:
             self._render_overview()
 
-    async def _edit(self, interaction: discord.Interaction) -> None:
-        await interaction.response.edit_message(
-            view=self,
-            allowed_mentions=discord.AllowedMentions.none(),
-        )
+    def _begin_operation(self) -> int:
+        self._operation += 1
+        return self._operation
+
+    def _is_current(self, operation: int) -> bool:
+        return operation == self._operation
+
+    async def _edit(self, interaction: discord.Interaction, operation: int) -> None:
+        async with self._edit_lock:
+            if not self._is_current(operation):
+                return
+            await interaction.response.edit_message(
+                view=self,
+                allowed_mentions=discord.AllowedMentions.none(),
+            )
+
+    async def _edit_original(
+        self,
+        interaction: discord.Interaction,
+        operation: int,
+    ) -> None:
+        async with self._edit_lock:
+            if not self._is_current(operation):
+                return
+            await interaction.edit_original_response(
+                view=self,
+                allowed_mentions=discord.AllowedMentions.none(),
+            )
 
     async def handle_codex_channel_select(
         self,
         interaction: discord.Interaction,
         channels: tuple[object | None, ...],
     ) -> None:
+        operation = self._begin_operation()
         await interaction.response.defer()
+        if not self._is_current(operation):
+            return
         async with self.codex_access.mutation_lock:
+            if not self._is_current(operation):
+                return
             guild_id = getattr(getattr(interaction, "guild", None), "id", None)
             channel_ids = [getattr(channel, "id", None) for channel in channels]
             if (
@@ -786,19 +821,23 @@ class AdminPanelView(discord.ui.LayoutView):
                             self.codex_access.resume()
                     else:
                         note = f"已更新 {count} 個白名單頻道。"
+                    if not self._is_current(operation):
+                        return
                     self._render_ai(note)
-        await interaction.edit_original_response(
-            view=self,
-            allowed_mentions=discord.AllowedMentions.none(),
-        )
+        await self._edit_original(interaction, operation)
 
     async def handle_codex_role_select(
         self,
         interaction: discord.Interaction,
         roles: tuple[discord.Role, ...],
     ) -> None:
+        operation = self._begin_operation()
         await interaction.response.defer()
+        if not self._is_current(operation):
+            return
         async with self.codex_access.mutation_lock:
+            if not self._is_current(operation):
+                return
             guild_id = getattr(getattr(interaction, "guild", None), "id", None)
             self.user_role_ids = member_role_ids(interaction.user)
             role_ids = [getattr(role, "id", None) for role in roles]
@@ -847,18 +886,20 @@ class AdminPanelView(discord.ui.LayoutView):
                             note = f"已更新 {len(selected)} 個白名單身分組。"
                     finally:
                         self.codex_access.resume()
+                    if not self._is_current(operation):
+                        return
                     self._render_ai(note)
-        await interaction.edit_original_response(
-            view=self,
-            allowed_mentions=discord.AllowedMentions.none(),
-        )
+        await self._edit_original(interaction, operation)
 
     async def handle_steam_role_select(
         self,
         interaction: discord.Interaction,
         roles: tuple[discord.Role, ...],
     ) -> None:
+        operation = self._begin_operation()
         await interaction.response.defer()
+        if not self._is_current(operation):
+            return
         if not self.steam_free_games_enabled:
             self._render_steam(notice="Steam 自動通知已停用，未修改身分組設定。")
         elif interaction.guild is None:
@@ -867,24 +908,26 @@ class AdminPanelView(discord.ui.LayoutView):
             try:
                 await self.steam_free_games.set_notification_roles(interaction.guild, roles)
             except SteamConfigurationError as exc:
+                if not self._is_current(operation):
+                    return
                 self._render_steam(notice=str(exc))
             else:
+                if not self._is_current(operation):
+                    return
                 self._render_steam(
                     notice=f"已更新 Steam 免費遊戲通知身分組，共 {len(roles)} 個。"
                 )
-        await interaction.edit_original_response(
-            view=self,
-            allowed_mentions=discord.AllowedMentions.none(),
-        )
+        await self._edit_original(interaction, operation)
 
     async def handle_action(self, interaction: discord.Interaction, action: str) -> None:
+        operation = self._begin_operation()
         if action in ("overview", "modules", "voice", "steam"):
             self._render_page(action)
-            await self._edit(interaction)
+            await self._edit(interaction, operation)
             return
         if action == "close":
             self._render_closed()
-            await self._edit(interaction)
+            await self._edit(interaction, operation)
             return
         if action not in {
             "ai", "refresh", "voice_sync", "steam_role_clear", "steam_query",
@@ -892,12 +935,16 @@ class AdminPanelView(discord.ui.LayoutView):
             return
 
         await interaction.response.defer()
+        if not self._is_current(operation):
+            return
         if action == "ai":
-            await self._refresh_ai_status()
+            if not await self._refresh_ai_status(operation):
+                return
             self._render_ai()
         elif action == "refresh":
             if self.page in ("overview", "ai"):
-                await self._refresh_ai_status()
+                if not await self._refresh_ai_status(operation):
+                    return
             if self.page == "overview":
                 self._overview_updated_at = int(time.time())
             self._render_page(self.page)
@@ -912,9 +959,13 @@ class AdminPanelView(discord.ui.LayoutView):
                     try:
                         await self.temp_voice.reconcile([guild], prune_absent=False)
                     except Exception:
+                        if not self._is_current(operation):
+                            return
                         logging.exception("管理控制台重新同步臨時語音失敗。")
                         self._render_voice("重新同步失敗，請查看 Bot 紀錄。")
                     else:
+                        if not self._is_current(operation):
+                            return
                         self._render_voice("已重新執行同步流程。")
         elif action == "steam_role_clear":
             if not self.steam_free_games_enabled:
@@ -925,8 +976,12 @@ class AdminPanelView(discord.ui.LayoutView):
                         self.guild_id
                     )
                 except SteamConfigurationError as exc:
+                    if not self._is_current(operation):
+                        return
                     self._render_steam(notice=str(exc))
                 else:
+                    if not self._is_current(operation):
+                        return
                     self._render_steam(
                         notice=(
                             "已取消 Steam 免費遊戲通知身分組。"
@@ -938,14 +993,15 @@ class AdminPanelView(discord.ui.LayoutView):
             try:
                 result = await self.steam_free_games.fetch_current_offers()
             except Exception:
+                if not self._is_current(operation):
+                    return
                 logging.exception("管理控制台查詢 Steam 免費遊戲失敗。")
                 self._render_steam(error="目前無法取得 Steam 資料。")
             else:
+                if not self._is_current(operation):
+                    return
                 if result is None:
                     self._render_steam(error="目前無法取得 Steam 資料。")
                 else:
                     self._render_steam(result)
-        await interaction.edit_original_response(
-            view=self,
-            allowed_mentions=discord.AllowedMentions.none(),
-        )
+        await self._edit_original(interaction, operation)
