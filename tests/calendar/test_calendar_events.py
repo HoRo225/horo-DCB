@@ -1,6 +1,6 @@
 import asyncio
 import json
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from types import SimpleNamespace
@@ -13,6 +13,7 @@ from src.calendar.manager import CalendarManager
 from src.calendar.models import (
     CALENDAR_TZ,
     CalendarBinding,
+    CalendarEventInput,
     CalendarUserError,
     build_calendar_event_input,
     parse_calendar_datetime,
@@ -232,6 +233,17 @@ class CalendarInputTest(unittest.TestCase):
         self.assertEqual(result.description, "測試")
         self.assertEqual(result.duration_minutes, 120)
 
+    def test_typed_event_input_rejects_invalid_duration(self):
+        start = datetime(2099, 8, 25, 20, 0, tzinfo=CALENDAR_TZ)
+        for end in (
+            start - timedelta(minutes=30),
+            start,
+            start + timedelta(seconds=59),
+            start + timedelta(minutes=10080, seconds=1),
+        ):
+            with self.subTest(end=end), self.assertRaises(CalendarUserError):
+                CalendarEventInput("團練", start, end, "Discord", None).duration_minutes
+
 
 class CalendarStateTest(unittest.TestCase):
     def setUp(self):
@@ -439,6 +451,31 @@ class CalendarBoardTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(guild.fetch_events_calls, 0)
         self.assertEqual(guild.fetch_event_calls, 0)
 
+    async def test_create_and_edit_reject_invalid_typed_duration_before_discord(self):
+        guild = FakeGuild()
+        channel = FakeTextChannel(10)
+        guild.add_channel(channel)
+        self.manager._commit_bindings({1: CalendarBinding(1, channel.id, 100)})
+        current = make_event(event_id=5)
+        current.edit = AsyncMock()
+        guild.event_by_id[5] = current
+        actor = SimpleNamespace(
+            id=123,
+            guild_permissions=SimpleNamespace(administrator=False, manage_events=True),
+        )
+        start = datetime(2099, 8, 25, 20, 0, tzinfo=CALENDAR_TZ)
+
+        for end in (start - timedelta(minutes=1), start, start + timedelta(days=8)):
+            event_input = CalendarEventInput("團練", start, end, "Discord", None)
+            with self.subTest(end=end):
+                with self.assertRaises(CalendarUserError):
+                    await self.manager.create_event(guild, event_input, actor)
+                with self.assertRaises(CalendarUserError):
+                    await self.manager.edit_event(guild, 5, event_input, actor)
+
+        self.assertEqual(guild.created, [])
+        current.edit.assert_not_awaited()
+
 
     async def test_rebind_replaces_old_board_and_invalidates_old_message(self):
         guild = FakeGuild()
@@ -474,14 +511,75 @@ class CalendarBoardTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(channel.fetch_message_calls, 0)
         self.assertEqual(guild.fetch_events_calls, 0)
 
-    def test_channel_and_guild_cleanup_remove_binding(self):
+    async def test_channel_and_guild_cleanup_remove_binding(self):
         self.manager._commit_bindings({1: CalendarBinding(1, 10, 20)})
-        self.manager.handle_channel_delete(1, 10)
+        await self.manager.handle_channel_delete(1, 10)
         self.assertIsNone(self.manager.get_binding(1))
 
         self.manager._commit_bindings({1: CalendarBinding(1, 11, 21)})
-        self.manager.delete_guild(1)
+        await self.manager.delete_guild(1)
         self.assertIsNone(self.manager.get_binding(1))
+
+    async def test_guild_delete_cannot_be_undone_by_pending_rebind(self):
+        guild = FakeGuild()
+        old_channel = FakeTextChannel(10)
+        new_channel = FakeTextChannel(11)
+        guild.add_channel(old_channel)
+        guild.add_channel(new_channel)
+        await self.manager.bind(guild, old_channel, actor_id=1)
+        entered = asyncio.Event()
+        release = asyncio.Event()
+        original_send = new_channel.send
+
+        async def blocked_send(**kwargs):
+            entered.set()
+            await release.wait()
+            return await original_send(**kwargs)
+
+        new_channel.send = blocked_send
+        lock = self.manager._locks[guild.id]
+        bind_task = asyncio.create_task(self.manager.bind(guild, new_channel, actor_id=1))
+        await entered.wait()
+        delete_task = asyncio.create_task(self.manager.delete_guild(guild.id))
+        await asyncio.sleep(0)
+        self.assertIs(self.manager._locks[guild.id], lock)
+        release.set()
+
+        with self.assertRaises(CalendarUserError):
+            await bind_task
+        await delete_task
+
+        self.assertIsNone(self.manager.get_binding(guild.id))
+        self.assertIsNone(CalendarManager(self.state_path).get_binding(guild.id))
+        self.assertTrue(new_channel.messages[100].deleted)
+
+    async def test_channel_delete_invalidates_pending_board_replacement(self):
+        guild = FakeGuild()
+        channel = FakeTextChannel(10)
+        guild.add_channel(channel)
+        self.manager._commit_bindings({1: CalendarBinding(1, channel.id, 999)})
+        entered = asyncio.Event()
+        release = asyncio.Event()
+        original_send = channel.send
+
+        async def blocked_send(**kwargs):
+            entered.set()
+            await release.wait()
+            return await original_send(**kwargs)
+
+        channel.send = blocked_send
+        refresh_task = asyncio.create_task(self.manager.refresh_guild(guild))
+        await entered.wait()
+        delete_task = asyncio.create_task(
+            self.manager.handle_channel_delete(guild.id, channel.id)
+        )
+        release.set()
+
+        self.assertFalse(await refresh_task)
+        await delete_task
+        self.assertIsNone(self.manager.get_binding(guild.id))
+        self.assertIsNone(CalendarManager(self.state_path).get_binding(guild.id))
+        self.assertTrue(channel.messages[100].deleted)
 
     def test_edit_picker_caps_select_at_25_and_has_second_page(self):
         events = [make_event(event_id=index) for index in range(1, 27)]

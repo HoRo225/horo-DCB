@@ -109,6 +109,32 @@ class BotOutputTest(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(fallback.kwargs["allowed_mentions"].everyone)
         self.assertFalse(fallback.kwargs["mention_author"])
 
+    async def test_forbidden_and_not_found_do_not_retry_with_native_text(self):
+        for status in (403, 404):
+            with self.subTest(status=status):
+                failure = discord.HTTPException(
+                    SimpleNamespace(status=status, reason="unavailable"),
+                    "private transport detail",
+                )
+                message = SimpleNamespace(
+                    reply=AsyncMock(side_effect=failure),
+                    channel=SimpleNamespace(send=AsyncMock()),
+                )
+
+                with patch(
+                    "src.ai.discord.build_ai_text_display_view",
+                    return_value=discord.ui.LayoutView(),
+                ):
+                    result = await send_ai_answer(
+                        message,
+                        "answer",
+                        text_display_enabled=True,
+                    )
+
+                self.assertEqual(result, "unavailable")
+                self.assertEqual(message.reply.await_count, 1)
+                message.channel.send.assert_not_awaited()
+
 
 if __name__ == "__main__":
     unittest.main()

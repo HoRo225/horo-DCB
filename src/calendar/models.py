@@ -29,7 +29,10 @@ class CalendarEventInput:
 
     @property
     def duration_minutes(self) -> int:
-        return max(1, int((self.end_time - self.start_time).total_seconds() // 60))
+        seconds = (self.end_time - self.start_time).total_seconds()
+        if not 60 <= seconds <= 10080 * 60:
+            raise CalendarUserError("活動長度必須是 1 到 10080 分鐘的整數。")
+        return int(seconds // 60)
 
 
 def calendar_now() -> datetime:
