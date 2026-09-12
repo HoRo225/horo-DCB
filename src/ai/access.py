@@ -66,7 +66,7 @@ class CodexAccess:
                 raise ValueError("invalid Codex access state")
         except FileNotFoundError:
             return
-        except (OSError, ValueError, TypeError, json.JSONDecodeError):
+        except (OSError, ValueError, TypeError):
             self.channel_ids = frozenset()
             self.role_ids = frozenset()
             self.state_available = False

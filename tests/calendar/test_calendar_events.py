@@ -26,6 +26,7 @@ from src.calendar.views import (
     CalendarBrowseView,
     CalendarEditPickerView,
     CalendarEventModal,
+    _CalendarBoardButton,
     render_board_text,
 )
 
@@ -314,6 +315,11 @@ class CalendarBoardTest(unittest.IsolatedAsyncioTestCase):
                 {item.args[1] for item in self.manager.handle_board_action.await_args_list},
                 {"create", "edit", "browse", "refresh"},
             )
+            unattached = _CalendarBoardButton(
+                "refresh", "重新整理", "test:unattached"
+            )
+            await unattached.callback(interaction)
+            self.assertEqual(self.manager.handle_board_action.await_count, 4)
         finally:
             await client.close()
 

@@ -59,7 +59,7 @@ class TempVoiceManager:
 
         try:
             self._parents, self._children = self._load_state()
-        except (OSError, ValueError, TypeError, json.JSONDecodeError):
+        except (OSError, ValueError, TypeError):
             self._state_available = False
             logging.exception(
                 "臨時語音狀態檔無法讀取；為避免建立無法追蹤的頻道，臨時語音功能已停用。"

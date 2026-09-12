@@ -6,7 +6,6 @@ from datetime import datetime, timedelta
 import json
 import logging
 from pathlib import Path
-from typing import TYPE_CHECKING
 
 import discord
 
@@ -20,13 +19,16 @@ from src.calendar.models import (
     build_calendar_event_input,
     calendar_now,
 )
+from src.calendar.views import (
+    BROWSE_EVENTS_PER_PAGE,
+    CalendarAdminView,
+    CalendarBoardView,
+    CalendarBrowseView,
+    CalendarEditPickerView,
+    CalendarEventModal,
+    render_board_text,
+)
 from src.state import write_json_atomic
-
-if TYPE_CHECKING:
-    from src.calendar.views import (
-        CalendarAdminView,
-        CalendarBoardView,
-    )
 
 STATE_VERSION = 1
 DEFAULT_STATE_PATH = Path("/app/data/calendar_board.json")
@@ -43,7 +45,7 @@ class CalendarManager:
         self._task: asyncio.Task[None] | None = None
         try:
             self._bindings = self._load_state()
-        except (OSError, ValueError, TypeError, json.JSONDecodeError):
+        except (OSError, ValueError, TypeError):
             self._state_available = False
             logging.exception("行事曆看板狀態檔無法讀取；行事曆已停止寫入。")
 
@@ -228,18 +230,12 @@ class CalendarManager:
         *,
         now: datetime | None = None,
     ) -> CalendarBoardView:
-        from src.calendar.views import CalendarBoardView, render_board_text
-
         return CalendarBoardView(self, render_board_text(guild_name, events, now=now))
 
     def persistent_board_view(self) -> CalendarBoardView:
-        from src.calendar.views import CalendarBoardView
-
         return CalendarBoardView(self, "行事曆")
 
     def admin_view(self, *, user_id: int, guild_id: int) -> CalendarAdminView:
-        from src.calendar.views import CalendarAdminView
-
         return CalendarAdminView(self, user_id=user_id, guild_id=guild_id)
 
     async def bind(
@@ -431,13 +427,9 @@ class CalendarManager:
                 await self._reply_ephemeral(interaction, str(exc))
                 return
         if action == "create":
-            from src.calendar.views import CalendarEventModal
-
             await interaction.response.send_modal(CalendarEventModal(self))
             return
         if action == "edit":
-            from src.calendar.views import CalendarEditPickerView
-
             events = self.get_editable_events(interaction.guild)
             if not events:
                 await self._reply_ephemeral(interaction, "目前沒有可由 Horo 編輯的 External 活動。")
@@ -455,8 +447,6 @@ class CalendarManager:
             )
             return
         if action == "browse":
-            from src.calendar.views import BROWSE_EVENTS_PER_PAGE, CalendarBrowseView
-
             events = self._cached_events(interaction.guild)
             if not events:
                 await self._reply_ephemeral(interaction, "目前沒有即將到來的活動。")

@@ -2,10 +2,10 @@ from __future__ import annotations
 
 import calendar as month_calendar
 from datetime import datetime, timezone
+from typing import TYPE_CHECKING
 
 import discord
 
-from src.calendar.manager import CalendarManager
 from src.calendar.models import (
     CALENDAR_TZ,
     CalendarUserError,
@@ -18,6 +18,9 @@ from src.calendar.models import (
     calendar_now,
     event_to_input,
 )
+
+if TYPE_CHECKING:
+    from src.calendar.manager import CalendarManager
 
 MAX_UPCOMING_SHOWN = 8
 EVENTS_PER_PAGE = 25
@@ -237,9 +240,9 @@ class _CalendarBoardButton(discord.ui.Button):
         self.action = action
 
     async def callback(self, interaction: discord.Interaction) -> None:
-        manager = getattr(self.view, "manager", None)
-        if isinstance(manager, CalendarManager):
-            await manager.handle_board_action(interaction, self.action)
+        view = self.view
+        if isinstance(view, CalendarBoardView):
+            await view.manager.handle_board_action(interaction, self.action)
 
 
 class CalendarBoardView(discord.ui.LayoutView):

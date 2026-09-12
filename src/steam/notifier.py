@@ -88,7 +88,7 @@ class SteamFreeGamesNotifier:
 
         try:
             self._guilds = self._load_state()
-        except (OSError, ValueError, TypeError, json.JSONDecodeError):
+        except (OSError, ValueError, TypeError):
             self._state_available = False
             logging.exception(
                 "Steam 免費遊戲狀態檔無法讀取；為避免重複洗版，通知功能已停用。"
