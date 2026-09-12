@@ -11,6 +11,14 @@ DEFAULT_CODEX_ACCESS_STATE_PATH = Path("/app/data/codex_access.json")
 MAX_CODEX_ALLOWED_CHANNELS = 25
 
 
+def member_role_ids(member: object) -> frozenset[int]:
+    return frozenset(
+        role_id
+        for role in getattr(member, "roles", ())
+        if type(role_id := getattr(role, "id", None)) is int and role_id > 0
+    )
+
+
 class CodexAccess:
     def __init__(
         self,

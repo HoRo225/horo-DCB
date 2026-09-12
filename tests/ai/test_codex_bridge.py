@@ -14,13 +14,25 @@ from aiohttp.test_utils import TestClient, TestServer
 from src.ai.protocol import BridgeRequestError, validate_chat_payload
 from src.ai.bridge import _CONFIG_OVERRIDES, _base_instructions, _codex_home, create_app
 from src.ai.runtime import CodexService, ThreadStore
-from src.ai.access import CodexAccess
+from src.ai.access import CodexAccess, member_role_ids
 from src.ai.client import CodexBridgeClient
 from src.ai.protocol import CodexBridgeError, conversation_key
 from tests.support.access import configured_access
 
 
 class CodexAccessTest(unittest.TestCase):
+    def test_member_role_ids_accepts_only_positive_integer_ids(self):
+        member = SimpleNamespace(roles=[
+            SimpleNamespace(id=70),
+            SimpleNamespace(id=True),
+            SimpleNamespace(id=0),
+            SimpleNamespace(id="80"),
+            object(),
+        ])
+
+        self.assertEqual(member_role_ids(member), frozenset({70}))
+        self.assertEqual(member_role_ids(object()), frozenset())
+
     def test_allowlist_accepts_multiple_channels_with_exact_guild_and_role(self):
         access = configured_access(True, 10, channel_ids=(20,))
         access.set_channels(10, frozenset({20, 21}))

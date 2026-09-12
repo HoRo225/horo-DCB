@@ -116,8 +116,6 @@ class CodexBridgeClient:
                         if isinstance(code, str) and code in SAFE_ERROR_CODES
                         else "unavailable"
                     )
-        except CodexBridgeError:
-            raise
         except (aiohttp.ClientError, TimeoutError) as exc:
             raise CodexBridgeError("unavailable") from exc
         if not isinstance(body, dict):

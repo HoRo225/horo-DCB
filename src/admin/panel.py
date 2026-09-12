@@ -5,7 +5,7 @@ import time
 
 import discord
 
-from src.ai.access import MAX_CODEX_ALLOWED_CHANNELS, CodexAccess
+from src.ai.access import MAX_CODEX_ALLOWED_CHANNELS, CodexAccess, member_role_ids
 from src.ai.client import CodexBridgeClient
 from src.ai.protocol import CodexRuntimeStatus
 from src.steam.notifier import (
@@ -28,6 +28,14 @@ MODULE_PAGES = (
     ("voice", "臨時語音", "入口頻道與同步狀態"),
     ("steam", "Steam 免費遊戲", "限時免費查詢"),
 )
+
+
+async def load_codex_status(client: CodexBridgeClient) -> CodexRuntimeStatus:
+    try:
+        return await client.get_runtime_status()
+    except Exception:
+        logging.exception("管理控制台讀取 Codex 狀態失敗。")
+        return CodexRuntimeStatus(False, False, None, None, None, None, 0)
 
 
 class _PanelButton(discord.ui.Button["AdminPanelView"]):
@@ -172,12 +180,7 @@ class AdminPanelView(discord.ui.LayoutView):
             and interaction.permissions.administrator
         )
         if allowed:
-            self.user_role_ids = frozenset(
-                role_id
-                for role in getattr(interaction.user, "roles", ())
-                if type(role_id := getattr(role, "id", None)) is int
-                and role_id > 0
-            )
+            self.user_role_ids = member_role_ids(interaction.user)
             return True
         if not interaction.response.is_done():
             await interaction.response.send_message(
@@ -274,19 +277,7 @@ class AdminPanelView(discord.ui.LayoutView):
         )
 
     async def _refresh_ai_status(self) -> None:
-        try:
-            self.codex_status = await self.codex_client.get_runtime_status()
-        except Exception:
-            logging.exception("管理控制台讀取 Codex 狀態失敗。")
-            self.codex_status = CodexRuntimeStatus(
-                False,
-                False,
-                None,
-                None,
-                None,
-                None,
-                0,
-            )
+        self.codex_status = await load_codex_status(self.codex_client)
 
     def _render_overview(self) -> None:
         self.page = "overview"
@@ -809,11 +800,7 @@ class AdminPanelView(discord.ui.LayoutView):
         await interaction.response.defer()
         async with self.codex_access.mutation_lock:
             guild_id = getattr(getattr(interaction, "guild", None), "id", None)
-            self.user_role_ids = frozenset(
-                role_id
-                for role in getattr(interaction.user, "roles", ())
-                if type(role_id := getattr(role, "id", None)) is int and role_id > 0
-            )
+            self.user_role_ids = member_role_ids(interaction.user)
             role_ids = [getattr(role, "id", None) for role in roles]
             if (
                 not self.codex_access.enabled

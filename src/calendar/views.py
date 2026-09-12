@@ -242,25 +242,6 @@ class _CalendarBoardButton(discord.ui.Button):
             await manager.handle_board_action(interaction, self.action)
 
 
-class CalendarBoardPersistentView(discord.ui.View):
-    """Dispatch-only persistent view; the visible board remains Components V2."""
-
-    def __init__(self, manager: CalendarManager) -> None:
-        super().__init__(timeout=None)
-        self.manager = manager
-        self.add_item(
-            _CalendarBoardButton(
-                "create",
-                "新增活動",
-                BOARD_CREATE_CUSTOM_ID,
-                style=discord.ButtonStyle.primary,
-            )
-        )
-        self.add_item(_CalendarBoardButton("edit", "編輯活動", BOARD_EDIT_CUSTOM_ID))
-        self.add_item(_CalendarBoardButton("browse", "瀏覽活動", BOARD_BROWSE_CUSTOM_ID))
-        self.add_item(_CalendarBoardButton("refresh", "重新整理", BOARD_REFRESH_CUSTOM_ID))
-
-
 class CalendarBoardView(discord.ui.LayoutView):
     def __init__(self, manager: CalendarManager, text: str) -> None:
         super().__init__(timeout=None)
@@ -399,7 +380,7 @@ class _EditSelect(discord.ui.Select["CalendarEditPickerView"]):
         await interaction.response.send_modal(modal)
 
 
-class _EditPageButton(discord.ui.Button["CalendarEditPickerView"]):
+class _CalendarPageButton(discord.ui.Button):
     def __init__(self, direction: int, *, disabled: bool) -> None:
         super().__init__(
             label="上一頁" if direction < 0 else "下一頁",
@@ -410,9 +391,13 @@ class _EditPageButton(discord.ui.Button["CalendarEditPickerView"]):
 
     async def callback(self, interaction: discord.Interaction) -> None:
         view = self.view
-        if isinstance(view, CalendarEditPickerView):
-            view.page += self.direction
-            view.render()
+        if not isinstance(view, (CalendarEditPickerView, CalendarBrowseView)):
+            return
+        view.page += self.direction
+        view.render()
+        if isinstance(view, CalendarBrowseView):
+            await interaction.response.edit_message(content=view.page_text(), view=view)
+        else:
             await interaction.response.edit_message(view=view)
 
 
@@ -459,37 +444,18 @@ class CalendarEditPickerView(discord.ui.View):
             )
         self.add_item(_EditSelect(placeholder="選擇活動", options=options))
         if page_count > 1:
-            self.add_item(_EditPageButton(-1, disabled=self.page <= 0))
-            self.add_item(_EditPageButton(1, disabled=self.page >= page_count - 1))
-
-
-class _BrowsePageButton(discord.ui.Button["CalendarBrowseView"]):
-    def __init__(self, direction: int, *, disabled: bool) -> None:
-        super().__init__(
-            label="上一頁" if direction < 0 else "下一頁",
-            style=discord.ButtonStyle.secondary,
-            disabled=disabled,
-        )
-        self.direction = direction
-
-    async def callback(self, interaction: discord.Interaction) -> None:
-        view = self.view
-        if isinstance(view, CalendarBrowseView):
-            view.page += self.direction
-            view.render()
-            await interaction.response.edit_message(content=view.page_text(), view=view)
+            self.add_item(_CalendarPageButton(-1, disabled=self.page <= 0))
+            self.add_item(_CalendarPageButton(1, disabled=self.page >= page_count - 1))
 
 
 class CalendarBrowseView(discord.ui.View):
     def __init__(
         self,
-        manager: CalendarManager,
         user_id: int,
         guild_id: int,
         events: list[discord.ScheduledEvent],
     ) -> None:
         super().__init__(timeout=5 * 60)
-        self.manager = manager
         self.user_id = user_id
         self.guild_id = guild_id
         self.events = tuple(events)
@@ -510,8 +476,8 @@ class CalendarBrowseView(discord.ui.View):
         )
         self.page = min(max(self.page, 0), page_count - 1)
         if page_count > 1:
-            self.add_item(_BrowsePageButton(-1, disabled=self.page <= 0))
-            self.add_item(_BrowsePageButton(1, disabled=self.page >= page_count - 1))
+            self.add_item(_CalendarPageButton(-1, disabled=self.page <= 0))
+            self.add_item(_CalendarPageButton(1, disabled=self.page >= page_count - 1))
 
     def page_text(self) -> str:
         if not self.events:

@@ -64,13 +64,8 @@ class AppConfig:
         codex_enabled = env_flag("CODEX_ENABLED", default=False)
         guild_id = _optional_positive_int_env("CODEX_ALLOWED_GUILD_ID")
         bridge_token = _bridge_token_env()
-        if codex_enabled:
-            for name, value in (
-                ("CODEX_ALLOWED_GUILD_ID", guild_id),
-                ("CODEX_BRIDGE_TOKEN", bridge_token),
-            ):
-                if not value:
-                    raise RuntimeError(f"{name} 必須在 CODEX_ENABLED=1 時設定")
+        if codex_enabled and guild_id is None:
+            raise RuntimeError("CODEX_ALLOWED_GUILD_ID 必須在 CODEX_ENABLED=1 時設定")
 
         return cls(
             discord_token=required_env("DISCORD_TOKEN"),

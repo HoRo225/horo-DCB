@@ -23,6 +23,7 @@ from src.calendar.views import (
     BOARD_EDIT_CUSTOM_ID,
     BOARD_REFRESH_CUSTOM_ID,
     CalendarAdminView,
+    CalendarBrowseView,
     CalendarEditPickerView,
     CalendarEventModal,
     render_board_text,
@@ -287,18 +288,34 @@ class CalendarBoardTest(unittest.IsolatedAsyncioTestCase):
         self.assertIn("Guild \\*Name\\*", text)
         self.assertIn("https://discord.com/events/1/1", text)
 
-    def test_persistent_board_has_stable_custom_ids(self):
+    async def test_persistent_board_has_stable_custom_ids_and_callbacks(self):
         view = self.manager.persistent_board_view()
         self.assertIsNone(view.timeout)
         self.assertTrue(view.is_persistent())
-        payload_text = repr(view.to_components())
-        for custom_id in (
+        buttons = [
+            child for child in view.walk_children()
+            if isinstance(child, discord.ui.Button)
+        ]
+        self.assertEqual({button.custom_id for button in buttons}, {
             BOARD_CREATE_CUSTOM_ID,
             BOARD_EDIT_CUSTOM_ID,
             BOARD_BROWSE_CUSTOM_ID,
             BOARD_REFRESH_CUSTOM_ID,
-        ):
-            self.assertIn(custom_id, payload_text)
+        })
+        client = discord.Client(intents=discord.Intents.none())
+        try:
+            client.add_view(view)
+            self.assertIn(view, client.persistent_views)
+            self.manager.handle_board_action = AsyncMock()
+            interaction = object()
+            for button in buttons:
+                await button.callback(interaction)
+            self.assertEqual(
+                {item.args[1] for item in self.manager.handle_board_action.await_args_list},
+                {"create", "edit", "browse", "refresh"},
+            )
+        finally:
+            await client.close()
 
     def test_next_midnight_uses_utc_plus_8(self):
         now = datetime(2026, 8, 24, 23, 30, tzinfo=CALENDAR_TZ)
@@ -474,6 +491,29 @@ class CalendarBoardTest(unittest.IsolatedAsyncioTestCase):
             child for child in second_page.children if isinstance(child, discord.ui.Select)
         )
         self.assertEqual(len(second_select.options), 1)
+
+    async def test_shared_page_button_updates_each_view(self):
+        events = [make_event(event_id=index) for index in range(1, 27)]
+        views = (
+            (CalendarEditPickerView(self.manager, 1, 1, events), False),
+            (CalendarBrowseView(1, 1, events), True),
+        )
+        for view, includes_content in views:
+            with self.subTest(view=type(view).__name__):
+                button = next(
+                    child for child in view.children
+                    if getattr(child, "label", None) == "下一頁"
+                )
+                interaction = SimpleNamespace(
+                    response=SimpleNamespace(edit_message=AsyncMock())
+                )
+
+                await button.callback(interaction)
+
+                self.assertEqual(view.page, 1)
+                kwargs = interaction.response.edit_message.await_args.kwargs
+                self.assertIs(kwargs["view"], view)
+                self.assertIs("content" in kwargs, includes_content)
 
     async def test_event_modal_preserves_create_and_edit_behavior(self):
         event = make_event(
