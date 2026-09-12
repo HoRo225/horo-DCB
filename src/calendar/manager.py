@@ -108,11 +108,6 @@ class CalendarManager:
         self._bindings = bindings
 
     @staticmethod
-    def _assert_admin(interaction: discord.Interaction) -> None:
-        if interaction.guild is None or not interaction.permissions.administrator:
-            raise CalendarUserError("此操作僅限伺服器管理員使用。")
-
-    @staticmethod
     def _assert_user_can_manage(user: object) -> None:
         if not _can_manage_events(user):
             raise CalendarUserError("你需要「管理活動」權限才能操作行事曆。")
@@ -260,65 +255,52 @@ class CalendarManager:
         actor_id: int,
     ) -> CalendarBinding:
         async with self._locks[guild.id]:
-            return await self._bind_unlocked(guild, channel, actor_id=actor_id)
-
-    async def _bind_unlocked(
-        self,
-        guild: discord.Guild,
-        channel: discord.TextChannel,
-        *,
-        actor_id: int,
-    ) -> CalendarBinding:
-        if not self._state_available:
-            raise CalendarUserError("行事曆狀態目前不可用，無法綁定。")
-        if channel.guild.id != guild.id:
-            raise CalendarUserError("只能綁定目前伺服器的文字頻道。")
-        self._assert_bot_permissions(guild, channel)
-        events = self._cached_events(guild)
-        view = self.build_board_view(guild.name, events)
-        try:
-            message = await channel.send(
-                view=view,
-                allowed_mentions=discord.AllowedMentions.none(),
-            )
-        except (discord.Forbidden, discord.HTTPException) as exc:
-            raise CalendarUserError("Bot 無法在指定頻道建立行事曆看板。") from exc
-        old_binding = self._bindings.get(guild.id)
-        new_bindings = dict(self._bindings)
-        new_binding = CalendarBinding(guild.id, channel.id, message.id)
-        new_bindings[guild.id] = new_binding
-        try:
-            self._commit_bindings(new_bindings)
-        except CalendarUserError:
+            if not self._state_available:
+                raise CalendarUserError("行事曆狀態目前不可用，無法綁定。")
+            if channel.guild.id != guild.id:
+                raise CalendarUserError("只能綁定目前伺服器的文字頻道。")
+            self._assert_bot_permissions(guild, channel)
+            view = self.build_board_view(guild.name, self._cached_events(guild))
             try:
-                await message.delete()
-            except (discord.Forbidden, discord.HTTPException):
-                pass
-            raise
-        if old_binding is not None and (
-            old_binding.channel_id != new_binding.channel_id
-            or old_binding.message_id != new_binding.message_id
-        ):
-            old_channel = guild.get_channel(old_binding.channel_id)
-            await self._safe_delete_message(old_channel, old_binding.message_id)
-        logging.info("已綁定行事曆看板 Guild ID=%s actor=%s", guild.id, actor_id)
-        return new_binding
+                message = await channel.send(
+                    view=view,
+                    allowed_mentions=discord.AllowedMentions.none(),
+                )
+            except (discord.Forbidden, discord.HTTPException) as exc:
+                raise CalendarUserError("Bot 無法在指定頻道建立行事曆看板。") from exc
+            old_binding = self._bindings.get(guild.id)
+            new_bindings = dict(self._bindings)
+            new_binding = CalendarBinding(guild.id, channel.id, message.id)
+            new_bindings[guild.id] = new_binding
+            try:
+                self._commit_bindings(new_bindings)
+            except CalendarUserError:
+                try:
+                    await message.delete()
+                except (discord.Forbidden, discord.HTTPException):
+                    pass
+                raise
+            if old_binding is not None and (
+                old_binding.channel_id != new_binding.channel_id
+                or old_binding.message_id != new_binding.message_id
+            ):
+                old_channel = guild.get_channel(old_binding.channel_id)
+                await self._safe_delete_message(old_channel, old_binding.message_id)
+            logging.info("已綁定行事曆看板 Guild ID=%s actor=%s", guild.id, actor_id)
+            return new_binding
 
     async def unbind(self, guild: discord.Guild, *, actor_id: int) -> bool:
         async with self._locks[guild.id]:
-            return await self._unbind_unlocked(guild, actor_id=actor_id)
-
-    async def _unbind_unlocked(self, guild: discord.Guild, *, actor_id: int) -> bool:
-        binding = self.get_binding(guild.id)
-        if binding is None:
-            return False
-        new_bindings = dict(self._bindings)
-        new_bindings.pop(guild.id, None)
-        self._commit_bindings(new_bindings)
-        channel = guild.get_channel(binding.channel_id)
-        await self._safe_delete_message(channel, binding.message_id)
-        logging.info("已解除行事曆看板 Guild ID=%s actor=%s", guild.id, actor_id)
-        return True
+            binding = self.get_binding(guild.id)
+            if binding is None:
+                return False
+            new_bindings = dict(self._bindings)
+            new_bindings.pop(guild.id, None)
+            self._commit_bindings(new_bindings)
+            channel = guild.get_channel(binding.channel_id)
+            await self._safe_delete_message(channel, binding.message_id)
+            logging.info("已解除行事曆看板 Guild ID=%s actor=%s", guild.id, actor_id)
+            return True
 
     async def refresh_guild(self, guild: discord.Guild) -> bool:
         if not self._state_available:
@@ -454,9 +436,9 @@ class CalendarManager:
                 await self._reply_ephemeral(interaction, str(exc))
                 return
         if action == "create":
-            from src.calendar.views import CalendarCreateModal
+            from src.calendar.views import CalendarEventModal
 
-            await interaction.response.send_modal(CalendarCreateModal(self))
+            await interaction.response.send_modal(CalendarEventModal(self))
             return
         if action == "edit":
             from src.calendar.views import CalendarEditPickerView

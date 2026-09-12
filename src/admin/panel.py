@@ -895,60 +895,41 @@ class AdminPanelView(discord.ui.LayoutView):
             self._render_page(action)
             await self._edit(interaction)
             return
+        if action == "close":
+            self._render_closed()
+            await self._edit(interaction)
+            return
+        if action not in {
+            "ai", "refresh", "voice_sync", "steam_role_clear", "steam_query",
+        }:
+            return
+
+        await interaction.response.defer()
         if action == "ai":
-            await interaction.response.defer()
             await self._refresh_ai_status()
             self._render_ai()
-            await interaction.edit_original_response(
-                view=self,
-                allowed_mentions=discord.AllowedMentions.none(),
-            )
-            return
-        if action == "refresh":
-            await interaction.response.defer()
+        elif action == "refresh":
             if self.page in ("overview", "ai"):
                 await self._refresh_ai_status()
             if self.page == "overview":
                 self._overview_updated_at = int(time.time())
             self._render_page(self.page)
-            await interaction.edit_original_response(
-                view=self,
-                allowed_mentions=discord.AllowedMentions.none(),
-            )
-            return
-        if action == "close":
-            self._render_closed()
-            await self._edit(interaction)
-            return
-
-        if action == "voice_sync":
-            await interaction.response.defer()
+        elif action == "voice_sync":
             if not self.temp_voice_enabled:
                 self._render_voice("功能已停用，未執行同步。")
-                await interaction.edit_original_response(
-                    view=self,
-                    allowed_mentions=discord.AllowedMentions.none(),
-                )
-                return
-            guild = interaction.guild
-            if guild is None:
-                self._render_voice("無法取得目前伺服器。")
             else:
-                try:
-                    await self.temp_voice.reconcile([guild], prune_absent=False)
-                except Exception:
-                    logging.exception("管理控制台重新同步臨時語音失敗。")
-                    self._render_voice("重新同步失敗，請查看 Bot 紀錄。")
+                guild = interaction.guild
+                if guild is None:
+                    self._render_voice("無法取得目前伺服器。")
                 else:
-                    self._render_voice("已重新執行同步流程。")
-            await interaction.edit_original_response(
-                view=self,
-                allowed_mentions=discord.AllowedMentions.none(),
-            )
-            return
-
-        if action == "steam_role_clear":
-            await interaction.response.defer()
+                    try:
+                        await self.temp_voice.reconcile([guild], prune_absent=False)
+                    except Exception:
+                        logging.exception("管理控制台重新同步臨時語音失敗。")
+                        self._render_voice("重新同步失敗，請查看 Bot 紀錄。")
+                    else:
+                        self._render_voice("已重新執行同步流程。")
+        elif action == "steam_role_clear":
             if not self.steam_free_games_enabled:
                 self._render_steam(notice="Steam 自動通知已停用，未修改身分組設定。")
             else:
@@ -966,14 +947,7 @@ class AdminPanelView(discord.ui.LayoutView):
                             else "目前沒有設定 Steam 通知身分組。"
                         )
                     )
-            await interaction.edit_original_response(
-                view=self,
-                allowed_mentions=discord.AllowedMentions.none(),
-            )
-            return
-
-        if action == "steam_query":
-            await interaction.response.defer()
+        else:
             try:
                 result = await self.steam_free_games.fetch_current_offers()
             except Exception:
@@ -984,7 +958,7 @@ class AdminPanelView(discord.ui.LayoutView):
                     self._render_steam(error="目前無法取得 Steam 資料。")
                 else:
                     self._render_steam(result)
-            await interaction.edit_original_response(
-                view=self,
-                allowed_mentions=discord.AllowedMentions.none(),
-            )
+        await interaction.edit_original_response(
+            view=self,
+            allowed_mentions=discord.AllowedMentions.none(),
+        )

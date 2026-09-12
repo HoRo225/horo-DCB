@@ -24,6 +24,7 @@ from src.calendar.views import (
     BOARD_REFRESH_CUSTOM_ID,
     CalendarAdminView,
     CalendarEditPickerView,
+    CalendarEventModal,
     render_board_text,
 )
 
@@ -473,6 +474,51 @@ class CalendarBoardTest(unittest.IsolatedAsyncioTestCase):
             child for child in second_page.children if isinstance(child, discord.ui.Select)
         )
         self.assertEqual(len(second_select.options), 1)
+
+    async def test_event_modal_preserves_create_and_edit_behavior(self):
+        event = make_event(
+            event_id=5,
+            name="舊團練",
+            start=datetime(2099, 8, 25, 12, 0, tzinfo=timezone.utc),
+            end=datetime(2099, 8, 25, 14, 0, tzinfo=timezone.utc),
+            description="舊說明",
+        )
+        create = CalendarEventModal(self.manager)
+        edit = CalendarEventModal(self.manager, event)
+        self.assertEqual(
+            (create.title, create.duration_input.default, create.location_input.default),
+            ("新增活動", "60", "Discord"),
+        )
+        self.assertEqual(
+            (edit.title, edit.name_input.default, edit.duration_input.default, edit.event_id),
+            ("編輯活動", "舊團練", "120", 5),
+        )
+
+        result = SimpleNamespace(url="https://discord.com/events/1/5")
+        self.manager.create_event = AsyncMock(return_value=result)
+        self.manager.edit_event = AsyncMock(return_value=result)
+        for modal, method, action in (
+            (create, self.manager.create_event, "建立"),
+            (edit, self.manager.edit_event, "修改"),
+        ):
+            with self.subTest(action=action):
+                modal.name_input._value = "新團練"
+                modal.start_input._value = "2099-08-25 21:00"
+                modal.duration_input._value = "120"
+                modal.location_input._value = "Discord"
+                modal.description_input._value = "新說明"
+                interaction = SimpleNamespace(
+                    guild=FakeGuild(),
+                    user=SimpleNamespace(id=7),
+                    response=SimpleNamespace(defer=AsyncMock()),
+                    followup=SimpleNamespace(send=AsyncMock()),
+                )
+
+                await modal.on_submit(interaction)
+
+                method.assert_awaited_once()
+                self.assertEqual(method.await_args.args[-2].duration_minutes, 120)
+                self.assertIn(f"已{action}活動", interaction.followup.send.await_args.args[0])
 
     async def test_edit_event_uses_gateway_cache_and_leaves_board_refresh_to_gateway(self):
         guild = FakeGuild()
