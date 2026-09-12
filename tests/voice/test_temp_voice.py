@@ -412,6 +412,19 @@ class TempVoiceManagerTest(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(created.deleted)
         self.assertEqual(self.read_state()["children"], [])
 
+    async def test_not_found_empty_child_is_removed_from_state(self):
+        guild = FakeGuild()
+        child = FakeVoiceChannel(20, "已刪除", guild)
+        manager = TempVoiceManager(self.state_path)
+        manager._children[child.id] = (guild.id, 123)
+        response = SimpleNamespace(status=404, reason="Not Found", headers={})
+        child.delete = AsyncMock(side_effect=discord.NotFound(response, "gone"))
+
+        await manager._delete_if_empty(child)
+
+        self.assertEqual(manager.get_guild_status(guild.id).tracked_child_count, 0)
+        self.assertEqual(self.read_state()["children"], [])
+
     async def test_reconcile_recovers_member_stuck_in_entry_after_restart(self):
         guild = FakeGuild()
         entry = self.make_entry(guild)

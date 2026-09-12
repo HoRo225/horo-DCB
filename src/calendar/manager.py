@@ -25,7 +25,6 @@ from src.state import write_json_atomic
 if TYPE_CHECKING:
     from src.calendar.views import (
         CalendarAdminView,
-        CalendarBoardPersistentView,
         CalendarBoardView,
     )
 
@@ -209,16 +208,12 @@ class CalendarManager:
                 if guild is not None:
                     try:
                         await self.refresh_guild(guild)
-                    except asyncio.CancelledError:
-                        raise
                     except Exception:
                         logging.error("行事曆午夜重新整理失敗。")
 
     async def _guard_midnight_loop(self) -> None:
         try:
             await self._run_midnight_loop()
-        except asyncio.CancelledError:
-            raise
         except Exception:
             logging.error("行事曆午夜背景工作異常終止。")
 
@@ -237,10 +232,10 @@ class CalendarManager:
 
         return CalendarBoardView(self, render_board_text(guild_name, events, now=now))
 
-    def persistent_board_view(self) -> CalendarBoardPersistentView:
-        from src.calendar.views import CalendarBoardPersistentView
+    def persistent_board_view(self) -> CalendarBoardView:
+        from src.calendar.views import CalendarBoardView
 
-        return CalendarBoardPersistentView(self)
+        return CalendarBoardView(self, "行事曆")
 
     def admin_view(self, *, user_id: int, guild_id: int) -> CalendarAdminView:
         from src.calendar.views import CalendarAdminView
@@ -466,7 +461,7 @@ class CalendarManager:
             if not events:
                 await self._reply_ephemeral(interaction, "目前沒有即將到來的活動。")
                 return
-            view = CalendarBrowseView(self, interaction.user.id, interaction.guild.id, events)
+            view = CalendarBrowseView(interaction.user.id, interaction.guild.id, events)
             if len(events) <= BROWSE_EVENTS_PER_PAGE:
                 await self._reply_ephemeral(interaction, view.page_text())
                 return

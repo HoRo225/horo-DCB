@@ -6,11 +6,10 @@ from typing import Any
 import discord
 from discord import app_commands
 
-from src.admin.panel import AdminPanelView
+from src.admin.panel import AdminPanelView, load_codex_status
 from src.ai import discord as ai_discord
-from src.ai.access import DEFAULT_CODEX_ACCESS_STATE_PATH, CodexAccess
+from src.ai.access import DEFAULT_CODEX_ACCESS_STATE_PATH, CodexAccess, member_role_ids
 from src.ai.client import CodexBridgeClient
-from src.ai.protocol import CodexRuntimeStatus
 from src.calendar.manager import CalendarManager
 from src.calendar.views import admin_panel_text
 from src.config import AppConfig
@@ -65,30 +64,13 @@ class HoroBot(discord.Client):
                 )
                 return
             await interaction.response.defer(ephemeral=True)
-            try:
-                codex_status = await self.codex.get_runtime_status()
-            except Exception:
-                logging.exception("管理控制台讀取 Codex 狀態失敗。")
-                codex_status = CodexRuntimeStatus(
-                    False,
-                    False,
-                    None,
-                    None,
-                    None,
-                    None,
-                    0,
-                )
+            codex_status = await load_codex_status(self.codex)
             await interaction.edit_original_response(
                 view=AdminPanelView(
                     user_id=interaction.user.id,
                     guild_id=interaction.guild.id,
                     codex_client=self.codex,
-                    user_role_ids=frozenset(
-                        role_id
-                        for role in getattr(interaction.user, "roles", ())
-                        if type(role_id := getattr(role, "id", None)) is int
-                        and role_id > 0
-                    ),
+                    user_role_ids=member_role_ids(interaction.user),
                     codex_access=self.codex_access,
                     codex_status=codex_status,
                     temp_voice=self.temp_voice,

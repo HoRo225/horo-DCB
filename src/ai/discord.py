@@ -7,7 +7,7 @@ from typing import Any
 
 import discord
 
-from src.ai.access import CodexAccess
+from src.ai.access import CodexAccess, member_role_ids
 from src.ai.client import CodexBridgeClient
 from src.ai.images import ImageAttachmentError, read_image_attachments, select_image_attachments
 from src.ai.output import build_ai_text_display_view, split_discord_message, split_discord_text_display
@@ -55,15 +55,10 @@ def codex_conversation_key_for_message(
     allowed_channel_id = (
         getattr(channel, "parent_id", None) if is_thread else channel_id
     )
-    role_ids = frozenset(
-        role_id
-        for role in getattr(author, "roles", ())
-        if type(role_id := getattr(role, "id", None)) is int and role_id > 0
-    )
     if type(allowed_channel_id) is not int or not access.allows(
         guild_id,
         allowed_channel_id,
-        role_ids,
+        member_role_ids(author),
     ):
         return None
     return conversation_key(
@@ -352,8 +347,7 @@ async def handle_member_update(
 ) -> None:
     guild_id = getattr(getattr(after, "guild", None), "id", None)
     if type(guild_id) is int:
-        roles = {role.id for role in after.roles}
-        if not access.role_ids.intersection(roles):
+        if not access.role_ids.intersection(member_role_ids(after)):
             try:
                 await codex.cancel_member(guild_id, after.id)
             except CodexBridgeError:

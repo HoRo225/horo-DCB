@@ -273,7 +273,10 @@ class TempVoiceManager:
 
         self._children[channel.id] = (guild.id, member.id)
         if not self._persist_or_disable():
-            if await self._delete_untracked_if_empty(channel):
+            if await self._delete_empty_channel(
+                channel,
+                "無法清理由失敗流程建立的空臨時語音頻道。",
+            ):
                 self._children.pop(channel.id, None)
             else:
                 logging.error(
@@ -288,30 +291,28 @@ class TempVoiceManager:
             logging.exception("臨時語音頻道已建立，但無法移動建立者。")
             await self._delete_if_empty(channel)
 
-    async def _delete_untracked_if_empty(self, channel: discord.VoiceChannel) -> bool:
+    @staticmethod
+    async def _delete_empty_channel(
+        channel: discord.VoiceChannel,
+        error_message: str,
+    ) -> bool:
         if channel.members:
             return False
-        try:
-            await channel.delete(reason=AUDIT_REASON)
-        except discord.NotFound:
-            return True
-        except (discord.Forbidden, discord.HTTPException):
-            logging.exception("無法清理由失敗流程建立的空臨時語音頻道。")
-            return False
-        return True
-
-    async def _delete_if_empty(self, channel: discord.VoiceChannel) -> None:
-        if channel.members:
-            return
-
         try:
             await channel.delete(reason=AUDIT_REASON)
         except discord.NotFound:
             pass
         except (discord.Forbidden, discord.HTTPException):
-            logging.exception("無法刪除已清空的臨時語音頻道。")
-            return
+            logging.exception(error_message)
+            return False
+        return True
 
+    async def _delete_if_empty(self, channel: discord.VoiceChannel) -> None:
+        if not await self._delete_empty_channel(
+            channel,
+            "無法刪除已清空的臨時語音頻道。",
+        ):
+            return
         self._children.pop(channel.id, None)
         self._persist_or_disable()
 
@@ -457,19 +458,13 @@ class TempVoiceManager:
                     changed = True
                     continue
 
-                if channel.members:
+                if not await self._delete_empty_channel(
+                    channel,
+                    "啟動清理時無法刪除空臨時語音頻道。",
+                ):
                     continue
-
-                try:
-                    await channel.delete(reason=AUDIT_REASON)
-                except discord.NotFound:
-                    self._children.pop(channel_id, None)
-                    changed = True
-                except (discord.Forbidden, discord.HTTPException):
-                    logging.exception("啟動清理時無法刪除空臨時語音頻道。")
-                else:
-                    self._children.pop(channel_id, None)
-                    changed = True
+                self._children.pop(channel_id, None)
+                changed = True
 
             if changed:
                 self._persist_or_disable()

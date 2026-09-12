@@ -292,8 +292,6 @@ class SteamFreeGamesNotifier:
         while self._state_available:
             try:
                 await self.check_once(client.guilds)
-            except asyncio.CancelledError:
-                raise
             except Exception:
                 logging.exception("Steam 免費遊戲背景檢查發生未預期錯誤。")
 
