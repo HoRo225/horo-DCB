@@ -54,6 +54,16 @@ class DiscordOutputTest(unittest.TestCase):
 
 
 class BotOutputTest(unittest.IsolatedAsyncioTestCase):
+    async def test_empty_answer_sends_nothing(self):
+        message = SimpleNamespace(
+            reply=AsyncMock(),
+            channel=SimpleNamespace(send=AsyncMock()),
+        )
+
+        self.assertEqual(await send_ai_answer(message, ""), "unavailable")
+        message.reply.assert_not_awaited()
+        message.channel.send.assert_not_awaited()
+
     async def test_bot_sends_codex_answer_without_mentions(self):
         class Channel:
             def __init__(self):

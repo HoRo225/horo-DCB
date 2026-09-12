@@ -45,6 +45,18 @@ class ArchitectureTests(unittest.TestCase):
                     "assert 'src.bot' not in sys.modules\n"
                 )
 
+    def test_calendar_modules_import_in_either_order(self) -> None:
+        for modules in (
+            ("src.calendar.manager", "src.calendar.views"),
+            ("src.calendar.views", "src.calendar.manager"),
+        ):
+            with self.subTest(modules=modules):
+                self.assert_python_succeeds(
+                    "import importlib\n"
+                    f"for name in {modules!r}:\n"
+                    "    importlib.import_module(name)\n"
+                )
+
     def test_retired_feature_modules_cannot_be_imported(self) -> None:
         for module in (
             "src.calendar_events", "src.admin.admin_panel",

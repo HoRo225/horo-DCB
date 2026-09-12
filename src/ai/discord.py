@@ -162,7 +162,7 @@ async def send_ai_answer(
         )
 
     display_chunks = split_discord_text_display(answer)
-    sent_chunks: list[str] = []
+    sent_count = 0
     try:
         for index, chunk in enumerate(display_chunks):
             if can_send is not None and not await can_send():
@@ -179,17 +179,17 @@ async def send_ai_answer(
                     view=view,
                     allowed_mentions=discord.AllowedMentions.none(),
                 )
-            sent_chunks.append(chunk)
+            sent_count += 1
     except discord.HTTPException:
         logging.error("Discord AI TextDisplay 回覆送出失敗，改用原生文字。")
-        remaining = "".join(display_chunks[len(sent_chunks) :])
+        remaining = "".join(display_chunks[sent_count:])
         return await _send_native_ai_chunks(
             message,
             split_discord_message(remaining or answer),
-            reply_first=not sent_chunks,
+            reply_first=not sent_count,
             can_send=can_send,
         )
-    return "success" if sent_chunks else "unavailable"
+    return "success" if sent_count else "unavailable"
 
 
 async def handle_message(
