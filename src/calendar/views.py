@@ -8,7 +8,6 @@ import discord
 from src.calendar.manager import CalendarManager
 from src.calendar.models import (
     CALENDAR_TZ,
-    CalendarEventInput,
     CalendarUserError,
     _event_local_time,
     _event_location,
@@ -285,123 +284,52 @@ class CalendarBoardView(discord.ui.LayoutView):
         )
 
 
-class CalendarCreateModal(discord.ui.Modal):
-    def __init__(self, manager: CalendarManager) -> None:
-        super().__init__(title="新增活動", timeout=5 * 60)
-        self.manager = manager
-        self.name_input = discord.ui.TextInput(
-            label="活動名稱",
-            min_length=1,
-            max_length=100,
-            default=None,
-        )
-        self.start_input = discord.ui.TextInput(
-            label="開始時間（YYYY-MM-DD HH:MM，UTC+8）",
-            min_length=16,
-            max_length=16,
-            default=None,
-        )
-        self.duration_input = discord.ui.TextInput(
-            label="活動長度（分鐘）",
-            min_length=1,
-            max_length=5,
-            default="60",
-        )
-        self.location_input = discord.ui.TextInput(
-            label="地點",
-            min_length=1,
-            max_length=100,
-            default="Discord",
-        )
-        self.description_input = discord.ui.TextInput(
-            label="說明（選填）",
-            style=discord.TextStyle.paragraph,
-            required=False,
-            max_length=1000,
-            default=None,
-        )
-        for item in (
-            self.name_input,
-            self.start_input,
-            self.duration_input,
-            self.location_input,
-            self.description_input,
-        ):
-            self.add_item(item)
-
-    async def on_submit(self, interaction: discord.Interaction) -> None:
-        await interaction.response.defer(ephemeral=True, thinking=True)
-        if interaction.guild is None:
-            await interaction.followup.send("行事曆只能在伺服器中使用。", ephemeral=True)
-            return
-        try:
-            duration = int(str(self.duration_input.value).strip())
-        except ValueError:
-            await interaction.followup.send("活動長度必須是整數分鐘。", ephemeral=True)
-            return
-        try:
-            event_input = build_calendar_event_input(
-                name=str(self.name_input.value),
-                start=str(self.start_input.value),
-                duration_minutes=duration,
-                location=str(self.location_input.value),
-                description=str(self.description_input.value or ""),
-            )
-            event = await self.manager.create_event(
-                interaction.guild,
-                event_input,
-                interaction.user,
-            )
-        except CalendarUserError as exc:
-            await interaction.followup.send(str(exc), ephemeral=True)
-            return
-        await interaction.followup.send(
-            f"已建立活動：{event.url}",
-            ephemeral=True,
-            allowed_mentions=discord.AllowedMentions.none(),
-        )
-
-
-class CalendarEditModal(discord.ui.Modal):
+class CalendarEventModal(discord.ui.Modal):
     def __init__(
         self,
         manager: CalendarManager,
-        event_id: int,
-        event_input: CalendarEventInput,
+        event: discord.ScheduledEvent | None = None,
     ) -> None:
-        super().__init__(title="編輯活動", timeout=5 * 60)
+        event_input = event_to_input(event) if event is not None else None
+        super().__init__(
+            title="編輯活動" if event is not None else "新增活動",
+            timeout=5 * 60,
+        )
         self.manager = manager
-        self.event_id = event_id
+        self.event_id = event.id if event is not None else None
         self.name_input = discord.ui.TextInput(
             label="活動名稱",
             min_length=1,
             max_length=100,
-            default=event_input.name,
+            default=event_input.name if event_input is not None else None,
         )
         self.start_input = discord.ui.TextInput(
             label="開始時間（YYYY-MM-DD HH:MM，UTC+8）",
             min_length=16,
             max_length=16,
-            default=event_input.start_time.astimezone(CALENDAR_TZ).strftime("%Y-%m-%d %H:%M"),
+            default=(
+                event_input.start_time.astimezone(CALENDAR_TZ).strftime("%Y-%m-%d %H:%M")
+                if event_input is not None else None
+            ),
         )
         self.duration_input = discord.ui.TextInput(
             label="活動長度（分鐘）",
             min_length=1,
             max_length=5,
-            default=str(event_input.duration_minutes),
+            default=str(event_input.duration_minutes) if event_input is not None else "60",
         )
         self.location_input = discord.ui.TextInput(
             label="地點",
             min_length=1,
             max_length=100,
-            default=event_input.location,
+            default=event_input.location if event_input is not None else "Discord",
         )
         self.description_input = discord.ui.TextInput(
             label="說明（選填）",
             style=discord.TextStyle.paragraph,
             required=False,
             max_length=1000,
-            default=event_input.description,
+            default=event_input.description if event_input is not None else None,
         )
         for item in (
             self.name_input,
@@ -430,21 +358,21 @@ class CalendarEditModal(discord.ui.Modal):
                 location=str(self.location_input.value),
                 description=str(self.description_input.value or ""),
             )
-        except CalendarUserError as exc:
-            await interaction.followup.send(str(exc), ephemeral=True)
-            return
-        try:
-            event = await self.manager.edit_event(
-                interaction.guild,
-                self.event_id,
-                event_input,
-                interaction.user,
-            )
+            if self.event_id is None:
+                event = await self.manager.create_event(
+                    interaction.guild, event_input, interaction.user,
+                )
+                action = "建立"
+            else:
+                event = await self.manager.edit_event(
+                    interaction.guild, self.event_id, event_input, interaction.user,
+                )
+                action = "修改"
         except CalendarUserError as exc:
             await interaction.followup.send(str(exc), ephemeral=True)
             return
         await interaction.followup.send(
-            f"已修改活動：{event.url}",
+            f"已{action}活動：{event.url}",
             ephemeral=True,
             allowed_mentions=discord.AllowedMentions.none(),
         )
@@ -463,14 +391,12 @@ class _EditSelect(discord.ui.Select["CalendarEditPickerView"]):
             event = next((item for item in view.events if item.id == event_id), None)
             if event is None or not _is_external_scheduled(event):
                 raise CalendarUserError("這個活動已失效，請重新選擇。")
-            event_input = event_to_input(event)
+            modal = CalendarEventModal(view.manager, event)
         except (ValueError, CalendarUserError) as exc:
             text = str(exc) if isinstance(exc, CalendarUserError) else "活動選擇不正確。"
             await interaction.response.send_message(text, ephemeral=True)
             return
-        await interaction.response.send_modal(
-            CalendarEditModal(view.manager, event_id, event_input)
-        )
+        await interaction.response.send_modal(modal)
 
 
 class _EditPageButton(discord.ui.Button["CalendarEditPickerView"]):

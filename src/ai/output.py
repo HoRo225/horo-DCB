@@ -61,16 +61,8 @@ def _split_discord_markdown(
 ) -> list[str]:
     if not text:
         return []
-    if limit <= 0 or max_chunks <= 0:
-        raise ValueError("limit and max_chunks must be positive")
     if len(text) <= limit:
         return [text]
-    if limit < len(AI_RESPONSE_TRUNCATION_NOTICE) + len("\n```"):
-        max_length = limit * max_chunks
-        if len(text) > max_length:
-            notice = AI_RESPONSE_TRUNCATION_NOTICE[:max_length]
-            text = text[: max_length - len(notice)] + notice
-        return [text[index : index + limit] for index in range(0, len(text), limit)]
 
     chunks: list[str] = []
     remaining = text
@@ -121,15 +113,10 @@ def _split_discord_markdown(
     return chunks
 
 
-def split_discord_message(
-    text: str,
-    limit: int = DISCORD_MESSAGE_LIMIT,
-) -> list[str]:
-    if limit <= 0 or limit > DISCORD_MESSAGE_LIMIT:
-        raise ValueError(f"limit must be between 1 and {DISCORD_MESSAGE_LIMIT}")
+def split_discord_message(text: str) -> list[str]:
     return _split_discord_markdown(
         text,
-        limit=limit,
+        limit=DISCORD_MESSAGE_LIMIT,
         max_chunks=MAX_DISCORD_RESPONSE_CHUNKS,
     )
 
