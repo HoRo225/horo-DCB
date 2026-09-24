@@ -23,7 +23,8 @@ SDK_INITIALIZE_TIMEOUT_SECONDS = 30.0
 SDK_SHUTDOWN_TIMEOUT_SECONDS = 5.0
 RATE_CACHE_SECONDS = 30.0
 RATE_WAIT_SECONDS = 2.0
-CAPACITY_FALLBACK_MODEL = "gpt-5.5"
+PRIMARY_MODEL = "gpt-6-luna"
+CAPACITY_FALLBACK_MODEL = "gpt-5.6-luna"
 _IMAGE_RESULT_REF = re.compile(r"^turn[0-9]+image[0-9]+$")
 _MARKDOWN_IMAGE_URL = re.compile(r"!\[[^\]]*\]\((https://[^\s)]+)\)")
 
@@ -325,13 +326,12 @@ class CodexService:
                 collector = None
                 try:
                     async with asyncio.timeout(self.timeout_seconds):
-                        for model in (None, CAPACITY_FALLBACK_MODEL):
+                        for model in (PRIMARY_MODEL, CAPACITY_FALLBACK_MODEL):
                             collector = None
                             try:
                                 thread_id = self.store.get(key)
                                 options = self._thread_options()
-                                if model is not None:
-                                    options["model"] = model
+                                options["model"] = model
                                 if thread_id is None:
                                     thread = await self.codex.thread_start(
                                         **options, service_name="horo-dcb",
@@ -351,7 +351,7 @@ class CodexService:
                                 result = await asyncio.shield(collector)
                                 break
                             except Exception as exc:
-                                if model is None and self._normalize_error(exc).code == "model_capacity":
+                                if model == PRIMARY_MODEL and self._normalize_error(exc).code == "model_capacity":
                                     logging.warning(
                                         "Codex primary model at capacity; retrying with %s.",
                                         CAPACITY_FALLBACK_MODEL,
