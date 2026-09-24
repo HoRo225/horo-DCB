@@ -1,0 +1,46 @@
+x-runtime: &runtime
+  build: .
+  image: horo-dcb:local
+  env_file:
+    - .env
+
+services:
+  bot:
+    <<: *runtime
+    command: ["python", "-m", "src.bot"]
+    restart: unless-stopped
+    stop_grace_period: 40s
+    volumes:
+      - bot_data:/app/data
+    depends_on:
+      codex:
+        condition: service_healthy
+
+  codex:
+    <<: *runtime
+    command: ["python", "-m", "src.codex_bridge", "serve"]
+    environment:
+      CODEX_HOME: /app/codex
+    restart: unless-stopped
+    volumes:
+      - codex_data:/app/codex
+      - type: bind
+        source: ./base_instructions.txt
+        target: /app/codex/base_instructions.txt
+        read_only: true
+        bind:
+          create_host_path: false
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8765/healthz', timeout=5)"
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+volumes:
+  bot_data:
+  codex_data:
