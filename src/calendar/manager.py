@@ -18,7 +18,6 @@ from src.calendar.models import (
     CalendarEditUnavailable,
     CalendarEventInput,
     CalendarUserError,
-    build_calendar_event_input,
     calendar_now,
 )
 from src.calendar.discord_models import can_manage_events, is_external_scheduled
@@ -424,24 +423,19 @@ class CalendarManager:
     ) -> discord.ScheduledEvent:
         self.assert_user_can_manage(actor)
         self._binding_channel(guild)
-        data = build_calendar_event_input(
-            name=event_input.name,
-            start=event_input.start_time.astimezone(CALENDAR_TZ).strftime("%Y-%m-%d %H:%M"),
-            duration_minutes=event_input.duration_minutes,
-            location=event_input.location,
-            description=event_input.description or "",
-        )
+        if event_input.start_time <= calendar_now():
+            raise CalendarUserError("開始時間必須晚於目前時間。")
         kwargs: dict[str, object] = {
-            "name": data.name,
-            "start_time": data.start_time,
-            "end_time": data.end_time,
+            "name": event_input.name,
+            "start_time": event_input.start_time,
+            "end_time": event_input.end_time,
             "entity_type": discord.EntityType.external,
             "privacy_level": discord.PrivacyLevel.guild_only,
-            "location": data.location,
+            "location": event_input.location,
             "reason": f"{AUDIT_REASON_PREFIX} {actor.id}",
         }
-        if data.description:
-            kwargs["description"] = data.description
+        if event_input.description:
+            kwargs["description"] = event_input.description
         try:
             event = await guild.create_scheduled_event(**kwargs)
         except (asyncio.TimeoutError, aiohttp.ClientError) as exc:
@@ -472,21 +466,16 @@ class CalendarManager:
         if type(event_id) is not int or event_id <= 0:
             raise CalendarUserError("活動草稿類型不正確。")
         event = self.get_editable_event(guild, event_id)
-        data = build_calendar_event_input(
-            name=event_input.name,
-            start=event_input.start_time.astimezone(CALENDAR_TZ).strftime("%Y-%m-%d %H:%M"),
-            duration_minutes=event_input.duration_minutes,
-            location=event_input.location,
-            description=event_input.description or "",
-        )
+        if event_input.start_time <= calendar_now():
+            raise CalendarUserError("開始時間必須晚於目前時間。")
         try:
             updated = await event.edit(
-                name=data.name,
-                start_time=data.start_time,
-                end_time=data.end_time,
+                name=event_input.name,
+                start_time=event_input.start_time,
+                end_time=event_input.end_time,
                 entity_type=discord.EntityType.external,
-                location=data.location,
-                description=data.description,
+                location=event_input.location,
+                description=event_input.description,
                 reason=f"{AUDIT_REASON_PREFIX} {actor.id}",
             )
         except (asyncio.TimeoutError, aiohttp.ClientError) as exc:

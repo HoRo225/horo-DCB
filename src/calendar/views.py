@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import asyncio
 import calendar as month_calendar
-from datetime import datetime, timezone
 from typing import TYPE_CHECKING
 
 import discord
@@ -86,11 +85,9 @@ def render_board_text(
     if not upcoming:
         lines.append("目前沒有即將到來的活動。\n-# 有「管理活動」權限的成員可從下方新增第一個活動。")
     for event in upcoming:
-        start = getattr(event, "start_time", None)
-        if not isinstance(start, datetime):
+        start = event_local_time(event)
+        if start is None:
             continue
-        if start.tzinfo is None:
-            start = start.replace(tzinfo=timezone.utc)
         lines.append(f"**{safe_event_name(event)}**")
         lines.append(
             f"{discord.utils.format_dt(start, style='F')} · "
@@ -684,7 +681,7 @@ class _CalendarPageButton(discord.ui.Button):
 
     async def callback(self, interaction: discord.Interaction) -> None:
         view = self.view
-        if not isinstance(view, (CalendarEditPickerView, CalendarBrowseView)):
+        if not isinstance(view, _CalendarPagedView):
             return
         await interaction.response.defer()
         async with view._publish_lock:
@@ -702,30 +699,29 @@ class _CalendarPageButton(discord.ui.Button):
                 raise
 
 
-class CalendarEditPickerView(discord.ui.View):
+class _CalendarPagedView(discord.ui.View):
     def __init__(
         self,
-        manager: CalendarManager,
         user_id: int,
         guild_id: int,
         events: list[discord.ScheduledEvent],
+        page_size: int,
     ) -> None:
         super().__init__(timeout=5 * 60)
-        self.manager = manager
         self.user_id = user_id
         self.guild_id = guild_id
         self.events = tuple(events)
         self.page = 0
-        self._page_count = max(1, (len(self.events) + EVENTS_PER_PAGE - 1) // EVENTS_PER_PAGE)
+        self._page_size = page_size
+        self._page_count = max(1, (len(self.events) + page_size - 1) // page_size)
         self._publish_lock = asyncio.Lock()
-        self._edit_select = _EditSelect(placeholder="選擇活動", options=[])
         self._previous_page_button = _CalendarPageButton(-1, disabled=True)
         self._next_page_button = _CalendarPageButton(1, disabled=False)
-        self.add_item(self._edit_select)
+
+    def _add_page_buttons(self) -> None:
         if self._page_count > 1:
             self.add_item(self._previous_page_button)
             self.add_item(self._next_page_button)
-        self.render()
 
     async def interaction_check(self, interaction: discord.Interaction, /) -> bool:
         if interaction.user.id == self.user_id and interaction.guild_id == self.guild_id:
@@ -735,10 +731,34 @@ class CalendarEditPickerView(discord.ui.View):
 
     def render(self) -> None:
         self.page = min(max(self.page, 0), self._page_count - 1)
-        start = self.page * EVENTS_PER_PAGE
-        page_events = self.events[start : start + EVENTS_PER_PAGE]
+        if self._page_count > 1:
+            self._previous_page_button.disabled = self.page <= 0
+            self._next_page_button.disabled = self.page >= self._page_count - 1
+
+    def _page_events(self) -> tuple[discord.ScheduledEvent, ...]:
+        start = self.page * self._page_size
+        return self.events[start : start + self._page_size]
+
+
+class CalendarEditPickerView(_CalendarPagedView):
+    def __init__(
+        self,
+        manager: CalendarManager,
+        user_id: int,
+        guild_id: int,
+        events: list[discord.ScheduledEvent],
+    ) -> None:
+        super().__init__(user_id, guild_id, events, EVENTS_PER_PAGE)
+        self.manager = manager
+        self._edit_select = _EditSelect(placeholder="選擇活動", options=[])
+        self.add_item(self._edit_select)
+        self._add_page_buttons()
+        self.render()
+
+    def render(self) -> None:
+        super().render()
         options = []
-        for event in page_events:
+        for event in self._page_events():
             local = event_local_time(event)
             description = local.strftime("%Y-%m-%d %H:%M") if local else "時間未知"
             options.append(
@@ -749,59 +769,27 @@ class CalendarEditPickerView(discord.ui.View):
                 )
             )
         self._edit_select.options = options
-        if self._page_count > 1:
-            self._previous_page_button.disabled = self.page <= 0
-            self._next_page_button.disabled = self.page >= self._page_count - 1
 
 
-class CalendarBrowseView(discord.ui.View):
+class CalendarBrowseView(_CalendarPagedView):
     def __init__(
         self,
         user_id: int,
         guild_id: int,
         events: list[discord.ScheduledEvent],
     ) -> None:
-        super().__init__(timeout=5 * 60)
-        self.user_id = user_id
-        self.guild_id = guild_id
-        self.events = tuple(events)
-        self.page = 0
-        self._page_count = max(
-            1,
-            (len(self.events) + BROWSE_EVENTS_PER_PAGE - 1) // BROWSE_EVENTS_PER_PAGE,
-        )
-        self._publish_lock = asyncio.Lock()
-        self._previous_page_button = _CalendarPageButton(-1, disabled=True)
-        self._next_page_button = _CalendarPageButton(1, disabled=False)
-        if self._page_count > 1:
-            self.add_item(self._previous_page_button)
-            self.add_item(self._next_page_button)
+        super().__init__(user_id, guild_id, events, BROWSE_EVENTS_PER_PAGE)
+        self._add_page_buttons()
         self.render()
-
-    async def interaction_check(self, interaction: discord.Interaction, /) -> bool:
-        if interaction.user.id == self.user_id and interaction.guild_id == self.guild_id:
-            return True
-        await interaction.response.send_message("只有原操作使用者可以使用這個選單。", ephemeral=True)
-        return False
-
-    def render(self) -> None:
-        self.page = min(max(self.page, 0), self._page_count - 1)
-        if self._page_count > 1:
-            self._previous_page_button.disabled = self.page <= 0
-            self._next_page_button.disabled = self.page >= self._page_count - 1
 
     def page_text(self) -> str:
         if not self.events:
             return "目前沒有即將到來的活動。"
-        start_index = self.page * BROWSE_EVENTS_PER_PAGE
-        page_events = self.events[start_index : start_index + BROWSE_EVENTS_PER_PAGE]
         lines = [f"## 活動列表 · 第 {self.page + 1} 頁"]
-        for event in page_events:
-            start = getattr(event, "start_time", None)
-            if not isinstance(start, datetime):
+        for event in self._page_events():
+            start = event_local_time(event)
+            if start is None:
                 continue
-            if start.tzinfo is None:
-                start = start.replace(tzinfo=timezone.utc)
             line = f"**{safe_event_name(event)}** · {discord.utils.format_dt(start, style='F')}"
             url = event_url(event)
             if url:
