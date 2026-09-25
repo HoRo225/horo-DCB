@@ -215,7 +215,6 @@ async def _send_native_ai_chunks(
             await message.reply(
                 chunks[0],
                 mention_author=False,
-                allowed_mentions=discord.AllowedMentions.none(),
             )
             start = 1
             sent_any = True
@@ -225,7 +224,6 @@ async def _send_native_ai_chunks(
                 return "unauthorized"
             await message.channel.send(
                 chunk,
-                allowed_mentions=discord.AllowedMentions.none(),
             )
             sent_any = True
 
@@ -236,12 +234,10 @@ async def _send_native_ai_chunks(
                 await message.reply(
                     link_message,
                     mention_author=False,
-                    allowed_mentions=discord.AllowedMentions.none(),
                 )
             else:
                 await message.channel.send(
                     link_message,
-                    allowed_mentions=discord.AllowedMentions.none(),
                 )
             sent_any = True
     except (discord.HTTPException, aiohttp.ClientError):
@@ -280,12 +276,10 @@ async def send_ai_answer(
                 await message.reply(
                     view=view,
                     mention_author=False,
-                    allowed_mentions=discord.AllowedMentions.none(),
                 )
             else:
                 await message.channel.send(
                     view=view,
-                    allowed_mentions=discord.AllowedMentions.none(),
                 )
             sent_count += 1
     except aiohttp.ClientError:
@@ -346,7 +340,6 @@ async def handle_message(
         await message.reply(
             "Codex 目前未對此身分組或頻道開放。",
             mention_author=False,
-            allowed_mentions=discord.AllowedMentions.none(),
         )
         return
 
@@ -354,7 +347,6 @@ async def handle_message(
     if not codex.try_start_request(message.author.id):
         await message.reply(
             "請稍候幾秒再試。", mention_author=False,
-            allowed_mentions=discord.AllowedMentions.none(),
         )
         return
 
@@ -382,7 +374,6 @@ async def handle_message(
             async with asyncio.timeout(budget):
                 await message.reply(
                     error_text, mention_author=False,
-                    allowed_mentions=discord.AllowedMentions.none(),
                 )
         except (discord.HTTPException, TimeoutError):
             logging.error("Discord AI 狀態回覆送出失敗。")
@@ -422,7 +413,6 @@ async def handle_message(
                         await message.reply(
                             "問題最多 4,000 個字元，請縮短後再試。",
                             mention_author=False,
-                            allowed_mentions=discord.AllowedMentions.none(),
                         )
                         outcome = "invalid_request"
                         return
@@ -435,7 +425,6 @@ async def handle_message(
                             await message.reply(
                                 "目前無法讀取被回覆的訊息，請重新回覆或重新上傳內容。",
                                 mention_author=False,
-                                allowed_mentions=discord.AllowedMentions.none(),
                             )
                             outcome = "invalid_request"
                             return
@@ -487,7 +476,6 @@ async def handle_message(
                             await message.reply(
                                 "請輸入問題，或附上圖片、GIF、表情或貼圖。",
                                 mention_author=False,
-                                allowed_mentions=discord.AllowedMentions.none(),
                             )
                             outcome = "invalid_request"
                             return

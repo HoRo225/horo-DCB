@@ -55,13 +55,11 @@ class CalendarController:
             await interaction.followup.send(
                 text,
                 ephemeral=True,
-                allowed_mentions=discord.AllowedMentions.none(),
             )
         else:
             await interaction.response.send_message(
                 text,
                 ephemeral=True,
-                allowed_mentions=discord.AllowedMentions.none(),
             )
 
     async def handle_board_action(
@@ -100,7 +98,6 @@ class CalendarController:
                     events,
                 ),
                 ephemeral=True,
-                allowed_mentions=discord.AllowedMentions.none(),
             )
             return
         if action == "browse":
@@ -116,7 +113,6 @@ class CalendarController:
                 view.page_text(),
                 view=view,
                 ephemeral=True,
-                allowed_mentions=discord.AllowedMentions.none(),
             )
             return
         if action == "refresh":

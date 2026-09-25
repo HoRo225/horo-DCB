@@ -116,7 +116,6 @@ class HoroBot(discord.Client):
                     guild_id=interaction.guild.id,
                 ),
                 ephemeral=True,
-                allowed_mentions=discord.AllowedMentions.none(),
             )
 
     async def _admin_command_allowed(self, interaction: discord.Interaction) -> bool:
@@ -127,7 +126,6 @@ class HoroBot(discord.Client):
         await interaction.response.send_message(
             "此指令僅限伺服器管理員使用。",
             ephemeral=True,
-            allowed_mentions=discord.AllowedMentions.none(),
         )
         return False
 

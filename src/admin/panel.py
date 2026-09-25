@@ -272,7 +272,6 @@ class AdminPanelView(discord.ui.LayoutView):
                 await interaction.edit_original_response(
                     attachments=brand_files(CARD_FILENAME),
                     view=self,
-                    allowed_mentions=discord.AllowedMentions.none(),
                 )
                 self.record_published()
             if not await self._can_publish():
@@ -300,7 +299,6 @@ class AdminPanelView(discord.ui.LayoutView):
             await interaction.response.send_message(
                 "只有開啟控制台的伺服器管理員可以操作這個控制台。",
                 ephemeral=True,
-                allowed_mentions=discord.AllowedMentions.none(),
             )
         return False
 
@@ -582,7 +580,7 @@ class AdminPanelView(discord.ui.LayoutView):
                     self._render_closed()
                     if self._rate_interaction is not None:
                         await self._rate_interaction.edit_original_response(
-                            view=self, allowed_mentions=discord.AllowedMentions.none()
+                            view=self
                         )
         except Exception:
             logging.error("Admin panel retirement notification failed.")
@@ -633,7 +631,7 @@ class AdminPanelView(discord.ui.LayoutView):
             )
             try:
                 await interaction.edit_original_response(
-                    view=self, allowed_mentions=discord.AllowedMentions.none()
+                    view=self
                 )
                 self.record_published()
             except (discord.Forbidden, discord.NotFound, discord.HTTPException):
@@ -694,7 +692,7 @@ class AdminPanelView(discord.ui.LayoutView):
                     item.content = self._rate_text(compact=self.page != "ai_tech")
                     try:
                         await interaction.edit_original_response(
-                            view=self, allowed_mentions=discord.AllowedMentions.none()
+                            view=self
                         )
                         self.record_published()
                     except (discord.Forbidden, discord.NotFound):
@@ -1405,7 +1403,6 @@ class AdminPanelView(discord.ui.LayoutView):
                 edit = interaction.edit_original_response if original else interaction.response.edit_message
                 await edit(
                     view=self,
-                    allowed_mentions=discord.AllowedMentions.none(),
                 )
             except (Exception, asyncio.CancelledError):
                 restore = self._published_children

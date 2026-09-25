@@ -125,7 +125,6 @@ class _CalendarAdminChannelSelect(discord.ui.ChannelSelect):
             await interaction.response.send_message(
                 "只能選擇目前伺服器中的文字頻道。",
                 ephemeral=True,
-                allowed_mentions=discord.AllowedMentions.none(),
             )
             return
 
@@ -274,7 +273,6 @@ class CalendarAdminView(discord.ui.LayoutView):
                 self.render()
                 await interaction.edit_original_response(
                     view=self,
-                    allowed_mentions=discord.AllowedMentions.none(),
                 )
             except (Exception, asyncio.CancelledError):
                 self.clear_items()
@@ -360,7 +358,6 @@ class CalendarAdminView(discord.ui.LayoutView):
         await interaction.response.send_message(
             "只有開啟面板的伺服器管理員可以操作這個行事曆面板。",
             ephemeral=True,
-            allowed_mentions=discord.AllowedMentions.none(),
         )
         return False
 
@@ -615,7 +612,6 @@ class CalendarEventModal(discord.ui.Modal):
             f"{discord.utils.escape_markdown(event_input.location)}\n"
             f"[開啟活動]({event_url(event) or getattr(event, 'url', '')})",
             ephemeral=True,
-            allowed_mentions=discord.AllowedMentions.none(),
         )
 
     async def _send_error(
@@ -631,7 +627,6 @@ class CalendarEventModal(discord.ui.Modal):
             await interaction.followup.send(
                 view=_CalendarDraftNoticeView(title, message, draft),
                 ephemeral=True,
-                allowed_mentions=discord.AllowedMentions.none(),
             )
             return
         await interaction.followup.send(
@@ -644,7 +639,6 @@ class CalendarEventModal(discord.ui.Modal):
                 event_id=self.event_id,
             ),
             ephemeral=True,
-            allowed_mentions=discord.AllowedMentions.none(),
         )
 
 

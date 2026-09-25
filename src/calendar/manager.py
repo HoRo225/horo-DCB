@@ -239,7 +239,6 @@ class CalendarManager:
                 message = await channel.send(
                     files=brand_files(BANNER_FILENAME),
                     view=view,
-                    allowed_mentions=discord.AllowedMentions.none(),
                 )
             except (discord.Forbidden, discord.HTTPException) as exc:
                 raise CalendarUserError("Bot 無法在指定頻道建立行事曆看板。") from exc
@@ -317,7 +316,6 @@ class CalendarManager:
                     kwargs = {
                         "attachments": files,
                         "view": view,
-                        "allowed_mentions": discord.AllowedMentions.none(),
                     }
                     await message.edit(**kwargs)
                     return True
@@ -328,7 +326,6 @@ class CalendarManager:
                     replacement = await channel.send(
                         files=brand_files(BANNER_FILENAME),
                         view=view,
-                        allowed_mentions=discord.AllowedMentions.none(),
                     )
                     if version != self._versions[guild.id]:
                         await self._safe_delete_message(channel, replacement.id)
