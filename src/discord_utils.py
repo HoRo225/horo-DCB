@@ -20,3 +20,8 @@ def missing_channel_permissions(
         label for attribute, label in required
         if not getattr(permissions, attribute, False)
     ]
+
+
+def truncate_discord_text(text: str, prefix_limit: int, suffix: str) -> str:
+    prefix = text[:max(0, prefix_limit)].rstrip("\\")
+    return f"{prefix}…{suffix}"

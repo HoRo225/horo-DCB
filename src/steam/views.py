@@ -6,6 +6,7 @@ from typing import cast
 import discord
 
 from src.brand import BRAND_COLOUR
+from src.discord_utils import truncate_discord_text
 from src.steam.provider import SteamOffer
 
 
@@ -82,6 +83,7 @@ def build_offer_view(
             4000 - (view.content_length() - len(description_item.content))
             - len(notice) - 1
         )
-        prefix = description_item.content[:max(0, description_budget)].rstrip("\\")
-        description_item.content = f"{prefix}…{notice}"
+        description_item.content = truncate_discord_text(
+            description_item.content, description_budget, notice,
+        )
     return view

@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING
 import discord
 
 from src.brand import BRAND_COLOUR, banner, branded_title
+from src.discord_utils import truncate_discord_text
 from src.calendar.models import (
     CALENDAR_TZ,
     CalendarBinding,
@@ -440,8 +441,7 @@ def _draft_notice_text(title: str, message: str, draft: dict[str, str]) -> str:
         return content
     suffix = "\n\n-# 原草稿過長，部分內容已省略。"
     prefix_limit = DRAFT_NOTICE_CONTENT_LIMIT - len(suffix) - 1
-    prefix = content[:max(0, prefix_limit)].rstrip("\\")
-    return f"{prefix}…{suffix}"
+    return truncate_discord_text(content, prefix_limit, suffix)
 
 
 class _CalendarDraftNoticeView(discord.ui.LayoutView):
