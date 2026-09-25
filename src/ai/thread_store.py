@@ -4,18 +4,17 @@ from pathlib import Path
 import time
 
 from src.ai.protocol import scope_matches, valid_conversation_key
-from src.state import read_json_state, write_json_atomic
+from src.state import load_state_or_disable, read_json_state, write_json_atomic
 
 
 class ThreadStore:
     def __init__(self, path: Path) -> None:
         self.path = path
-        self.available = True
-        self._threads: dict[str, dict[str, object]] = {}
-        try:
-            self._threads = self._load()
-        except FileNotFoundError:
-            pass
+        self._threads, self.available = load_state_or_disable(
+            self._load,
+            {},
+            "讀取 Codex 對話 mapping 失敗，已停用對話 mapping。",
+        )
 
     def _load(self) -> dict[str, dict[str, object]]:
         try:
