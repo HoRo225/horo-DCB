@@ -15,13 +15,13 @@ from typing import Literal
 from src.ai.protocol import (
     CodexBridgeError,
     ImageAttachmentError,
-    MAX_IMAGE_BYTES,
+    MAX_IMAGE_BYTES, MEDIA_CHUNK_BYTES, MEDIA_HEADER_LIMIT, MEDIA_KINDS,
+    OUTPUT_IMAGE_TYPES,
     validate_image_bytes,
 )
+from src.state import consume_task_exception
 
 
-_HEADER_LIMIT = 1024
-_KINDS = frozenset({"image", "video", "lottie"})
 _MAX_WORKERS = 2
 _MAX_PENDING = 4
 _WORKER_ERRORS = {
@@ -68,7 +68,7 @@ class MediaExecutor:
             raise CodexBridgeError("timeout")
         if (
             not isinstance(kind, str)
-            or kind not in _KINDS
+            or kind not in MEDIA_KINDS
             or not isinstance(data, bytes)
             or len(data) > MAX_IMAGE_BYTES
             or (content_type is not None and (
@@ -85,7 +85,7 @@ class MediaExecutor:
         self._jobs.add(job)
         runner = asyncio.create_task(self._run(job, kind, data, content_type))
         job.runner = runner
-        runner.add_done_callback(self._observe_task)
+        runner.add_done_callback(consume_task_exception)
         try:
             async with asyncio.timeout_at(deadline):
                 outcome = await asyncio.shield(runner)
@@ -201,7 +201,7 @@ class MediaExecutor:
             {"kind": kind, "content_type": content_type, "length": len(data)},
             separators=(",", ":"),
         ).encode()
-        if len(metadata) > _HEADER_LIMIT:
+        if len(metadata) > MEDIA_HEADER_LIMIT:
             raise CodexBridgeError("unavailable")
         assert job.waiter is not None
         job.pipes = {
@@ -213,8 +213,8 @@ class MediaExecutor:
         job.collector = asyncio.create_task(self._collect_pipes(job, process))
         for task in job.pipes:
             if task is not job.waiter:
-                task.add_done_callback(self._observe_task)
-        job.collector.add_done_callback(self._observe_task)
+                task.add_done_callback(consume_task_exception)
+        job.collector.add_done_callback(consume_task_exception)
         cancelled = asyncio.create_task(job.cancelled.wait())
         try:
             done, _pending = await asyncio.wait(
@@ -236,7 +236,7 @@ class MediaExecutor:
             job.pipes, return_when=asyncio.FIRST_EXCEPTION,
         )
         for task in done:
-            exception = task.exception()
+            exception = consume_task_exception(task)
             if exception is not None:
                 raise exception
         values = [task.result() for task in done]
@@ -250,8 +250,8 @@ class MediaExecutor:
         assert process.stdin is not None
         process.stdin.write(struct.pack(">I", len(metadata)) + metadata)
         await process.stdin.drain()
-        for offset in range(0, len(data), 64 * 1024):
-            process.stdin.write(data[offset:offset + 64 * 1024])
+        for offset in range(0, len(data), MEDIA_CHUNK_BYTES):
+            process.stdin.write(data[offset:offset + MEDIA_CHUNK_BYTES])
             await process.stdin.drain()
         process.stdin.close()
         await process.stdin.wait_closed()
@@ -262,7 +262,7 @@ class MediaExecutor:
         assert process.stdout is not None
         prefix = await process.stdout.readexactly(4)
         header_length = struct.unpack(">I", prefix)[0]
-        if not 0 < header_length <= _HEADER_LIMIT:
+        if not 0 < header_length <= MEDIA_HEADER_LIMIT:
             raise CodexBridgeError("unavailable")
         raw_header = await process.stdout.readexactly(header_length)
         try:
@@ -285,7 +285,7 @@ class MediaExecutor:
             header.get("ok") is not True
             or set(header) != {"ok", "content_type", "length"}
             or not 0 < length <= MAX_IMAGE_BYTES
-            or header.get("content_type") not in {"image/png", "image/jpeg", "image/webp"}
+            or header.get("content_type") not in OUTPUT_IMAGE_TYPES
         ):
             raise CodexBridgeError("unavailable")
         body = await process.stdout.readexactly(length)
@@ -298,12 +298,12 @@ class MediaExecutor:
     def _register_waiter(self, job: _Job) -> None:
         assert job.process is not None
         job.waiter = asyncio.create_task(job.process.wait())
-        job.waiter.add_done_callback(self._observe_task)
+        job.waiter.add_done_callback(consume_task_exception)
 
     @staticmethod
     async def _drain_stderr(process: asyncio.subprocess.Process) -> None:
         assert process.stderr is not None
-        while await process.stderr.read(64 * 1024):
+        while await process.stderr.read(MEDIA_CHUNK_BYTES):
             pass
 
     def _cleanup_deadline(self, deadline: float) -> float:
@@ -375,13 +375,6 @@ class MediaExecutor:
         except ProcessLookupError:
             return False
         return True
-
-    @staticmethod
-    def _observe_task(
-        task: asyncio.Future[object],
-    ) -> None:
-        if not task.cancelled():
-            task.exception()
 
     async def _spawn(self, temporary_dir: Path) -> asyncio.subprocess.Process:
         root = Path(__file__).resolve().parents[2]

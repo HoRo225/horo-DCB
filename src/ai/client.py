@@ -111,11 +111,7 @@ class CodexBridgeClient:
                     body = {}
                 if response.status >= 400:
                     code = body.get("error") if isinstance(body, dict) else None
-                    raise CodexBridgeError(
-                        code
-                        if isinstance(code, str) and code in SAFE_ERROR_CODES
-                        else "unavailable"
-                    )
+                    raise CodexBridgeError(code)
         except TimeoutError:
             raise CodexBridgeError("timeout") from None
         except aiohttp.ClientError:

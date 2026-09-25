@@ -14,10 +14,11 @@ from openai_codex import RetryLimitExceededError, ServerBusyError, TransportClos
 
 from src.ai.admission import Admission
 from src.ai.protocol import (
-    BridgeRequestError, CodexBridgeError, CodexChatReply, CodexRateLimits,
+    CodexBridgeError, CodexChatReply, CodexRateLimits,
     normalize_rate_limits, normalize_reply_image_urls, scope_matches,
 )
 from src.ai.thread_store import ThreadStore
+from src.state import consume_task_exception
 
 SDK_INITIALIZE_TIMEOUT_SECONDS = 30.0
 SDK_SHUTDOWN_TIMEOUT_SECONDS = 5.0
@@ -117,7 +118,7 @@ class CodexService:
         }
 
     @staticmethod
-    def _normalize_error(exc: Exception) -> BridgeRequestError:
+    def _normalize_error(exc: Exception) -> CodexBridgeError:
         details = f"{exc} {getattr(exc, 'data', '')}".casefold()
         if any(
             marker in details
@@ -131,7 +132,7 @@ class CodexService:
                 "unauthorized",
             )
         ):
-            return BridgeRequestError("auth_required", 503)
+            return CodexBridgeError("auth_required")
         if isinstance(exc, (ServerBusyError, RetryLimitExceededError)) or any(
             marker in details
             for marker in (
@@ -140,7 +141,7 @@ class CodexService:
                 "server_overloaded",
             )
         ):
-            return BridgeRequestError("model_capacity", 503)
+            return CodexBridgeError("model_capacity")
         if any(
             marker in details
             for marker in (
@@ -154,8 +155,8 @@ class CodexService:
                 "usagelimit",
             )
         ):
-            return BridgeRequestError("usage_limit_or_unavailable", 429)
-        return BridgeRequestError("unavailable", 503)
+            return CodexBridgeError("usage_limit_or_unavailable")
+        return CodexBridgeError("unavailable")
 
     def _fatal(self) -> None:
         if self._fatal_called:
@@ -184,7 +185,7 @@ class CodexService:
             if not task.done():
                 task.cancel()
             elif not task.cancelled():
-                error = task.exception()
+                error = consume_task_exception(task)
                 if (task is cleanup and error is not None) or isinstance(error, TransportClosedError):
                     must_exit = True
         if must_exit:
@@ -201,13 +202,6 @@ class CodexService:
                 "unavailable" if not self.store.available else self.last_error
             ),
         }
-
-    @staticmethod
-    def _consume_status_exception(
-        task: asyncio.Task[dict[str, object]],
-    ) -> None:
-        if not task.cancelled():
-            task.exception()
 
     async def _read_status(self) -> dict[str, object]:
         try:
@@ -247,7 +241,7 @@ class CodexService:
         task = self._status_task
         if task is None or task.done():
             task = asyncio.create_task(self._read_status())
-            task.add_done_callback(self._consume_status_exception)
+            task.add_done_callback(consume_task_exception)
             self._status_task = task
         account_status = await asyncio.shield(task)
         status = self._status_snapshot()
@@ -272,8 +266,7 @@ class CodexService:
 
     def _finish_rate_task(self, task: asyncio.Task[CodexRateLimits]) -> None:
         if self._rate_task is not task:
-            if not task.cancelled():
-                task.exception()
+            consume_task_exception(task)
             return
         self._rate_task = None
         if task.cancelled():
@@ -309,13 +302,13 @@ class CodexService:
         outcome = "unavailable"
         try:
             if not self.store.available:
-                raise BridgeRequestError("unavailable", 503)
+                raise CodexBridgeError("unavailable")
             if any(scope_matches(key, guild, channel) for guild, channel in self._archives):
-                raise BridgeRequestError("busy", 429)
+                raise CodexBridgeError("busy")
             # Register before the first SDK await, including start/resume RPCs.
             async with self._admission.claim(key, queue_timeout_seconds=self.queue_timeout_seconds):
                 if not self.store.available:
-                    raise BridgeRequestError("unavailable", 503)
+                    raise CodexBridgeError("unavailable")
                 collector = None
                 try:
                     async with asyncio.timeout(self.timeout_seconds):
@@ -333,7 +326,7 @@ class CodexService:
                                 else:
                                     thread = await self.codex.thread_resume(thread_id, **options)
                                 if not self.store.available:
-                                    raise BridgeRequestError("unavailable", 503)
+                                    raise CodexBridgeError("unavailable")
                                 inputs = [
                                     TextInput(text),
                                     *(ImageInput(image) for image in images),
@@ -357,12 +350,12 @@ class CodexService:
                     else:
                         await self._interrupt(handle, collector)
                     if isinstance(exc, TimeoutError):
-                        raise BridgeRequestError("timeout", 504) from None
+                        raise CodexBridgeError("timeout") from None
                     outcome = "cancelled"
                     raise
                 reply = getattr(result, "final_response", None)
                 if not isinstance(reply, str) or not reply.strip():
-                    raise BridgeRequestError("unavailable", 503)
+                    raise CodexBridgeError("unavailable")
                 outcome = "success"
                 return CodexChatReply(
                     text=reply.strip(),
@@ -372,13 +365,10 @@ class CodexService:
                 )
         except CodexBridgeError as exc:
             self.last_error = outcome = exc.code
-            raise BridgeRequestError(exc.code, 429 if exc.code == "busy" else 504 if exc.code == "timeout" else 503) from None
-        except BridgeRequestError as exc:
-            self.last_error = outcome = exc.code
             raise
         except TransportClosedError:
             self._fatal()
-            raise BridgeRequestError("unavailable", 503) from None
+            raise CodexBridgeError("unavailable") from None
         except Exception as exc:
             error = self._normalize_error(exc)
             self.last_error = outcome = error.code
@@ -388,7 +378,7 @@ class CodexService:
 
     async def archive_scope(self, guild_id: int, channel_id: int | None = None) -> None:
         if not self.store.available:
-            raise BridgeRequestError("unavailable", 503)
+            raise CodexBridgeError("unavailable")
         scope = (guild_id, channel_id)
         # Mark the scope closed before any await; overlapping archives share the guard.
         self._archives[scope] = self._archives.get(scope, 0) + 1
@@ -397,7 +387,7 @@ class CodexService:
                 await self._admission.cancel(guild_id=guild_id, channel_id=channel_id)
             except CodexBridgeError:
                 self._fatal()
-                raise BridgeRequestError("unavailable", 503) from None
+                raise CodexBridgeError("unavailable") from None
             thread_ids = self.store.pop_many(self.store.matching(guild_id, channel_id))
             for thread_id in thread_ids:
                 try:
@@ -405,7 +395,7 @@ class CodexService:
                         await self.codex.thread_archive(thread_id)
                 except (TransportClosedError, TimeoutError):
                     self._fatal()
-                    raise BridgeRequestError("unavailable", 503) from None
+                    raise CodexBridgeError("unavailable") from None
                 except asyncio.CancelledError:
                     self._fatal()
                     raise

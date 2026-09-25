@@ -14,12 +14,13 @@ from src.ai.access import CodexAccess, member_role_ids
 from src.ai.access_service import AiAccessService
 from src.ai.client import CodexBridgeClient
 from src.ai.media_executor import MediaExecutor
-from src.ai.protocol import CodexRuntimeStatus
+from src.ai.protocol import EMPTY_CODEX_RUNTIME_STATUS
 from src.brand import CARD_FILENAME, brand_files, sync_discord_brand
 from src.calendar.discord import CalendarController
 from src.calendar.manager import CalendarManager
 from src.config import AppConfig
 from src.steam.notifier import SteamFreeGamesNotifier
+from src.state import consume_task_exception
 from src.voice.manager import TempVoiceManager
 
 _SHUTDOWN_BUDGET_SECONDS = 25.0
@@ -105,7 +106,7 @@ class HoroBot(discord.Client):
                     user_role_ids=member_role_ids(interaction.user),
                     codex_access=self.codex_access,
                     access_service=self.access_service,
-                    codex_status=CodexRuntimeStatus(False, False, None, None, None, None, 0),
+                    codex_status=EMPTY_CODEX_RUNTIME_STATUS,
                     temp_voice=self.temp_voice,
                     steam_free_games=self.steam_free_games,
                     temp_voice_enabled=self.temp_voice_enabled,
@@ -200,8 +201,7 @@ class HoroBot(discord.Client):
 
             def observe(done: asyncio.Task[None]) -> None:
                 self._shutdown_tasks.discard(done)
-                if not done.cancelled():
-                    done.exception()
+                consume_task_exception(done)
 
             task.add_done_callback(observe)
             remaining = min(

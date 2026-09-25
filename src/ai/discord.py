@@ -24,7 +24,7 @@ from src.ai.output import (
 )
 from src.ai.protocol import (
     CodexBridgeError, MAX_IMAGE_ATTACHMENTS, MAX_PROMPT_CHARACTERS,
-    conversation_key, normalize_reply_image_urls,
+    conversation_key,
 )
 
 
@@ -255,7 +255,6 @@ async def send_ai_answer(
     image_urls: tuple[str, ...] = (),
     text_display_enabled: bool, can_send: Any,
 ) -> str:
-    image_urls = normalize_reply_image_urls(image_urls)
     if not text_display_enabled:
         return await _send_native_ai_chunks(
             message,
@@ -456,7 +455,8 @@ async def handle_message(
                             ))
                         media_messages = [message]
 
-                    if len(image_attachments) + len(select_message_media(media_messages)) > MAX_IMAGE_ATTACHMENTS:
+                    media_sources = select_message_media(media_messages)
+                    if len(image_attachments) + len(media_sources) > MAX_IMAGE_ATTACHMENTS:
                         raise ImageAttachmentError(f"一次最多處理 {MAX_IMAGE_ATTACHMENTS} 張圖片，請減少圖片後再試。")
                     media_budget = MediaBudget()
                     async with message.channel.typing():
@@ -475,8 +475,7 @@ async def handle_message(
                                     deadline=media_deadline,
                                 )
                                 images += await read_message_media(
-                                    media_messages,
-                                    remaining=MAX_IMAGE_ATTACHMENTS - len(images),
+                                    media_sources,
                                     budget=media_budget,
                                     executor=media_executor,
                                     deadline=media_deadline,

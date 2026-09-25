@@ -10,10 +10,10 @@ import discord
 
 from src.brand import BRAND_COLOUR, branded_title
 from src.admin.sessions import PanelSession, PanelSessionRegistry
-from src.ai.access import MAX_CODEX_ALLOWED_CHANNELS, CodexAccess, member_role_ids
+from src.ai.access import MAX_CODEX_ALLOWED_CHANNELS, CodexAccess, member_role_ids, valid_allowlist_ids
 from src.ai.access_service import AiAccessService
 from src.ai.client import CodexBridgeClient
-from src.ai.protocol import CodexRateLimits, CodexRuntimeStatus
+from src.ai.protocol import CodexRateLimits, CodexRuntimeStatus, EMPTY_CODEX_RUNTIME_STATUS
 from src.steam.notifier import (
     SteamConfigurationError,
     SteamFreeGamesNotifier,
@@ -47,7 +47,7 @@ async def load_codex_status(client: CodexBridgeClient) -> CodexRuntimeStatus:
         return await client.get_runtime_status()
     except Exception:
         logging.exception("管理控制台讀取 Codex 狀態失敗。")
-        return CodexRuntimeStatus(False, False, None, None, None, None, 0)
+        return EMPTY_CODEX_RUNTIME_STATUS
 
 
 async def load_codex_rate_limits(client: CodexBridgeClient) -> CodexRateLimits:
@@ -1466,15 +1466,12 @@ class AdminPanelView(discord.ui.LayoutView):
             not self.codex_access.enabled
             or guild_id != self.guild_id
             or guild_id != self.codex_access.guild_id
-            or not 1 <= len(channels) <= MAX_CODEX_ALLOWED_CHANNELS
+            or not valid_allowlist_ids(channel_ids, container=list, minimum=1)
             or any(
                 getattr(getattr(channel, "guild", None), "id", None) != guild_id
                 or getattr(channel, "type", None) != discord.ChannelType.text
-                or type(channel_id) is not int
-                or channel_id <= 0
-                for channel, channel_id in zip(channels, channel_ids, strict=True)
+                for channel in channels
             )
-            or len(channel_ids) != len(set(channel_ids))
         ):
             self._render_ai_access("只能選擇目前伺服器的一般文字頻道。")
         else:
@@ -1519,15 +1516,12 @@ class AdminPanelView(discord.ui.LayoutView):
             or guild_id != self.codex_access.guild_id
             or not self.codex_access.state_available
             or not self.codex_access.channel_ids
-            or not 1 <= len(roles) <= MAX_CODEX_ALLOWED_CHANNELS
+            or not valid_allowlist_ids(role_ids, container=list, minimum=1)
             or any(
                 getattr(getattr(role, "guild", None), "id", None) != guild_id
                 or role.is_default()
-                or type(role_id) is not int
-                or role_id <= 0
-                for role, role_id in zip(roles, role_ids, strict=True)
+                for role in roles
             )
-            or len(role_ids) != len(set(role_ids))
         ):
             self._render_ai_access("只能選擇目前伺服器的一般身分組。")
         else:

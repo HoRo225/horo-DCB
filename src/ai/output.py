@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import discord
 
-from src.ai.protocol import MAX_REPLY_IMAGES
 
 DISCORD_MESSAGE_LIMIT = 2_000
 MAX_DISCORD_RESPONSE_CHUNKS = 8
@@ -134,7 +133,7 @@ def split_discord_text_display(text: str) -> list[str]:
 
 
 def build_ai_native_image_links(image_urls: tuple[str, ...]) -> str:
-    urls = list(image_urls[:MAX_REPLY_IMAGES])
+    urls = list(image_urls)
     if not urls:
         return ""
 
@@ -158,7 +157,7 @@ def build_ai_text_display_view(
     view.add_item(discord.ui.TextDisplay(content))
     if image_urls:
         gallery = discord.ui.MediaGallery()
-        for url in image_urls[:MAX_REPLY_IMAGES]:
+        for url in image_urls:
             gallery.add_item(media=url)
         view.add_item(gallery)
     return view

@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from src.ai.protocol import CodexBridgeError, scope_matches
+from src.state import consume_task_exception
 
 if TYPE_CHECKING:
     from src.ai.access import CodexAccess
@@ -101,7 +102,6 @@ class Admission:
         if targets:
             done, pending = await asyncio.wait(targets, timeout=timeout_seconds)
             for task in done:
-                if not task.cancelled():
-                    task.exception()
+                consume_task_exception(task)
             if pending:
                 raise CodexBridgeError("unavailable")

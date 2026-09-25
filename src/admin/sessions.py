@@ -5,6 +5,8 @@ from dataclasses import dataclass, field
 import logging
 from typing import TYPE_CHECKING
 
+from src.state import consume_task_exception
+
 if TYPE_CHECKING:
     from src.admin.panel import AdminPanelView
 
@@ -47,7 +49,7 @@ class PanelSessionRegistry:
 
         def completed(done: asyncio.Task) -> None:
             session.tasks.discard(done)
-            if not done.cancelled() and done.exception() is not None:
+            if consume_task_exception(done) is not None:
                 logging.error("Admin panel task failed.")
             self._collect(session)
 

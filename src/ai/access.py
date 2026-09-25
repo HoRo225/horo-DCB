@@ -19,6 +19,15 @@ def member_role_ids(member: object) -> frozenset[int]:
     )
 
 
+def valid_allowlist_ids(values: object, *, container: type, minimum: int) -> bool:
+    return (
+        isinstance(values, container)
+        and minimum <= len(values) <= MAX_CODEX_ALLOWED_CHANNELS
+        and all(type(value) is int and value > 0 for value in values)
+        and len(values) == len(set(values))
+    )
+
+
 class CodexAccess:
     def __init__(
         self,
@@ -51,8 +60,8 @@ class CodexAccess:
                 channel_ids = payload.get("channel_ids")
                 role_ids = payload.get("role_ids")
                 if (
-                    not self._valid_ids(channel_ids, minimum=1)
-                    or not self._valid_ids(role_ids, minimum=0)
+                    not valid_allowlist_ids(channel_ids, container=list, minimum=1)
+                    or not valid_allowlist_ids(role_ids, container=list, minimum=0)
                     or guild_id in role_ids
                 ):
                     raise ValueError("invalid Codex access state")
@@ -67,15 +76,6 @@ class CodexAccess:
             self.role_ids = frozenset()
             self.state_available = False
             logging.error("Codex 白名單狀態檔無法讀取；AI 對話已停用。")
-
-    @staticmethod
-    def _valid_ids(values: object, *, minimum: int) -> bool:
-        return (
-            isinstance(values, list)
-            and minimum <= len(values) <= MAX_CODEX_ALLOWED_CHANNELS
-            and all(type(value) is int and value > 0 for value in values)
-            and len(values) == len(set(values))
-        )
 
     def denial_reason(
         self,
@@ -133,8 +133,7 @@ class CodexAccess:
         if (
             type(guild_id) is not int
             or guild_id != self.guild_id
-            or not 1 <= len(channel_ids) <= MAX_CODEX_ALLOWED_CHANNELS
-            or any(type(value) is not int or value <= 0 for value in channel_ids)
+            or not valid_allowlist_ids(channel_ids, container=frozenset, minimum=1)
         ):
             raise ValueError("invalid Codex allowlist channels")
         self._persist(guild_id, channel_ids, self.role_ids)
@@ -150,9 +149,8 @@ class CodexAccess:
             type(guild_id) is not int
             or guild_id != self.guild_id
             or not self.channel_ids
-            or not 1 <= len(role_ids) <= MAX_CODEX_ALLOWED_CHANNELS
+            or not valid_allowlist_ids(role_ids, container=frozenset, minimum=1)
             or guild_id in role_ids
-            or any(type(value) is not int or value <= 0 for value in role_ids)
         ):
             raise ValueError("invalid Codex allowlist roles")
         self._persist(guild_id, self.channel_ids, role_ids)

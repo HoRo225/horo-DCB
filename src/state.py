@@ -1,9 +1,14 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 from pathlib import Path
 import tempfile
+
+
+def consume_task_exception(task: asyncio.Future[object]) -> BaseException | None:
+    return None if task.cancelled() else task.exception()
 
 
 def write_json_atomic(path: Path | str, payload: object) -> None:

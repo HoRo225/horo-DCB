@@ -13,6 +13,16 @@ MAX_PROMPT_CHARACTERS = 4000
 MAX_IMAGE_BYTES = 8 * 1024 * 1024
 MAX_IMAGE_TOTAL_BYTES = 16 * 1024 * 1024
 MAX_REPLY_IMAGES = 10
+MEDIA_KINDS = frozenset({"image", "video", "lottie"})
+MEDIA_HEADER_LIMIT = 1024
+MEDIA_CHUNK_BYTES = 64 * 1024
+SUPPORTED_IMAGE_TYPES = {
+    "image/jpeg": {".jpg", ".jpeg"},
+    "image/png": {".png"},
+    "image/webp": {".webp"},
+    "image/gif": {".gif"},
+}
+OUTPUT_IMAGE_TYPES = frozenset({"image/jpeg", "image/png", "image/webp"})
 
 
 def image_signature_matches(content_type: str, data: bytes) -> bool:
@@ -22,19 +32,22 @@ def image_signature_matches(content_type: str, data: bytes) -> bool:
         return data.startswith(b"\xff\xd8\xff")
     if content_type == "image/webp":
         return len(data) >= 12 and data[:4] == b"RIFF" and data[8:12] == b"WEBP"
+    if content_type == "image/gif":
+        return data.startswith((b"GIF87a", b"GIF89a"))
     return False
 
 
-SAFE_ERROR_CODES = {
-    "auth_required",
-    "busy",
-    "invalid_request",
-    "timeout",
-    "unauthorized",
-    "unavailable",
-    "model_capacity",
-    "usage_limit_or_unavailable",
+ERROR_HTTP_STATUS = {
+    "auth_required": 503,
+    "busy": 429,
+    "invalid_request": 400,
+    "timeout": 504,
+    "unauthorized": 401,
+    "unavailable": 503,
+    "model_capacity": 503,
+    "usage_limit_or_unavailable": 429,
 }
+SAFE_ERROR_CODES = frozenset(ERROR_HTTP_STATUS)
 
 
 def conversation_key(
@@ -50,8 +63,8 @@ def conversation_key(
 
 
 class CodexBridgeError(RuntimeError):
-    def __init__(self, code: str) -> None:
-        self.code = code if code in SAFE_ERROR_CODES else "unavailable"
+    def __init__(self, code: object) -> None:
+        self.code = code if isinstance(code, str) and code in SAFE_ERROR_CODES else "unavailable"
         super().__init__(self.code)
 
 
@@ -59,6 +72,23 @@ class CodexBridgeError(RuntimeError):
 class CodexChatReply:
     text: str
     image_urls: tuple[str, ...] = ()
+
+
+def safe_https_hostname(url: str) -> str | None:
+    try:
+        parsed = urlsplit(url)
+        port = parsed.port
+    except ValueError:
+        return None
+    if (
+        parsed.scheme != "https"
+        or parsed.hostname is None
+        or parsed.username is not None
+        or parsed.password is not None
+        or port not in (None, 443)
+    ):
+        return None
+    return parsed.hostname.casefold()
 
 
 def normalize_reply_image_urls(value: object) -> tuple[str, ...]:
@@ -70,18 +100,7 @@ def normalize_reply_image_urls(value: object) -> tuple[str, ...]:
     for url in value:
         if not isinstance(url, str) or not url or any(char.isspace() for char in url):
             continue
-        try:
-            parsed = urlsplit(url)
-            port = parsed.port
-        except ValueError:
-            continue
-        if (
-            parsed.scheme != "https"
-            or parsed.hostname is None
-            or parsed.username is not None
-            or parsed.password is not None
-            or port not in (None, 443)
-        ):
+        if safe_https_hostname(url) is None:
             continue
         if url in seen:
             continue
@@ -115,6 +134,9 @@ class CodexRuntimeStatus:
     last_error: str | None = None
     bot_active_requests: int = 0
     bot_queued_requests: int = 0
+
+
+EMPTY_CODEX_RUNTIME_STATUS = CodexRuntimeStatus(False, False, None, None, None, None, 0)
 
 
 RATE_LIMIT_ERRORS = frozenset({
@@ -227,13 +249,6 @@ _IMAGE_PREFIXES = {
 _MAX_ENCODED_IMAGE_CHARS = ((MAX_IMAGE_BYTES + 2) // 3) * 4
 
 
-class BridgeRequestError(RuntimeError):
-    def __init__(self, code: str, status: int = 400) -> None:
-        super().__init__(code)
-        self.code = code
-        self.status = status
-
-
 @dataclass(frozen=True, slots=True)
 class ChatPayload:
     conversation_key: str
@@ -247,22 +262,22 @@ def validate_chat_payload(value: object) -> ChatPayload:
         "text",
         "images",
     }:
-        raise BridgeRequestError("invalid_request")
+        raise CodexBridgeError("invalid_request")
 
     key = value["conversation_key"]
     text = value["text"]
     images = value["images"]
     if not valid_conversation_key(key):
-        raise BridgeRequestError("invalid_request")
+        raise CodexBridgeError("invalid_request")
     if not isinstance(text, str) or len(text) > MAX_PROMPT_CHARACTERS:
-        raise BridgeRequestError("invalid_request")
+        raise CodexBridgeError("invalid_request")
     if not isinstance(images, list) or len(images) > MAX_IMAGE_ATTACHMENTS:
-        raise BridgeRequestError("invalid_request")
+        raise CodexBridgeError("invalid_request")
 
     total_image_bytes = 0
     for image in images:
         if not isinstance(image, str):
-            raise BridgeRequestError("invalid_request")
+            raise CodexBridgeError("invalid_request")
         match = next(
             (
                 (prefix, content_type)
@@ -272,23 +287,35 @@ def validate_chat_payload(value: object) -> ChatPayload:
             None,
         )
         if match is None:
-            raise BridgeRequestError("invalid_request")
+            raise CodexBridgeError("invalid_request")
         prefix, content_type = match
         encoded = image[len(prefix) :]
         if not encoded or len(encoded) > _MAX_ENCODED_IMAGE_CHARS:
-            raise BridgeRequestError("invalid_request")
+            raise CodexBridgeError("invalid_request")
         try:
             data = base64.b64decode(encoded, validate=True)
         except (binascii.Error, ValueError):
-            raise BridgeRequestError("invalid_request") from None
+            raise CodexBridgeError("invalid_request") from None
         total_image_bytes += len(data)
         try:
             validate_image_bytes(content_type, data, total_image_bytes)
         except ImageAttachmentError:
-            raise BridgeRequestError("invalid_request") from None
+            raise CodexBridgeError("invalid_request") from None
     if not text.strip() and not images:
-        raise BridgeRequestError("invalid_request")
+        raise CodexBridgeError("invalid_request")
     return ChatPayload(key, text, tuple(images))
+
+
+def validate_archive_payload(value: object) -> tuple[int, int | None]:
+    if not isinstance(value, dict) or set(value) - {"guild_id", "channel_id"}:
+        raise CodexBridgeError("invalid_request")
+    guild_id = value.get("guild_id")
+    channel_id = value.get("channel_id")
+    if type(guild_id) is not int or guild_id <= 0 or (
+        channel_id is not None and (type(channel_id) is not int or channel_id <= 0)
+    ):
+        raise CodexBridgeError("invalid_request")
+    return guild_id, channel_id
 
 
 def valid_conversation_key(key: object) -> bool:

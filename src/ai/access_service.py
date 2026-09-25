@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from typing import Literal
 
-from src.ai.access import CodexAccess, MAX_CODEX_ALLOWED_CHANNELS
+from src.ai.access import CodexAccess, valid_allowlist_ids
 from src.ai.client import CodexBridgeClient
 
 
@@ -27,9 +27,7 @@ class AiAccessService:
             type(guild_id) is not int
             or guild_id != self.access.guild_id
             or not self.access.enabled
-            or not isinstance(selected, frozenset)
-            or not 1 <= len(selected) <= MAX_CODEX_ALLOWED_CHANNELS
-            or any(type(value) is not int or value <= 0 for value in selected)
+            or not valid_allowlist_ids(selected, container=frozenset, minimum=1)
             or (roles and (
                 not self.access.state_available
                 or not self.access.channel_ids

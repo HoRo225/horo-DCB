@@ -13,14 +13,12 @@ import imageio_ffmpeg
 from PIL import Image, UnidentifiedImageError
 from rlottie_python import LottieAnimation
 
-from src.ai.protocol import MAX_IMAGE_BYTES
+from src.ai.protocol import (
+    MAX_IMAGE_BYTES, MEDIA_HEADER_LIMIT, MEDIA_KINDS, SUPPORTED_IMAGE_TYPES,
+    image_signature_matches,
+)
 
 
-_HEADER_LIMIT = 1024
-_KINDS = frozenset({"image", "video", "lottie"})
-_SUPPORTED_IMAGE_TYPES = frozenset({
-    "image/jpeg", "image/png", "image/webp", "image/gif",
-})
 _MAX_SOURCE_PIXELS = 25_000_000
 _MAX_FRAMES = 4
 _MAX_FRAME_EDGE = 512
@@ -105,16 +103,12 @@ def _raster_contact_sheet(data: bytes) -> bytes:
 
 def _normalize_image(data: bytes, content_type: str | None) -> tuple[str, bytes]:
     media_type = (content_type or "").split(";", 1)[0].strip().lower()
-    if media_type not in _SUPPORTED_IMAGE_TYPES:
-        if data.startswith(b"\xff\xd8\xff"):
-            media_type = "image/jpeg"
-        elif data.startswith(b"\x89PNG\r\n\x1a\n"):
-            media_type = "image/png"
-        elif len(data) >= 12 and data[:4] == b"RIFF" and data[8:12] == b"WEBP":
-            media_type = "image/webp"
-        elif data.startswith((b"GIF87a", b"GIF89a")):
-            media_type = "image/gif"
-        else:
+    if media_type not in SUPPORTED_IMAGE_TYPES:
+        media_type = next(
+            (kind for kind in SUPPORTED_IMAGE_TYPES if image_signature_matches(kind, data)),
+            None,
+        )
+        if media_type is None:
             raise _WorkerError("image_format")
     animated = (
         media_type == "image/gif"
@@ -187,7 +181,7 @@ def _lottie_contact_sheet(data: bytes) -> bytes:
 def _read_request() -> tuple[str, bytes, str | None]:
     source = sys.stdin.buffer
     header_length = struct.unpack(">I", _read_exact(source, 4))[0]
-    if not 0 < header_length <= _HEADER_LIMIT:
+    if not 0 < header_length <= MEDIA_HEADER_LIMIT:
         raise _WorkerError("media_invalid")
     try:
         metadata = json.loads(_read_exact(source, header_length))
@@ -199,7 +193,7 @@ def _read_request() -> tuple[str, bytes, str | None]:
     content_type = metadata.get("content_type")
     length = metadata.get("length")
     if (
-        kind not in _KINDS
+        kind not in MEDIA_KINDS
         or type(length) is not int
         or not 0 <= length <= MAX_IMAGE_BYTES
         or (content_type is not None and (

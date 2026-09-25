@@ -5,22 +5,15 @@ from dataclasses import dataclass
 import os
 import re
 from typing import Any
-from urllib.parse import urlsplit
 
 import aiohttp
 import discord
 from src.ai.media_executor import MediaExecutor
 from src.ai.protocol import (
-    ImageAttachmentError, MAX_IMAGE_ATTACHMENTS,
-    validate_image_bytes, validate_image_size,
+    ImageAttachmentError, MEDIA_CHUNK_BYTES, SUPPORTED_IMAGE_TYPES,
+    safe_https_hostname, validate_image_size,
 )
 
-SUPPORTED_IMAGE_TYPES = {
-    "image/jpeg": {".jpg", ".jpeg"},
-    "image/png": {".png"},
-    "image/webp": {".webp"},
-    "image/gif": {".gif"},
-}
 IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp", ".gif", ".svg"}
 _CUSTOM_EMOJI = re.compile(r"<a?:[A-Za-z0-9_~]+:([1-9][0-9]*)>")
 
@@ -59,8 +52,6 @@ def select_image_attachments(attachments: list[Any]) -> list[Any]:
             raise ImageAttachmentError("目前只支援 JPEG、PNG、WebP 與 GIF 圖片。")
         selected.append(attachment)
 
-    if len(selected) > MAX_IMAGE_ATTACHMENTS:
-        raise ImageAttachmentError(f"一次最多處理 {MAX_IMAGE_ATTACHMENTS} 張圖片。")
     total_size = 0
     for attachment in selected:
         size = getattr(attachment, "size", None)
@@ -72,7 +63,6 @@ def select_image_attachments(attachments: list[Any]) -> list[Any]:
 
 def _data_url(content_type: str, data: bytes, budget: MediaBudget) -> str:
     budget.add_output(len(data))
-    validate_image_bytes(content_type, data, budget.output_bytes)
     return f"data:{content_type};base64,{base64.b64encode(data).decode('ascii')}"
 
 
@@ -96,18 +86,9 @@ async def read_image_attachments(
 
 
 def _is_safe_discord_url(url: str) -> bool:
-    try:
-        parsed = urlsplit(url)
-        host = (parsed.hostname or "").casefold()
-        port = parsed.port
-    except ValueError:
-        return False
+    host = safe_https_hostname(url)
     return (
-        parsed.scheme == "https"
-        and parsed.username is None
-        and parsed.password is None
-        and port in (None, 443)
-        and (
+        host is not None and (
             host in {"cdn.discordapp.com", "media.discordapp.net"}
             or host.endswith(".discordapp.com")
             or host.endswith(".discordapp.net")
@@ -177,7 +158,7 @@ async def _download_discord_media(
                     response.content_length, total_before + response.content_length
                 )
             data = bytearray()
-            async for chunk in response.content.iter_chunked(64 * 1024):
+            async for chunk in response.content.iter_chunked(MEDIA_CHUNK_BYTES):
                 data.extend(chunk)
                 validate_image_size(len(data), total_before + len(data))
             return bytes(data), response.headers.get("Content-Type")
@@ -188,12 +169,9 @@ async def _download_discord_media(
 
 
 async def read_message_media(
-    messages: list[Any], *, remaining: int, budget: MediaBudget,
+    sources: list[tuple[str, str]], *, budget: MediaBudget,
     executor: MediaExecutor, deadline: float,
 ) -> tuple[str, ...]:
-    sources = select_message_media(messages)
-    if remaining < 0 or len(sources) > remaining:
-        raise ImageAttachmentError(f"一次最多處理 {MAX_IMAGE_ATTACHMENTS} 張圖片。")
     if not sources:
         return ()
 

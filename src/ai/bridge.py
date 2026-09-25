@@ -14,7 +14,10 @@ from aiohttp import web
 from aiohttp.web_log import AccessLogger
 from openai_codex import AsyncCodex, CodexConfig
 
-from src.ai.protocol import BridgeRequestError, SAFE_ERROR_CODES, valid_bridge_token, validate_chat_payload
+from src.ai.protocol import (
+    CodexBridgeError, ERROR_HTTP_STATUS, valid_bridge_token,
+    validate_archive_payload, validate_chat_payload,
+)
 from src.ai.runtime import CODEX_WORKSPACE, CodexService
 from src.ai.thread_store import ThreadStore
 
@@ -48,10 +51,10 @@ _CONFIG_OVERRIDES = (
 )
 
 
-def _error(code: str, status: int) -> web.Response:
-    if code not in SAFE_ERROR_CODES:
-        code, status = "unavailable", 503
-    return web.json_response({"error": code}, status=status)
+def _error(code: str) -> web.Response:
+    if code not in ERROR_HTTP_STATUS:
+        code = "unavailable"
+    return web.json_response({"error": code}, status=ERROR_HTTP_STATUS[code])
 
 
 def _authorized(request: web.Request) -> bool:
@@ -85,28 +88,28 @@ def create_app(token: str, service: Any) -> web.Application:
 
     async def runtime_status(request: web.Request) -> web.Response:
         if not _authorized(request):
-            return _error("unauthorized", 401)
+            return _error("unauthorized")
         try:
             return web.json_response(await service.status())
         except Exception:
-            return _error("unavailable", 503)
+            return _error("unavailable")
 
     async def rate_limits(request: web.Request) -> web.Response:
         if not _authorized(request):
-            return _error("unauthorized", 401)
+            return _error("unauthorized")
         try:
             return web.json_response(asdict(await service.rate_limits()))
         except Exception:
             logging.error("Codex bridge rate-limit request failed.")
-            return _error("unavailable", 503)
+            return _error("unavailable")
 
     async def chat(request: web.Request) -> web.Response:
         if not _authorized(request):
-            return _error("unauthorized", 401)
+            return _error("unauthorized")
         try:
             raw_payload = await request.json()
         except Exception:
-            return _error("invalid_request", 400)
+            return _error("invalid_request")
         try:
             payload = validate_chat_payload(raw_payload)
             reply = await service.chat(
@@ -118,37 +121,28 @@ def create_app(token: str, service: Any) -> web.Application:
             if reply.image_urls:
                 body["image_urls"] = list(reply.image_urls)
             return web.json_response(body)
-        except BridgeRequestError as exc:
-            return _error(exc.code, exc.status)
+        except CodexBridgeError as exc:
+            return _error(exc.code)
         except Exception:
             logging.error("Codex bridge chat request failed.")
-            return _error("unavailable", 503)
+            return _error("unavailable")
 
     async def archive(request: web.Request) -> web.Response:
         if not _authorized(request):
-            return _error("unauthorized", 401)
+            return _error("unauthorized")
         try:
             payload = await request.json()
         except Exception:
-            return _error("invalid_request", 400)
-        if not isinstance(payload, dict) or set(payload) - {
-            "guild_id",
-            "channel_id",
-        }:
-            return _error("invalid_request", 400)
-        guild_id = payload.get("guild_id")
-        channel_id = payload.get("channel_id")
-        if type(guild_id) is not int or guild_id <= 0:
-            return _error("invalid_request", 400)
-        if channel_id is not None and (
-            type(channel_id) is not int or channel_id <= 0
-        ):
-            return _error("invalid_request", 400)
+            return _error("invalid_request")
+        try:
+            guild_id, channel_id = validate_archive_payload(payload)
+        except CodexBridgeError as exc:
+            return _error(exc.code)
         try:
             await service.archive_scope(guild_id, channel_id)
         except Exception:
             logging.error("Codex bridge archive request failed.")
-            return _error("unavailable", 503)
+            return _error("unavailable")
         return web.json_response({})
 
     app.router.add_get("/healthz", health)
