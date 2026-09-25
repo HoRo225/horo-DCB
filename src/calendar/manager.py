@@ -22,7 +22,8 @@ from src.calendar.models import (
     calendar_now,
 )
 from src.calendar.discord_models import can_manage_events, is_external_scheduled
-from src.state import load_state_or_disable, read_json_state, write_json_atomic
+from src.discord_utils import is_text_channel, missing_channel_permissions
+from src.state import cancel_task, load_state_or_disable, read_json_state, write_json_atomic
 
 STATE_VERSION = 1
 DEFAULT_STATE_PATH = Path("/app/data/calendar_board.json")
@@ -117,13 +118,6 @@ class CalendarManager:
             raise CalendarUserError("你需要「管理活動」權限才能操作行事曆。")
 
     @staticmethod
-    def _is_text_channel(channel: object | None) -> bool:
-        return getattr(channel, "type", None) in {
-            discord.ChannelType.text,
-            discord.ChannelType.news,
-        }
-
-    @staticmethod
     def _assert_bot_permissions(guild: discord.Guild, channel: discord.TextChannel) -> None:
         bot_member = guild.me
         if bot_member is None:
@@ -141,15 +135,13 @@ class CalendarManager:
             raise CalendarUserError(
                 "Bot 缺少必要的活動權限：" + "、".join(missing_guild_permissions)
             )
-        channel_permissions = channel.permissions_for(bot_member)
-        missing = [
-            label
-            for attribute, label in (
+        missing = missing_channel_permissions(
+            channel, bot_member,
+            (
                 ("view_channel", "View Channel"),
                 ("send_messages", "Send Messages"),
-            )
-            if not getattr(channel_permissions, attribute, False)
-        ]
+            ),
+        )
         if missing:
             raise CalendarUserError(
                 "Bot 在行事曆頻道缺少必要權限：" + ", ".join(missing)
@@ -160,10 +152,10 @@ class CalendarManager:
         if binding is None:
             raise CalendarUserError("此伺服器尚未綁定行事曆看板。")
         channel = guild.get_channel(binding.channel_id)
-        if not self._is_text_channel(channel):
+        if not is_text_channel(channel):
             raise CalendarUserError("已綁定的行事曆頻道不存在。")
         self._assert_bot_permissions(guild, channel)
-        return channel  # type: ignore[return-value]
+        return channel
 
     @staticmethod
     async def _safe_delete_message(channel: object | None, message_id: int) -> None:
@@ -185,13 +177,8 @@ class CalendarManager:
         )
 
     async def close(self) -> None:
-        if self._task is not None:
-            self._task.cancel()
-            try:
-                await self._task
-            except asyncio.CancelledError:
-                pass
-            self._task = None
+        await cancel_task(self._task)
+        self._task = None
         self._client = None
 
     @staticmethod
@@ -245,7 +232,7 @@ class CalendarManager:
                 raise CalendarUserError("行事曆狀態目前不可用，無法綁定。")
             if is_current is not None and not is_current():
                 raise CalendarUserError("此操作已由較新的要求取代。")
-            if channel.guild.id != guild.id:
+            if not is_text_channel(channel) or channel.guild.id != guild.id:
                 raise CalendarUserError("只能綁定目前伺服器的文字頻道。")
             self._assert_bot_permissions(guild, channel)
             view = self._build_board_view(guild.name, self.cached_events(guild))
@@ -313,7 +300,7 @@ class CalendarManager:
             if binding is None:
                 return False
             channel = guild.get_channel(binding.channel_id)
-            if not self._is_text_channel(channel):
+            if not is_text_channel(channel):
                 new_bindings = dict(self._bindings)
                 new_bindings.pop(guild.id, None)
                 try:

@@ -10,7 +10,11 @@ from typing import Iterable
 import aiohttp
 import discord
 
-from src.state import load_state_or_disable, read_json_state, write_json_atomic
+from src.discord_utils import is_text_channel, missing_channel_permissions
+from src.state import (
+    cancel_task, load_state_or_disable, persist_or_disable, read_json_state,
+    write_json_atomic,
+)
 from src.steam.provider import SteamFetchResult, SteamOffer, SteamOfferProvider
 from src.steam.views import build_offer_view
 
@@ -72,17 +76,17 @@ class SteamFreeGamesNotifier:
         if state is None:
             return "尚未綁定通知頻道，背景檢查會尋找或建立通知頻道。"
         channel = guild.get_channel(state.channel_id)
-        if not self._is_text_channel(channel):
+        if not is_text_channel(channel):
             return "找不到已綁定的通知頻道；請確認 Bot 有管理頻道權限，背景檢查會重新尋找或建立。"
         if guild.me is None:
             return "目前無法確認 Bot 的伺服器成員狀態，請稍後重新整理。"
-        permissions = channel.permissions_for(guild.me)
-        missing = [
-            label for attribute, label in (
+        missing = missing_channel_permissions(
+            channel, guild.me,
+            (
                 ("view_channel", "檢視頻道"),
                 ("send_messages", "傳送訊息"),
-            ) if not getattr(permissions, attribute)
-        ]
+            ),
+        )
         if missing:
             return f"Bot 在通知頻道缺少權限：{'、'.join(missing)}。"
         unavailable_roles = sum(
@@ -166,17 +170,11 @@ class SteamFreeGamesNotifier:
         write_json_atomic(self._state_path, payload)
 
     def _persist_or_disable(self) -> bool:
-        if not self._state_available:
-            return False
-        try:
-            self._persist_state()
-            return True
-        except OSError:
-            self._state_available = False
-            logging.exception(
-                "Steam 免費遊戲狀態無法保存；為避免重複洗版，通知功能已停用。"
-            )
-            return False
+        self._state_available = persist_or_disable(
+            self._persist_state, self._state_available,
+            "Steam 免費遊戲狀態無法保存；為避免重複洗版，通知功能已停用。",
+        )
+        return self._state_available
 
     @staticmethod
     def _role_can_notify(guild: discord.Guild, role: discord.Role) -> bool:
@@ -252,15 +250,8 @@ class SteamFreeGamesNotifier:
         )
 
     async def close(self) -> None:
-        if self._task is not None:
-            self._task.cancel()
-            try:
-                await self._task
-            except asyncio.CancelledError:
-                pass
-            finally:
-                self._task = None
-
+        await cancel_task(self._task)
+        self._task = None
         await self.provider.close()
 
     async def _run_loop(self, client: discord.Client) -> None:
@@ -281,23 +272,17 @@ class SteamFreeGamesNotifier:
         return await self.provider.fetch_current_offers()
 
     @staticmethod
-    def _is_text_channel(channel: object | None) -> bool:
-        return getattr(channel, "type", None) == discord.ChannelType.text
-
-    @staticmethod
     def _channel_permissions_ok(
         channel: discord.TextChannel,
         bot_member: discord.Member,
     ) -> bool:
-        permissions = channel.permissions_for(bot_member)
-        missing = [
-            label
-            for attribute, label in (
+        missing = missing_channel_permissions(
+            channel, bot_member,
+            (
                 ("view_channel", "View Channel"),
                 ("send_messages", "Send Messages"),
-            )
-            if not getattr(permissions, attribute)
-        ]
+            ),
+        )
         if missing:
             logging.error(
                 "Steam 免費遊戲通知頻道缺少 Bot 權限：%s",
@@ -313,18 +298,18 @@ class SteamFreeGamesNotifier:
         state = self._guilds.get(guild.id)
         if state is not None:
             stored_channel = guild.get_channel(state.channel_id)
-            if self._is_text_channel(stored_channel):
+            if is_text_channel(stored_channel):
                 bot_member = guild.me
                 if bot_member is None:
                     return None, False
                 if not self._channel_permissions_ok(stored_channel, bot_member):
                     return None, False
-                return stored_channel, False  # type: ignore[return-value]
+                return stored_channel, False
 
         candidates = [
             channel
             for channel in guild.channels
-            if self._is_text_channel(channel)
+            if is_text_channel(channel)
             and channel.name == NOTIFICATION_CHANNEL_NAME
         ]
         if len(candidates) > 1:
@@ -336,7 +321,7 @@ class SteamFreeGamesNotifier:
 
         channel: discord.TextChannel | None
         if len(candidates) == 1:
-            channel = candidates[0]  # type: ignore[assignment]
+            channel = candidates[0]
         else:
             bot_member = guild.me
             if bot_member is None or not bot_member.guild_permissions.manage_channels:

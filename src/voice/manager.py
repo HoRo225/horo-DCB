@@ -8,7 +8,8 @@ from typing import Iterable
 
 import discord
 
-from src.state import load_state_or_disable, read_json_state, write_json_atomic
+from src.discord_utils import missing_channel_permissions
+from src.state import load_state_or_disable, persist_or_disable, read_json_state, write_json_atomic
 
 ENTRY_CHANNEL_NAME = "➕ 建立語音"
 CHANNEL_NAME_PREFIX = "▍"
@@ -170,29 +171,18 @@ class TempVoiceManager:
         write_json_atomic(self._state_path, payload)
 
     def _persist_or_disable(self) -> bool:
-        if not self._state_available:
-            return False
-        try:
-            self._persist_state()
-            return True
-        except OSError:
-            self._state_available = False
-            logging.exception(
-                "臨時語音狀態無法保存；為避免建立無法追蹤的頻道，臨時語音功能已停用。"
-            )
-            return False
+        self._state_available = persist_or_disable(
+            self._persist_state, self._state_available,
+            "臨時語音狀態無法保存；為避免建立無法追蹤的頻道，臨時語音功能已停用。",
+        )
+        return self._state_available
 
     @staticmethod
     def _missing_bot_permissions(
         entry_channel: discord.VoiceChannel,
         bot_member: discord.Member,
     ) -> list[str]:
-        permissions = entry_channel.permissions_for(bot_member)
-        return [
-            label
-            for attribute, label in _REQUIRED_BOT_PERMISSIONS
-            if not getattr(permissions, attribute)
-        ]
+        return missing_channel_permissions(entry_channel, bot_member, _REQUIRED_BOT_PERMISSIONS)
 
     def _existing_owner_channel(
         self,

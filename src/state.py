@@ -17,6 +17,15 @@ def consume_task_exception(task: asyncio.Future[object]) -> BaseException | None
     return None if task.cancelled() else task.exception()
 
 
+async def cancel_task(task: asyncio.Future[Any] | None) -> None:
+    if task is not None:
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+
+
 def read_json_state(path: Path | str, version: int) -> dict[str, Any]:
     payload = json.loads(Path(path).read_text(encoding="utf-8"))
     if (
@@ -36,6 +45,17 @@ def load_state_or_disable(load: Callable[[], T], empty: T, message: str) -> tupl
     except (OSError, ValueError, TypeError):
         logging.exception(message)
         return empty, False
+
+
+def persist_or_disable(persist: Callable[[], None], available: bool, message: str) -> bool:
+    if not available:
+        return False
+    try:
+        persist()
+    except OSError:
+        logging.exception(message)
+        return False
+    return True
 
 
 def write_json_atomic(path: Path | str, payload: object) -> None:

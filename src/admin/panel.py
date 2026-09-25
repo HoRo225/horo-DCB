@@ -14,6 +14,7 @@ from src.ai.access import MAX_CODEX_ALLOWED_CHANNELS, CodexAccess, member_role_i
 from src.ai.access_service import AiAccessService
 from src.ai.client import CodexBridgeClient
 from src.ai.protocol import CodexRateLimits, CodexRuntimeStatus, EMPTY_CODEX_RUNTIME_STATUS
+from src.discord_utils import is_text_channel, missing_channel_permissions
 from src.steam.notifier import (
     SteamConfigurationError,
     SteamFreeGamesNotifier,
@@ -706,19 +707,20 @@ class AdminPanelView(discord.ui.LayoutView):
         unusable = 0
         for channel_id in access.channel_ids:
             channel = get_channel(channel_id)
-            if getattr(channel, "type", None) != discord.ChannelType.text:
+            if not is_text_channel(channel):
+                unusable += 1
                 continue
             permissions_for = getattr(channel, "permissions_for", None)
             if not callable(permissions_for):
                 return None
-            permissions = permissions_for(bot_member)
-            if not getattr(permissions, "view_channel", False) or not getattr(
-                permissions, "send_messages", False
+            if missing_channel_permissions(
+                channel, bot_member,
+                (("view_channel", "View Channel"), ("send_messages", "Send Messages")),
             ):
                 unusable += 1
         if unusable:
             return (
-                f"Bot 在 {unusable} 個 AI 白名單頻道缺少檢視或傳送訊息權限，"
+                f"{unusable} 個 AI 白名單頻道不存在、類型不支援或缺少 Bot 權限，"
                 "請重新選擇頻道或調整權限。"
             )
         return None
@@ -1469,7 +1471,7 @@ class AdminPanelView(discord.ui.LayoutView):
             or not valid_allowlist_ids(channel_ids, container=list, minimum=1)
             or any(
                 getattr(getattr(channel, "guild", None), "id", None) != guild_id
-                or getattr(channel, "type", None) != discord.ChannelType.text
+                or not is_text_channel(channel)
                 for channel in channels
             )
         ):
