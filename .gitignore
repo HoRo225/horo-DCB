@@ -71,12 +71,14 @@ volumes/
 # Local editor and agent state
 .vscode/
 .idea/
+.claude/
 .ai-bridge/
 .superpowers/
 .review/
 
 # Local-only project documents
 AGENTS.md
+CLAUDE.md
 SERVER.md
 ARCHITECTURE_AUDIT_*.md
 docs/operations.md
@@ -92,6 +94,7 @@ docs/superpowers/
 /releases/
 /scratch/
 /local/
+/tests/
 horo-dcb-bot-reliability-*.tar.gz
 image-identity.json
 SHA256SUMS
