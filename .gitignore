@@ -16,7 +16,6 @@
 auth.json
 credentials.json
 token.json
-base_instructions.txt
 prompts/
 
 # Logs
