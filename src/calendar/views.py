@@ -236,11 +236,12 @@ class _CalendarAdminActionButton(discord.ui.Button):
 
 
 class CalendarAdminView(discord.ui.LayoutView):
-    def __init__(self, manager: CalendarManager, *, user_id: int, guild_id: int) -> None:
+    def __init__(self, manager: CalendarManager, *, user_id: int, guild: discord.Guild) -> None:
         super().__init__(timeout=15 * 60)
         self.manager = manager
         self.user_id = user_id
-        self.guild_id = guild_id
+        self.guild = guild
+        self.guild_id = guild.id
         self.pending_channel_id: int | None = None
         self.pending_channel: discord.TextChannel | None = None
         self.notice: str | None = None
@@ -289,16 +290,23 @@ class CalendarAdminView(discord.ui.LayoutView):
                 self.notice = None
             binding = self.manager.get_binding(self.guild_id)
             bound = binding is not None
+            binding_valid = self.manager.binding_channel_is_valid(self.guild)
             status = (
-                f"**目前綁定**　<#{binding.channel_id}>\n-# 看板訊息會隨活動與日期自動更新。"
-                if binding is not None
-                else "**尚未綁定**\n-# 選擇文字頻道後按「套用綁定」。"
+                f"**狀態正常**　<#{binding.channel_id}>\n-# 看板訊息會隨活動與日期自動更新。"
+                if binding_valid and binding is not None
+                else (
+                    f"**需要處理**　<#{binding.channel_id}> 不是一般文字頻道或已不存在。"
+                    "\n-# 請選擇文字頻道重新綁定，或解除綁定。"
+                    if binding is not None
+                    else "**尚未綁定**\n-# 選擇文字頻道後按「套用綁定」。"
+                )
             )
         else:
             self.notice = CALENDAR_STATE_UNAVAILABLE_NOTICE
             self.unbind_target = None
             binding = None
             bound = False
+            binding_valid = False
             status = (
                 "**行事曆狀態目前不可用**\n"
                 "-# 請管理員檢查儲存狀態並重新啟動 Bot。"
@@ -332,9 +340,9 @@ class CalendarAdminView(discord.ui.LayoutView):
                     "apply",
                     disabled=not state_available or self.pending_channel_id is None,
                 ),
-                self._button("refresh", disabled=not state_available or not bound),
+                self._button("refresh", disabled=not state_available or not binding_valid),
             ]
-            if binding is not None:
+            if binding_valid and binding is not None:
                 buttons.append(
                     discord.ui.Button(
                         label="開啟看板",

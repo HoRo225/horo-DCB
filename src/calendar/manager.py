@@ -62,6 +62,12 @@ class CalendarManager:
     def get_binding(self, guild_id: int) -> CalendarBinding | None:
         return self._bindings.get(guild_id) if self._state_available else None
 
+    def binding_channel_is_valid(self, guild: discord.Guild) -> bool:
+        binding = self.get_binding(guild.id)
+        return binding is not None and is_text_channel(
+            guild.get_channel_or_thread(binding.channel_id)
+        )
+
     def get_binding_revision(self, guild_id: int) -> int:
         return self._versions.get(guild_id, 0)
 
@@ -153,9 +159,9 @@ class CalendarManager:
         binding = self.get_binding(guild.id)
         if binding is None:
             raise CalendarUserError("此伺服器尚未綁定行事曆看板。")
-        channel = guild.get_channel(binding.channel_id)
+        channel = guild.get_channel_or_thread(binding.channel_id)
         if not is_text_channel(channel):
-            raise CalendarUserError("已綁定的行事曆頻道不存在。")
+            raise CalendarUserError("已綁定的行事曆頻道不存在或不是一般文字頻道。")
         self._assert_bot_permissions(guild, channel)
         return channel
 
@@ -299,14 +305,21 @@ class CalendarManager:
             binding = self._bindings.get(guild.id)
             if binding is None:
                 return False
-            channel = guild.get_channel(binding.channel_id)
-            if not is_text_channel(channel):
-                new_bindings = dict(self._bindings)
-                new_bindings.pop(guild.id, None)
+            channel = guild.get_channel_or_thread(binding.channel_id)
+            if channel is None:
                 try:
-                    self._commit_bindings(new_bindings)
-                except CalendarUserError:
-                    pass
+                    channel = await guild.fetch_channel(binding.channel_id)
+                except discord.NotFound:
+                    new_bindings = dict(self._bindings)
+                    new_bindings.pop(guild.id, None)
+                    try:
+                        self._commit_bindings(new_bindings)
+                    except CalendarUserError:
+                        pass
+                    return False
+                except (asyncio.TimeoutError, aiohttp.ClientError, discord.DiscordException):
+                    return False
+            if not is_text_channel(channel):
                 return False
             try:
                 self._assert_bot_permissions(guild, channel)

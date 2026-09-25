@@ -109,11 +109,12 @@ class HoroBot(discord.Client):
         async def calendar_panel(interaction: discord.Interaction) -> None:
             if not await self._admin_command_allowed(interaction):
                 return
+            assert interaction.guild is not None
             await interaction.response.send_message(
                 files=brand_files(CARD_FILENAME),
                 view=self.calendar_controller.admin_view(
                     user_id=interaction.user.id,
-                    guild_id=interaction.guild.id,
+                    guild=interaction.guild,
                 ),
                 ephemeral=True,
             )

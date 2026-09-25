@@ -25,8 +25,8 @@ class CalendarController:
     def persistent_board_view(self) -> CalendarBoardView:
         return CalendarBoardView(self, "行事曆", can_edit=False)
 
-    def admin_view(self, *, user_id: int, guild_id: int) -> CalendarAdminView:
-        return CalendarAdminView(self.manager, user_id=user_id, guild_id=guild_id)
+    def admin_view(self, *, user_id: int, guild: discord.Guild) -> CalendarAdminView:
+        return CalendarAdminView(self.manager, user_id=user_id, guild=guild)
 
     def build_board_view(
         self,
@@ -40,11 +40,12 @@ class CalendarController:
         )
 
     def board_interaction_is_current(self, interaction: discord.Interaction) -> bool:
-        if interaction.guild_id is None or interaction.message is None:
+        if interaction.guild is None or interaction.message is None:
             return False
-        binding = self.manager.get_binding(interaction.guild_id)
+        binding = self.manager.get_binding(interaction.guild.id)
         return bool(
             binding is not None
+            and self.manager.binding_channel_is_valid(interaction.guild)
             and interaction.channel_id == binding.channel_id
             and interaction.message.id == binding.message_id
         )
