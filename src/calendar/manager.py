@@ -22,7 +22,10 @@ from src.calendar.models import (
 )
 from src.calendar.discord_models import can_manage_events, is_external_scheduled
 from src.discord_utils import is_text_channel, missing_channel_permissions
-from src.state import cancel_task, load_state_or_disable, read_json_state, write_json_atomic
+from src.state import (
+    cancel_task, load_state_or_disable, read_json_state, start_task,
+    write_json_atomic,
+)
 
 STATE_VERSION = 1
 DEFAULT_STATE_PATH = Path("/app/data/calendar_board.json")
@@ -168,10 +171,9 @@ class CalendarManager:
 
     async def start(self, client: discord.Client) -> None:
         self._client = client
-        if self._task is not None and not self._task.done():
-            return
-        self._task = asyncio.create_task(
-            self._guard_midnight_loop(),
+        self._task = start_task(
+            self._task,
+            self._guard_midnight_loop,
             name="calendar-midnight-refresh",
         )
 

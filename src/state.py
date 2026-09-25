@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Callable
+from collections.abc import Callable, Coroutine
 import json
 import logging
 import os
@@ -11,6 +11,17 @@ from typing import Any, TypeVar
 
 
 T = TypeVar("T")
+
+
+def start_task(
+    task: asyncio.Task[T] | None,
+    coroutine: Callable[..., Coroutine[Any, Any, T]],
+    *args: Any,
+    name: str,
+) -> asyncio.Task[T]:
+    if task is not None and not task.done():
+        return task
+    return asyncio.create_task(coroutine(*args), name=name)
 
 
 def consume_task_exception(task: asyncio.Future[object]) -> BaseException | None:

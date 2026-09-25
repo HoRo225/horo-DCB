@@ -13,7 +13,7 @@ import discord
 from src.discord_utils import is_text_channel, missing_channel_permissions
 from src.state import (
     cancel_task, load_state_or_disable, persist_or_disable, read_json_state,
-    write_json_atomic,
+    start_task, write_json_atomic,
 )
 from src.steam.provider import SteamFetchResult, SteamOffer, SteamOfferProvider
 from src.steam.views import build_offer_view
@@ -241,11 +241,10 @@ class SteamFreeGamesNotifier:
     def start(self, client: discord.Client) -> None:
         if not self._state_available:
             return
-        if self._task is not None and not self._task.done():
-            return
-
-        self._task = asyncio.create_task(
-            self._run_loop(client),
+        self._task = start_task(
+            self._task,
+            self._run_loop,
+            client,
             name="steam-free-games-notifier",
         )
 
