@@ -10,7 +10,7 @@ from typing import Iterable
 import aiohttp
 import discord
 
-from src.discord_utils import is_text_channel, missing_channel_permissions
+from src.discord_utils import find_or_create_channel, is_text_channel, missing_channel_permissions
 from src.state import (
     cancel_task, load_state_or_disable, persist_or_disable, read_json_state,
     start_task, write_json_atomic,
@@ -305,37 +305,13 @@ class SteamFreeGamesNotifier:
                     return None, False
                 return stored_channel, False
 
-        candidates = [
-            channel
-            for channel in guild.channels
-            if is_text_channel(channel)
-            and channel.name == NOTIFICATION_CHANNEL_NAME
-        ]
-        if len(candidates) > 1:
-            logging.error(
-                "找到多個同名 Steam 免費遊戲通知頻道，無法安全綁定 Channel ID：%s",
-                NOTIFICATION_CHANNEL_NAME,
-            )
+        channel, _ = await find_or_create_channel(
+            guild, NOTIFICATION_CHANNEL_NAME, discord.ChannelType.text,
+            discord.TextChannel, guild.create_text_channel, AUDIT_REASON,
+            label="Steam 免費遊戲通知頻道",
+        )
+        if channel is None:
             return None, False
-
-        channel: discord.TextChannel | None
-        if len(candidates) == 1:
-            channel = candidates[0]
-        else:
-            bot_member = guild.me
-            if bot_member is None or not bot_member.guild_permissions.manage_channels:
-                logging.error(
-                    "找不到 Steam 免費遊戲通知頻道，而且 Bot 缺少 Manage Channels。"
-                )
-                return None, False
-            try:
-                channel = await guild.create_text_channel(
-                    NOTIFICATION_CHANNEL_NAME,
-                    reason=AUDIT_REASON,
-                )
-            except (discord.Forbidden, discord.HTTPException):
-                logging.exception("自動建立 Steam 免費遊戲通知頻道失敗。")
-                return None, False
 
         bot_member = guild.me
         if bot_member is None or not self._channel_permissions_ok(channel, bot_member):

@@ -8,7 +8,7 @@ from typing import Iterable
 
 import discord
 
-from src.discord_utils import missing_channel_permissions
+from src.discord_utils import find_or_create_channel, missing_channel_permissions
 from src.state import load_state_or_disable, persist_or_disable, read_json_state, write_json_atomic
 
 ENTRY_CHANNEL_NAME = "➕ 建立語音"
@@ -376,43 +376,19 @@ class TempVoiceManager:
             changed = True
             logging.warning("已綁定的臨時語音入口不存在，將重新尋找或建立入口。")
 
-        candidates = [
-            channel
-            for channel in guild.channels
-            if _is_voice_channel(channel) and channel.name == ENTRY_CHANNEL_NAME
-        ]
-        if len(candidates) == 1:
-            entry_channel = candidates[0]
-            self._parents[guild.id] = entry_channel.id
-            logging.info("已綁定臨時語音入口 Channel ID。")
-            return entry_channel, True
-
-        if len(candidates) > 1:
-            logging.error(
-                "找到多個同名臨時語音入口，無法安全綁定 Channel ID；請只保留一個：%s",
-                ENTRY_CHANNEL_NAME,
-            )
-            return None, changed
-
-        bot_member = guild.me
-        if bot_member is None or not bot_member.guild_permissions.manage_channels:
-            logging.error(
-                "沒有已綁定的臨時語音入口，而且 Bot 缺少 Manage Channels，無法自動建立：%s",
-                ENTRY_CHANNEL_NAME,
-            )
-            return None, changed
-
-        try:
-            entry_channel = await guild.create_voice_channel(
-                ENTRY_CHANNEL_NAME,
-                reason=AUDIT_REASON,
-            )
-        except (discord.Forbidden, discord.HTTPException):
-            logging.exception("自動建立臨時語音入口頻道失敗。")
+        entry_channel, created = await find_or_create_channel(
+            guild, ENTRY_CHANNEL_NAME, discord.ChannelType.voice,
+            discord.VoiceChannel, guild.create_voice_channel, AUDIT_REASON,
+            label="臨時語音入口頻道",
+        )
+        if entry_channel is None:
             return None, changed
 
         self._parents[guild.id] = entry_channel.id
-        logging.info("已自動建立並綁定臨時語音入口 Channel ID。")
+        logging.info(
+            "已自動建立並綁定臨時語音入口 Channel ID。"
+            if created else "已綁定臨時語音入口 Channel ID。"
+        )
         return entry_channel, True
 
     async def reconcile(
