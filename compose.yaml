@@ -11,7 +11,7 @@ services:
     restart: unless-stopped
     stop_grace_period: 40s
     volumes:
-      - bot_data:/app/data
+      - bot_data_srv:/app/data
     depends_on:
       codex:
         condition: service_healthy
@@ -23,13 +23,7 @@ services:
       CODEX_HOME: /app/codex
     restart: unless-stopped
     volumes:
-      - codex_data:/app/codex
-      - type: bind
-        source: ./base_instructions.txt
-        target: /app/codex/base_instructions.txt
-        read_only: true
-        bind:
-          create_host_path: false
+      - codex_data_srv:/app/codex
     healthcheck:
       test:
         - CMD
@@ -42,5 +36,15 @@ services:
       start_period: 60s
 
 volumes:
-  bot_data:
-  codex_data:
+  bot_data_srv:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: /srv/horo-dcb-data/bot
+  codex_data_srv:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: /srv/horo-dcb-data/codex

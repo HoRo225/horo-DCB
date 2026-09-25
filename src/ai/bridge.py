@@ -7,7 +7,6 @@ import hmac
 import logging
 import os
 from pathlib import Path
-import stat
 import sys
 from typing import Any
 
@@ -28,8 +27,6 @@ class _HealthAccessLogger(AccessLogger):
 
 
 _TOKEN_KEY = web.AppKey("bridge_token", str)
-_BASE_INSTRUCTIONS_FILENAME = "base_instructions.txt"
-_MAX_BASE_INSTRUCTIONS_BYTES = 16 * 1024
 _CONFIG_OVERRIDES = (
     'web_search="live"',
     "features.standalone_web_search=true",
@@ -172,28 +169,6 @@ def _codex_home() -> Path:
     return path
 
 
-def _base_instructions(codex_home: Path) -> str:
-    path = codex_home / _BASE_INSTRUCTIONS_FILENAME
-    try:
-        metadata = path.lstat()
-        if (
-            not stat.S_ISREG(metadata.st_mode)
-            or metadata.st_mode & 0o777 != 0o600
-            or not 0 < metadata.st_size <= _MAX_BASE_INSTRUCTIONS_BYTES
-        ):
-            raise OSError
-        value = path.read_text(encoding="utf-8").strip()
-    except (OSError, UnicodeError):
-        raise RuntimeError(
-            "Codex base instructions must be a non-empty UTF-8 0600 regular file"
-        ) from None
-    if not value:
-        raise RuntimeError(
-            "Codex base instructions must be a non-empty UTF-8 0600 regular file"
-        )
-    return value
-
-
 def _runtime_config(workspace: str) -> CodexConfig:
     return CodexConfig(
         cwd=workspace,
@@ -208,7 +183,6 @@ def _runtime_app() -> web.Application:
     if not valid_bridge_token(token):
         raise RuntimeError("CODEX_BRIDGE_TOKEN must be 64 lowercase hex characters")
     codex_home = _codex_home()
-    base_instructions = _base_instructions(codex_home)
     workspace = Path("/app/codex-workspace")
     if not workspace.is_dir():
         raise RuntimeError("Codex runtime directories are unavailable")
@@ -217,7 +191,6 @@ def _runtime_app() -> web.Application:
     service = CodexService(
         codex,
         ThreadStore(codex_home / "horo_threads.json"),
-        base_instructions=base_instructions,
     )
     app = create_app(token, service)
 

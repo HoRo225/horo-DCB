@@ -77,19 +77,11 @@ class CodexService:
         codex: Any,
         store: ThreadStore,
         *,
-        base_instructions: str | None = None,
         timeout_seconds: float = 120,
         workspace: str = "/app/codex-workspace",
     ) -> None:
-        if base_instructions is not None and (
-            not isinstance(base_instructions, str) or not base_instructions.strip()
-        ):
-            raise ValueError("base_instructions must be a non-empty string")
         self.codex = codex
         self.store = store
-        self.base_instructions = (
-            base_instructions.strip() if base_instructions is not None else None
-        )
         self.timeout_seconds = timeout_seconds
         self.workspace = workspace
         self._admission = Admission()
@@ -118,14 +110,11 @@ class CodexService:
             await self.status()
 
     def _thread_options(self) -> dict[str, object]:
-        options: dict[str, object] = {
+        return {
             "approval_mode": ApprovalMode.deny_all,
             "cwd": self.workspace,
             "sandbox": Sandbox.read_only,
         }
-        if self.base_instructions is not None:
-            options["base_instructions"] = self.base_instructions
-        return options
 
     @staticmethod
     def _normalize_error(exc: Exception) -> BridgeRequestError:
