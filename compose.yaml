@@ -1,12 +1,12 @@
 x-runtime: &runtime
   build: .
   image: horo-dcb:local
-  env_file:
-    - .env
 
 services:
   bot:
     <<: *runtime
+    env_file:
+      - .env
     command: ["python", "-m", "src.bot"]
     restart: unless-stopped
     stop_grace_period: 40s
@@ -18,8 +18,9 @@ services:
 
   codex:
     <<: *runtime
-    command: ["python", "-m", "src.codex_bridge", "serve"]
+    command: ["python", "-m", "src.ai.bridge", "serve"]
     environment:
+      CODEX_BRIDGE_TOKEN: ${CODEX_BRIDGE_TOKEN}
       CODEX_HOME: /app/codex
     restart: unless-stopped
     volumes:

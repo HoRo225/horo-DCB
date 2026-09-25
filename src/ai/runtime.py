@@ -8,6 +8,7 @@ import time
 from typing import Any
 
 import openai_codex
+from pydantic import RootModel
 from openai_codex import ApprovalMode, ImageInput, Sandbox, TextInput
 from openai_codex import RetryLimitExceededError, ServerBusyError, TransportClosedError
 
@@ -16,7 +17,6 @@ from src.ai.protocol import (
     BridgeRequestError, CodexBridgeError, CodexChatReply, CodexRateLimits,
     normalize_rate_limits, normalize_reply_image_urls, scope_matches,
 )
-from src.ai.sdk_gateway import read_rate_limits_payload
 from src.ai.thread_store import ThreadStore
 
 SDK_INITIALIZE_TIMEOUT_SECONDS = 30.0
@@ -25,6 +25,7 @@ RATE_CACHE_SECONDS = 30.0
 RATE_WAIT_SECONDS = 2.0
 PRIMARY_MODEL = "gpt-6-luna"
 CAPACITY_FALLBACK_MODEL = "gpt-5.6-luna"
+CODEX_WORKSPACE = "/app/codex-workspace"
 _IMAGE_RESULT_REF = re.compile(r"^turn[0-9]+image[0-9]+$")
 _MARKDOWN_IMAGE_URL = re.compile(r"!\[[^\]]*\]\((https://[^\s)]+)\)")
 
@@ -78,7 +79,7 @@ class CodexService:
         store: ThreadStore,
         *,
         timeout_seconds: float = 120,
-        workspace: str = "/app/codex-workspace",
+        workspace: str = CODEX_WORKSPACE,
     ) -> None:
         self.codex = codex
         self.store = store
@@ -256,8 +257,12 @@ class CodexService:
 
     async def _read_rate_limits(self) -> CodexRateLimits:
         try:
-            payload = await read_rate_limits_payload(self.codex)
-            return normalize_rate_limits(payload, fetched_at=int(time.time()))
+            response = await self.codex._client.request(
+                "account/rateLimits/read",
+                None,
+                response_model=RootModel[dict[str, Any]],
+            )
+            return normalize_rate_limits(response.root, fetched_at=int(time.time()))
         except asyncio.CancelledError:
             raise
         except ValueError:

@@ -15,7 +15,7 @@ from aiohttp.web_log import AccessLogger
 from openai_codex import AsyncCodex, CodexConfig
 
 from src.ai.protocol import BridgeRequestError, SAFE_ERROR_CODES, valid_bridge_token, validate_chat_payload
-from src.ai.runtime import CodexService
+from src.ai.runtime import CODEX_WORKSPACE, CodexService
 from src.ai.thread_store import ThreadStore
 
 
@@ -183,7 +183,7 @@ def _runtime_app() -> web.Application:
     if not valid_bridge_token(token):
         raise RuntimeError("CODEX_BRIDGE_TOKEN must be 64 lowercase hex characters")
     codex_home = _codex_home()
-    workspace = Path("/app/codex-workspace")
+    workspace = Path(CODEX_WORKSPACE)
     if not workspace.is_dir():
         raise RuntimeError("Codex runtime directories are unavailable")
 
@@ -207,8 +207,7 @@ def _runtime_app() -> web.Application:
 
 async def _device_login() -> int:
     _codex_home()
-    workspace = "/app/codex-workspace"
-    async with AsyncCodex(_runtime_config(workspace)) as codex:
+    async with AsyncCodex(_runtime_config(CODEX_WORKSPACE)) as codex:
         account = await codex.account()
         if account.account is not None:
             print("Codex account is already authenticated.")
@@ -246,3 +245,7 @@ def main() -> None:
         handler_cancellation=True, shutdown_timeout=5,
         access_log_class=_HealthAccessLogger,
     )
+
+
+if __name__ == "__main__":
+    main()
