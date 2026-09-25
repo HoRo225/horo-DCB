@@ -7,8 +7,8 @@ from typing import Any
 import discord
 from discord import app_commands
 
-from src.admin.panel import AdminPanelView, load_codex_rate_limits, load_codex_status
-from src.admin.sessions import PanelSession, PanelSessionRegistry
+from src.admin.panel import AdminPanelView
+from src.admin.sessions import PanelSessionRegistry
 from src.ai import discord as ai_discord
 from src.ai.access import CodexAccess, member_role_ids
 from src.ai.access_service import AiAccessService
@@ -71,34 +71,11 @@ class HoroBot(discord.Client):
         @app_commands.guild_only()
         @app_commands.default_permissions(administrator=True)
         async def control_panel(interaction: discord.Interaction) -> None:
-            if self._closing:
-                return
-            if interaction.guild is None or not interaction.permissions.administrator:
-                await interaction.response.send_message(
-                    "此指令僅限伺服器管理員使用。",
-                    ephemeral=True,
-                    allowed_mentions=discord.AllowedMentions.none(),
-                )
+            if not await self._admin_command_allowed(interaction):
                 return
             key = (interaction.guild.id, interaction.user.id)
             session = self._admin_panels.begin(key)
-            opening = asyncio.create_task(open_panel(interaction, session))
-            self._admin_panels.track(session, opening)
             try:
-                await opening
-            except asyncio.CancelledError:
-                # Retiring our child must not cancel the framework callback.
-                if asyncio.current_task().cancelling() or not session.retired:
-                    raise
-
-        async def open_panel(interaction: discord.Interaction, session: PanelSession) -> None:
-            view = None
-            published = False
-            opened = False
-            try:
-                await interaction.response.defer(ephemeral=True)
-                if not self._admin_panels.is_current(session):
-                    return
                 view = AdminPanelView(
                     user_id=interaction.user.id,
                     guild_id=interaction.guild.id,
@@ -114,55 +91,23 @@ class HoroBot(discord.Client):
                     panel_registry=self._admin_panels,
                     panel_session=session,
                 )
-                self._admin_panels.attach_view(session, view)
-                view.bind_interaction(interaction)
-                if not await view._can_publish():
-                    return
-                async with asyncio.TaskGroup() as group:
-                    status = group.create_task(load_codex_status(self.codex))
-                    self._admin_panels.track(session, status)
-                    limits = None
-                    if self.codex_access.enabled and self.codex_access.guild_id == interaction.guild.id:
-                        limits = group.create_task(load_codex_rate_limits(self.codex))
-                        self._admin_panels.track(session, limits)
-                if not await view._can_publish():
-                    return
-                view.codex_status = status.result()
-                if limits is not None:
-                    view.codex_rate_limits = limits.result()
-                view._render_overview()
-                async with view._edit_lock:
-                    if not await view._can_publish():
-                        return
-                    published = True
-                    await interaction.edit_original_response(
-                        attachments=brand_files(CARD_FILENAME),
-                        view=view,
-                        allowed_mentions=discord.AllowedMentions.none(),
-                    )
-                    view.record_published()
-                if not await view._can_publish():
-                    return
-                view.start_rate_refresh(interaction)
-                opened = True
-            finally:
-                if not opened:
-                    self._admin_panels.retire(session)
-                    if published and view is not None:
-                        view.close_stale_message()
+            except Exception:
+                self._admin_panels.retire(session)
+                raise
+            opening = asyncio.create_task(view.open_panel(interaction))
+            self._admin_panels.track(session, opening)
+            try:
+                await opening
+            except asyncio.CancelledError:
+                # Retiring our child must not cancel the framework callback.
+                if asyncio.current_task().cancelling() or not session.retired:
+                    raise
 
         @self.tree.command(name="行事曆", description="開啟行事曆管理")
         @app_commands.guild_only()
         @app_commands.default_permissions(administrator=True)
         async def calendar_panel(interaction: discord.Interaction) -> None:
-            if self._closing:
-                return
-            if interaction.guild is None or not interaction.permissions.administrator:
-                await interaction.response.send_message(
-                    "此指令僅限伺服器管理員使用。",
-                    ephemeral=True,
-                    allowed_mentions=discord.AllowedMentions.none(),
-                )
+            if not await self._admin_command_allowed(interaction):
                 return
             await interaction.response.send_message(
                 files=brand_files(CARD_FILENAME),
@@ -173,6 +118,18 @@ class HoroBot(discord.Client):
                 ephemeral=True,
                 allowed_mentions=discord.AllowedMentions.none(),
             )
+
+    async def _admin_command_allowed(self, interaction: discord.Interaction) -> bool:
+        if self._closing:
+            return False
+        if interaction.guild is not None and interaction.permissions.administrator:
+            return True
+        await interaction.response.send_message(
+            "此指令僅限伺服器管理員使用。",
+            ephemeral=True,
+            allowed_mentions=discord.AllowedMentions.none(),
+        )
+        return False
 
     async def setup_hook(self) -> None:
         await self.codex.start()
@@ -272,7 +229,10 @@ class HoroBot(discord.Client):
             await self.temp_voice.handle_voice_state_update(member, before, after)
 
     async def on_scheduled_event_create(self, event: discord.ScheduledEvent) -> None:
-        guild = self.get_guild(event.guild_id)
+        await self._refresh_scheduled_event_guild(event.guild_id)
+
+    async def _refresh_scheduled_event_guild(self, guild_id: int) -> None:
+        guild = self.get_guild(guild_id)
         if guild is not None and self.calendar.has_binding(guild.id):
             await self.calendar.refresh_guild(guild)
 
@@ -281,14 +241,10 @@ class HoroBot(discord.Client):
         before: discord.ScheduledEvent,
         after: discord.ScheduledEvent,
     ) -> None:
-        guild = self.get_guild(after.guild_id)
-        if guild is not None and self.calendar.has_binding(guild.id):
-            await self.calendar.refresh_guild(guild)
+        await self._refresh_scheduled_event_guild(after.guild_id)
 
     async def on_scheduled_event_delete(self, event: discord.ScheduledEvent) -> None:
-        guild = self.get_guild(event.guild_id)
-        if guild is not None and self.calendar.has_binding(guild.id):
-            await self.calendar.refresh_guild(guild)
+        await self._refresh_scheduled_event_guild(event.guild_id)
 
     async def on_guild_channel_delete(self, channel: discord.abc.GuildChannel) -> None:
         try:

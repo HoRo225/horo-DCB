@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from dataclasses import dataclass
 from datetime import datetime
 import logging
 import time
@@ -8,7 +9,7 @@ import time
 import aiohttp
 import discord
 
-from src.brand import BRAND_COLOUR, branded_title
+from src.brand import BRAND_COLOUR, CARD_FILENAME, brand_files, branded_title
 from src.admin.sessions import PanelSession, PanelSessionRegistry
 from src.ai.access import MAX_CODEX_ALLOWED_CHANNELS, CodexAccess, member_role_ids, valid_allowlist_ids
 from src.ai.access_service import AiAccessService
@@ -18,9 +19,11 @@ from src.discord_utils import is_text_channel, missing_channel_permissions
 from src.steam.notifier import (
     SteamConfigurationError,
     SteamFreeGamesNotifier,
+    SteamGuildStatus,
 )
-from src.steam.provider import SteamFetchResult, SteamOffer
-from src.voice.manager import TempVoiceManager
+from src.steam.provider import SteamFetchResult
+from src.steam.views import offer_items
+from src.voice.manager import TempVoiceGuildStatus, TempVoiceManager
 
 MAX_STEAM_OFFERS_SHOWN = 5
 RATE_REFRESH_SECONDS = 30.0
@@ -41,6 +44,37 @@ MODULE_PAGES = (
     ("voice", "臨時語音", "入口頻道與同步狀態"),
     ("steam", "Steam 免費遊戲", "通知設定與手動查詢"),
 )
+PAGES = frozenset(page for group in (MAIN_PAGES, AI_PAGES, MODULE_PAGES) for page, *_ in group)
+
+
+@dataclass(frozen=True, slots=True)
+class _VoiceState:
+    status: TempVoiceGuildStatus
+    problem: str | None
+    label: str
+    detail: str
+    entry: str
+    next_step: str | None
+
+
+@dataclass(frozen=True, slots=True)
+class _SteamState:
+    status: SteamGuildStatus
+    problem: str | None
+    label: str
+    detail: str
+    channel: str
+    role_status: str
+    next_step: str | None
+
+
+@dataclass(frozen=True, slots=True)
+class _AiState:
+    label: str
+    detail: str
+    allowlist_detail: str | None
+    stale_counts: tuple[int | None, int | None]
+    permission_detail: str | None
 
 
 async def load_codex_status(client: CodexBridgeClient) -> CodexRuntimeStatus:
@@ -217,8 +251,39 @@ class AdminPanelView(discord.ui.LayoutView):
         self._control_cache: dict[tuple[object, ...], discord.ui.Item] = {}
         self._desired_children: tuple[discord.ui.Item, ...] | None = None
         self._published_children: tuple[discord.ui.Item, ...] | None = None
-        self.page = "overview"
         self._render_overview()
+
+    async def open_panel(self, interaction: discord.Interaction) -> None:
+        published = False
+        opened = False
+        try:
+            await interaction.response.defer(ephemeral=True)
+            if not self._registry_current():
+                return
+            self._panel_registry.attach_view(self._panel_session, self)
+            self.bind_interaction(interaction)
+            if not await self._refresh_ai_data():
+                return
+            self._render_overview()
+            async with self._edit_lock:
+                if not await self._can_publish():
+                    return
+                published = True
+                await interaction.edit_original_response(
+                    attachments=brand_files(CARD_FILENAME),
+                    view=self,
+                    allowed_mentions=discord.AllowedMentions.none(),
+                )
+                self.record_published()
+            if not await self._can_publish():
+                return
+            self.start_rate_refresh(interaction)
+            opened = True
+        finally:
+            if not opened:
+                self._remove_registry()
+                if published:
+                    self.close_stale_message()
 
     async def interaction_check(self, interaction: discord.Interaction, /) -> bool:
         allowed = (
@@ -342,6 +407,30 @@ class AdminPanelView(discord.ui.LayoutView):
     def _close_button() -> _PanelButton:
         return _PanelButton("close", "關閉", style=discord.ButtonStyle.secondary)
 
+    def _header(self, title: str, page: str, section: str | None = None) -> list[discord.ui.Item]:
+        self.page = page
+        self._rate_display_item = None
+        children: list[discord.ui.Item] = [branded_title(title, ""), self._main_select(page)]
+        if section == "ai":
+            children.append(self._ai_select(page))
+        elif section == "modules":
+            children.append(self._module_select(page if page != "modules" else None))
+        children.append(discord.ui.Separator())
+        return children
+
+    @staticmethod
+    def _detail(title: str, message: str, *, escape: bool = False) -> discord.ui.TextDisplay:
+        return discord.ui.TextDisplay(
+            f"## {title}\n-# {discord.utils.escape_markdown(message) if escape else message}"
+        )
+
+    def _actions(self, *buttons: _PanelButton, refresh: bool = False) -> discord.ui.ActionRow:
+        return discord.ui.ActionRow(
+            *([_PanelButton("refresh", "重新整理")] if refresh else []),
+            *buttons,
+            self._close_button(),
+        )
+
     def _ai_display(self) -> tuple[str, str, str]:
         plan = (
             self.codex_status.plan.replace("_", " ").title()
@@ -429,17 +518,23 @@ class AdminPanelView(discord.ui.LayoutView):
         self._rate_display_item = discord.ui.TextDisplay(self._rate_text(compact=compact))
         return self._rate_display_item
 
-    async def _refresh_rate_limits(self, operation: int | None = None) -> bool:
+    async def _refresh_ai_data(self, operation: int | None = None) -> bool:
         if self._rate_interaction is not None and not await self._can_publish():
             return False
-        if not self._rate_visible():
-            return True
-        result = await load_codex_rate_limits(self.codex_client)
+        async with asyncio.TaskGroup() as group:
+            status = group.create_task(load_codex_status(self.codex_client))
+            self._panel_registry.track(self._panel_session, status)
+            limits = None
+            if self._rate_visible():
+                limits = group.create_task(load_codex_rate_limits(self.codex_client))
+                self._panel_registry.track(self._panel_session, limits)
         if operation is not None and not self._is_current(operation):
             return False
         if self._rate_interaction is not None and not await self._can_publish():
             return False
-        self.codex_rate_limits = result
+        self.codex_status = status.result()
+        if limits is not None:
+            self.codex_rate_limits = limits.result()
         return True
 
     def _registry_current(self) -> bool:
@@ -450,6 +545,8 @@ class AdminPanelView(discord.ui.LayoutView):
 
     def retire_session(self) -> None:
         self.stop()
+        if self._retirement_task is None:
+            self.close_stale_message()
         task = self._rate_refresh_task
         if task is not None and task is not asyncio.current_task() and not task.done() and not task.cancelling():
             task.cancel()
@@ -627,17 +724,19 @@ class AdminPanelView(discord.ui.LayoutView):
     async def on_timeout(self) -> None:
         await self.stop_rate_refresh()
 
-    def _voice_entry_problem(self) -> str | None:
+    def _voice_entry_problem(
+        self, status: TempVoiceGuildStatus, guild: discord.Guild | None = None,
+    ) -> str | None:
         if not self.temp_voice_enabled:
             return None
-        interaction = self._rate_interaction
-        if interaction is None or interaction.guild is None:
+        if guild is None:
+            interaction = self._rate_interaction
+            guild = interaction.guild if interaction is not None else None
+        if guild is None:
             return None
-        guild = interaction.guild
         if guild.id != self.guild_id:
             return None
 
-        status = self.temp_voice.get_guild_status(self.guild_id)
         if not status.state_available or status.parent_channel_id is None:
             return None
         return self.temp_voice.entry_problem(guild)
@@ -725,42 +824,78 @@ class AdminPanelView(discord.ui.LayoutView):
             )
         return None
 
-    def _codex_allowlist_detail(self) -> str | None:
-        stale = self._codex_stale_detail(self._codex_stale_allowlist_counts())
-        return stale or self._codex_channel_permission_detail()
+    def _ai_state(self) -> _AiState:
+        access = self.codex_access
+        configured_guild = access.enabled and access.guild_id == self.guild_id
+        stale_counts = self._codex_stale_allowlist_counts()
+        permission_detail = self._codex_channel_permission_detail()
+        allowlist_detail = self._codex_stale_detail(stale_counts) or permission_detail
+        if not access.enabled:
+            label, detail = "停用", "AI 對話目前依設定停用"
+        elif not configured_guild:
+            label, detail = "停用", "此伺服器不在 AI 白名單"
+        elif not access.state_available:
+            label, detail = "需要處理", "白名單狀態檔不可用"
+        elif not access.channel_ids:
+            label, detail = "需要處理", "白名單頻道尚未設定"
+        elif not access.configured:
+            label, detail = "需要處理", "白名單身分組尚未設定"
+        elif allowlist_detail is not None:
+            label, detail = "需要處理", allowlist_detail
+        elif not self.codex_status.available:
+            label, detail = "需要處理", "Codex bridge 無法連線"
+        elif not self.codex_status.authenticated:
+            label, detail = "需要處理", "Codex 尚未登入"
+        else:
+            label, detail = "狀態正常", ""
+        return _AiState(label, detail, allowlist_detail, stale_counts, permission_detail)
 
-    def _codex_summary(self) -> str | None:
-        detail = self._codex_allowlist_detail()
+    @staticmethod
+    def _codex_summary(state: _AiState) -> str | None:
+        detail = state.allowlist_detail
         if detail is None:
             return None
         return f"## AI 助手\n**需要處理**\n-# {detail}"
 
-    def _voice_summary(self) -> str:
-        if not self.temp_voice_enabled:
-            return "## 臨時語音\n**依設定停用**\n-# 不會建立、同步或管理語音頻道"
+    def _voice_state(self, guild: discord.Guild | None = None) -> _VoiceState:
         status = self.temp_voice.get_guild_status(self.guild_id)
-        if not status.state_available:
-            return "## 臨時語音\n**狀態檔不可用**\n-# 入口無法讀取 · 追蹤暫停"
-
-        problem = self._voice_entry_problem()
-        if status.parent_channel_id is None:
-            state = "尚未綁定"
+        problem = self._voice_entry_problem(status, guild)
+        if not self.temp_voice_enabled:
+            label, detail = "停用", "依設定停用"
+            entry, next_step = "不會建立、同步或管理語音頻道", None
+        elif not status.state_available:
+            label, detail = "需要處理", "狀態檔不可用，臨時語音功能已停用"
+            entry = "入口無法讀取"
+            next_step = "請檢查並修復私有狀態檔後重新啟動 Bot；目前無法同步。"
+        elif status.parent_channel_id is None:
+            label, detail = "需要處理", "入口頻道尚未綁定"
             entry = "尚未綁定入口"
+            next_step = "請確認 Bot 有管理頻道權限，再按「重新同步」尋找或建立入口。"
         elif problem is not None:
-            entry, state = "入口不可用", "需要處理"
+            label, detail = "需要處理", problem
+            entry, next_step = "入口不可用", problem
         else:
-            entry, state = f"入口 <#{status.parent_channel_id}>", "狀態正常"
+            label, detail = "狀態正常", ""
+            entry, next_step = f"入口 <#{status.parent_channel_id}>", None
+        return _VoiceState(status, problem, label, detail, entry, next_step)
 
-        detail = f"-# {entry} · {state}"
-        if problem is not None:
-            detail += f" · {problem}"
+    @staticmethod
+    def _voice_summary(state: _VoiceState) -> str:
+        status = state.status
+        if state.label == "停用":
+            return "## 臨時語音\n**依設定停用**\n-# 不會建立、同步或管理語音頻道"
+        if not status.state_available:
+            return "## 臨時語音\n**需要處理**\n-# 入口無法讀取 · 追蹤暫停"
+        detail = f"-# {state.entry} · {state.label}"
+        if state.problem is not None:
+            detail += f" · {state.problem}"
         return (
             "## 臨時語音\n"
             f"**{status.tracked_child_count} 個頻道追蹤中**\n"
             f"{detail}"
         )
 
-    def _steam_notification_problem(self) -> str | None:
+    def _steam_notification_problem(self, status: SteamGuildStatus) -> str | None:
         if not self.steam_free_games_enabled:
             return None
         interaction = self._rate_interaction
@@ -770,106 +905,67 @@ class AdminPanelView(discord.ui.LayoutView):
             or getattr(guild, "unavailable", False)
         ):
             return None
-        status = self.steam_free_games.get_guild_status(self.guild_id)
         if not status.state_available or status.channel_id is None:
             return None
         return self.steam_free_games.notification_problem(guild)
 
-    def _steam_summary(self) -> str:
-        if not self.steam_free_games_enabled:
-            return "## Steam 免費遊戲\n**自動通知依設定停用**\n-# 手動查詢仍可使用"
+    def _steam_state(self) -> _SteamState:
         status = self.steam_free_games.get_guild_status(self.guild_id)
+        problem = self._steam_notification_problem(status)
+        if not self.steam_free_games_enabled:
+            label, detail = "停用", "自動通知依設定停用"
+            channel, role_status, next_step = "手動查詢仍可使用", "身分組通知依設定停用", None
+        elif not status.state_available:
+            label, detail = "需要處理", "狀態檔不可用，通知功能已停用"
+            channel, role_status = "通知頻道無法讀取", "身分組設定不可用"
+            next_step = "請檢查並修復私有狀態檔後重新啟動 Bot；目前無法修改通知設定。"
+        else:
+            label = "需要處理" if status.channel_id is None or problem else "狀態正常"
+            detail = "通知頻道尚未綁定" if status.channel_id is None else problem or ""
+            channel = f"通知 <#{status.channel_id}>" if status.channel_id else "尚未綁定通知頻道"
+            role_status = (
+                "通知身分組 " + " ".join(f"<@&{role_id}>" for role_id in status.role_ids)
+                if status.role_ids else "未設定通知身分組"
+            )
+            next_step = problem or (
+                "請確認 Bot 有管理頻道、檢視與傳送訊息權限；既有流程會尋找或建立通知頻道。"
+                if status.channel_id is None else None
+            )
+        return _SteamState(status, problem, label, detail, channel, role_status, next_step)
+
+    @staticmethod
+    def _steam_summary(state: _SteamState) -> str:
+        status = state.status
+        if state.label == "停用":
+            return "## Steam 免費遊戲\n**自動通知依設定停用**\n-# 手動查詢仍可使用"
         if not status.state_available:
-            return "## Steam 免費遊戲\n**狀態檔不可用**\n-# 通知頻道無法讀取"
-        problem = self._steam_notification_problem()
-        channel = (
-            f"通知 <#{status.channel_id}>"
-            if status.channel_id
-            else "尚未綁定通知頻道"
-        )
-        state = (
-            "尚未綁定" if status.channel_id is None
-            else "需要處理" if problem is not None
-            else "狀態正常"
-        )
-        detail = (
-            f"-# {channel} · 每 {int(status.poll_interval_seconds // 60)} 分鐘檢查 · {state}"
-        )
-        if problem is not None:
-            detail += f" · {problem}"
+            return "## Steam 免費遊戲\n**需要處理**\n-# 通知頻道無法讀取"
+        detail = f"-# {state.channel} · 每 {int(status.poll_interval_seconds // 60)} 分鐘檢查 · {state.label}"
+        if state.problem is not None:
+            detail += f" · {state.problem}"
         return (
             "## Steam 免費遊戲\n"
             f"**{status.active_app_count} 款活動中**\n"
             f"{detail}"
         )
 
-    async def _refresh_ai_status(self, operation: int | None = None) -> bool:
-        if self._rate_interaction is not None and not await self._can_publish():
-            return False
-        status = await load_codex_status(self.codex_client)
-        if operation is not None and not self._is_current(operation):
-            return False
-        if self._rate_interaction is not None and not await self._can_publish():
-            return False
-        self.codex_status = status
-        return True
-
     def _render_overview(self) -> None:
-        self.page = "overview"
-        self._rate_display_item = None
-        voice_status = self.temp_voice.get_guild_status(self.guild_id)
-        steam_status = self.steam_free_games.get_guild_status(self.guild_id)
-        voice_problem = self._voice_entry_problem()
-        ai_allowlist_detail = self._codex_allowlist_detail()
-        steam_problem = self._steam_notification_problem()
+        voice = self._voice_state()
+        steam = self._steam_state()
+        ai = self._ai_state()
+        voice_status, voice_problem = voice.status, voice.problem
+        steam_status, steam_problem = steam.status, steam.problem
+        ai_allowlist_detail = ai.allowlist_detail
 
-        statuses: list[tuple[str, str, str]] = []
+        statuses = [
+            ("AI 助手", ai.label, ai.detail),
+            ("臨時語音", voice.label, voice.detail),
+            ("Steam 免費遊戲", steam.label, steam.detail),
+        ]
         ai_access_enabled = (
             self.codex_access.enabled
             and self.codex_access.guild_id == self.guild_id
         )
-        if not self.codex_access.enabled:
-            statuses.append(("AI 助手", "停用", "AI 對話目前依設定停用"))
-        elif not ai_access_enabled:
-            statuses.append(("AI 助手", "停用", "此伺服器不在 AI 白名單"))
-        elif not self.codex_access.state_available:
-            statuses.append(("AI 助手", "異常", "白名單狀態檔不可用"))
-        elif not self.codex_access.channel_ids:
-            statuses.append(("AI 助手", "待設定", "白名單頻道尚未設定"))
-        elif not self.codex_access.configured:
-            statuses.append(
-                ("AI 助手", "待設定", "白名單身分組尚未設定")
-            )
-        elif ai_allowlist_detail is not None:
-            statuses.append(("AI 助手", "異常", ai_allowlist_detail))
-        elif not self.codex_status.available:
-            statuses.append(("AI 助手", "異常", "Codex bridge 無法連線"))
-        elif not self.codex_status.authenticated:
-            statuses.append(("AI 助手", "待設定", "Codex 尚未登入"))
-        else:
-            statuses.append(("AI 助手", "正常", ""))
-
-        if not self.temp_voice_enabled:
-            statuses.append(("臨時語音", "停用", "依設定停用"))
-        elif not voice_status.state_available:
-            statuses.append(("臨時語音", "異常", "狀態檔不可用，臨時語音功能已停用"))
-        elif voice_status.parent_channel_id is None:
-            statuses.append(("臨時語音", "待設定", "入口頻道尚未綁定"))
-        elif voice_problem is not None:
-            statuses.append(("臨時語音", "異常", voice_problem))
-        else:
-            statuses.append(("臨時語音", "正常", ""))
-
-        if not self.steam_free_games_enabled:
-            statuses.append(("Steam 免費遊戲", "停用", "自動通知依設定停用"))
-        elif not steam_status.state_available:
-            statuses.append(("Steam 免費遊戲", "異常", "狀態檔不可用，通知功能已停用"))
-        elif steam_status.channel_id is None:
-            statuses.append(("Steam 免費遊戲", "待設定", "通知頻道尚未綁定"))
-        elif steam_problem is not None:
-            statuses.append(("Steam 免費遊戲", "需要處理", steam_problem))
-        else:
-            statuses.append(("Steam 免費遊戲", "正常", ""))
 
         setup_items: list[tuple[str, bool]] = []
         if ai_access_enabled:
@@ -896,9 +992,9 @@ class AdminPanelView(discord.ui.LayoutView):
                 )
             )
         missing_setup = [name for name, configured in setup_items if not configured]
-        issues = [item for item in statuses if item[1] in {"待設定", "異常", "需要處理"}]
+        issues = [item for item in statuses if item[1] == "需要處理"]
         if issues:
-            status_lines = ["## ⚠ 需要注意"]
+            status_lines = ["## ⚠ 需要處理"]
             for name, status, detail in issues:
                 status_lines.extend((f"**{name} · {status}**", f"-# {detail}"))
             if missing_setup:
@@ -911,7 +1007,7 @@ class AdminPanelView(discord.ui.LayoutView):
             ]
             suffix = f" · {'；'.join(disabled)}" if disabled else ""
             status_lines = [
-                "## ✓ 已啟用功能正常",
+                "## ✓ 狀態正常",
                 f"-# {setup_status}{suffix}",
             ]
 
@@ -956,35 +1052,23 @@ class AdminPanelView(discord.ui.LayoutView):
                 )
             )
 
-        children: list[discord.ui.Item] = [
-            branded_title("管理控制台", ""),
-            self._main_select("overview"),
-            discord.ui.Separator(),
-            discord.ui.TextDisplay("\n".join(status_lines)),
-        ]
+        children = self._header("管理控制台", "overview")
+        children.append(discord.ui.TextDisplay("\n".join(status_lines)))
         if self._rate_visible():
             children.append(self._rate_item(compact=True))
         if shortcuts:
             children.extend((
-                discord.ui.TextDisplay("## 下一步\n-# 選擇下方入口前往設定或檢查頁面。"),
+                self._detail("下一步", "選擇下方入口前往設定或檢查頁面。"),
                 discord.ui.ActionRow(*shortcuts),
             ))
-        children.append(
-            discord.ui.ActionRow(_PanelButton("refresh", "重新整理"), self._close_button())
-        )
+        children.append(self._actions(refresh=True))
         self._set_container(*children)
 
     def _render_ai(self, note: str | None = None) -> None:
-        self.page = "ai"
-        self._rate_display_item = None
+        ai = self._ai_state()
         plan = self._ai_display()[0]
         authenticated = "已登入" if self.codex_status.authenticated else "未登入"
-        children: list[discord.ui.Item] = [
-            branded_title("AI 助手", ""),
-            self._main_select("ai"),
-            self._ai_select("ai"),
-            discord.ui.Separator(),
-        ]
+        children = self._header("AI 助手", "ai", "ai")
         if self.codex_status.last_error:
             children.append(discord.ui.TextDisplay(
                 "## ⚠ 最近錯誤\n"
@@ -992,33 +1076,24 @@ class AdminPanelView(discord.ui.LayoutView):
             ))
         children.append(discord.ui.TextDisplay(
             f"**{plan} · {authenticated} · "
-            f"{'服務可用' if self.codex_status.available else '服務無法連線'}**"
+            f"{ai.label}**"
         ))
         if self._rate_visible():
             children.append(self._rate_item(compact=True))
         if not self.codex_status.available:
-            children.append(discord.ui.TextDisplay(
-                "## 下一步\n-# 請確認 AI 服務正在執行且連線設定正確，再重新整理。"
-            ))
+            children.append(self._detail("下一步", "請確認 AI 服務正在執行且連線設定正確，再重新整理。"))
         elif not self.codex_status.authenticated:
-            children.append(discord.ui.TextDisplay(
-                "## 下一步\n-# 請完成 AI 帳號登入，再重新整理。"
-            ))
+            children.append(self._detail("下一步", "請完成 AI 帳號登入，再重新整理。"))
         if note:
-            children.append(discord.ui.TextDisplay(
-                f"## 最近操作\n-# {discord.utils.escape_markdown(note)}"
-            ))
-        children.append(
-            discord.ui.ActionRow(_PanelButton("refresh", "重新整理"), self._close_button())
-        )
+            children.append(self._detail("最近操作", note, escape=True))
+        children.append(self._actions(refresh=True))
         self._set_container(*children)
 
     def _render_ai_access(self, note: str | None = None) -> None:
-        self.page = "ai_access"
-        self._rate_display_item = None
+        ai = self._ai_state()
         configured_guild = self.codex_access.guild_id == self.guild_id
-        stale_channel_count, stale_role_count = self._codex_stale_allowlist_counts()
-        permission_detail = self._codex_channel_permission_detail()
+        stale_channel_count, stale_role_count = ai.stale_counts
+        permission_detail = ai.permission_detail
         channel_ids = self.codex_access.channel_ids if self.codex_access.state_available else frozenset()
         role_ids = self.codex_access.role_ids if self.codex_access.state_available else frozenset()
         if not configured_guild:
@@ -1048,11 +1123,8 @@ class AdminPanelView(discord.ui.LayoutView):
         current_allowed = self.codex_access.allows(
             self.guild_id, next(iter(channel_ids), None), self.user_role_ids,
         )
-        children: list[discord.ui.Item] = [
-            branded_title("AI 使用權限", ""),
-            self._main_select("ai_access"),
-            self._ai_select("ai_access"),
-            discord.ui.Separator(),
+        children = self._header("AI 使用權限", "ai_access", "ai")
+        children.extend((
             discord.ui.TextDisplay(
                 f"## 白名單頻道 · {len(channel_ids)} 個\n"
                 f"-# {channel_detail}"
@@ -1075,25 +1147,17 @@ class AdminPanelView(discord.ui.LayoutView):
                     role_ids=role_ids,
                 )
             ),
-            discord.ui.ActionRow(self._close_button()),
-        ]
+            self._actions(),
+        ))
         if note:
-            children.insert(-1, discord.ui.TextDisplay(
-                f"## 最近操作\n-# {discord.utils.escape_markdown(note)}"
-            ))
+            children.insert(-1, self._detail("最近操作", note, escape=True))
         self._set_container(*children)
 
     def _render_ai_tech(self) -> None:
-        self.page = "ai_tech"
-        self._rate_display_item = None
         plan, runtime, search = self._ai_display()
         sdk = self.codex_status.sdk_version or "Unknown"
-        children: list[discord.ui.Item] = [
-            branded_title("AI 技術資訊", ""),
-            self._main_select("ai_tech"),
-            self._ai_select("ai_tech"),
-            discord.ui.Separator(),
-            discord.ui.TextDisplay(
+        children = self._header("AI 技術資訊", "ai_tech", "ai")
+        children.append(discord.ui.TextDisplay(
                 "## 執行環境\n"
                 f"**{plan} · Runtime {runtime} · SDK {sdk}**\n"
                 f"-# Web Search {search}\n"
@@ -1101,8 +1165,7 @@ class AdminPanelView(discord.ui.LayoutView):
                 f"**持久 Thread**　{self.codex_status.thread_count} 條\n"
                 f"**Bot**　執行 {self.codex_status.bot_active_requests} · 等待 {self.codex_status.bot_queued_requests}\n"
                 f"**Bridge**　執行 {self.codex_status.active_requests} · 等待 {self.codex_status.queued_requests}"
-            ),
-        ]
+        ))
         if self._rate_visible():
             children.append(self._rate_item())
         children.extend((
@@ -1110,101 +1173,50 @@ class AdminPanelView(discord.ui.LayoutView):
                 "## 安全邊界\n**Read-only · Deny-all**\n"
                 "-# Shell、MCP、Apps、Subagents 與全域 Memories 均停用"
             ),
-            discord.ui.ActionRow(_PanelButton("refresh", "重新整理"), self._close_button()),
+            self._actions(refresh=True),
         ))
         self._set_container(*children)
 
     def _render_modules(self) -> None:
-        self.page = "modules"
-        self._rate_display_item = None
-        codex_summary = self._codex_summary()
-        children: list[discord.ui.Item] = [
-            branded_title("功能模組", ""),
-            self._main_select("modules"),
-            self._module_select(None),
-            discord.ui.Separator(),
-        ]
+        codex_summary = self._codex_summary(self._ai_state())
+        voice = self._voice_state()
+        steam = self._steam_state()
+        children = self._header("功能模組", "modules", "modules")
         if codex_summary is not None:
             children.append(discord.ui.TextDisplay(codex_summary))
         children.extend(
             (
-                discord.ui.TextDisplay(self._voice_summary()),
-                discord.ui.TextDisplay(self._steam_summary()),
-                discord.ui.ActionRow(_PanelButton("refresh", "重新整理"), self._close_button()),
+                discord.ui.TextDisplay(self._voice_summary(voice)),
+                discord.ui.TextDisplay(self._steam_summary(steam)),
+                self._actions(refresh=True),
             )
         )
         self._set_container(*children)
 
-    def _render_voice(self, note: str | None = None) -> None:
-        self.page = "voice"
-        self._rate_display_item = None
-        status = self.temp_voice.get_guild_status(self.guild_id)
-        problem = self._voice_entry_problem()
-        if not self.temp_voice_enabled:
-            state = "依設定停用"
-            entry = "不會建立、同步或管理語音頻道"
-            next_step = None
-        elif not status.state_available:
-            state = "狀態檔不可用"
-            entry = "入口無法讀取"
-            next_step = "請檢查並修復私有狀態檔後重新啟動 Bot；目前無法同步。"
-        elif status.parent_channel_id is None:
-            state = "尚未綁定"
-            entry = "尚未綁定入口"
-            next_step = (
-                "請確認 Bot 有管理頻道權限，再按「重新同步」尋找或建立入口。"
-            )
-        elif problem is not None:
-            state = "入口不可用"
-            entry = "入口不可用"
-            next_step = problem
-        else:
-            state = "狀態檔正常"
-            entry = f"入口 <#{status.parent_channel_id}>"
-            next_step = None
-        children: list[discord.ui.Item] = [
-            branded_title("臨時語音", ""),
-            self._main_select("voice"),
-            self._module_select("voice"),
-            discord.ui.Separator(),
-            discord.ui.TextDisplay(
+    def _render_voice(self, note: str | None = None, *, voice: _VoiceState | None = None) -> None:
+        voice = voice or self._voice_state()
+        status = voice.status
+        children = self._header("臨時語音", "voice", "modules")
+        children.append(discord.ui.TextDisplay(
                 "## 目前狀態\n"
                 f"**{status.tracked_child_count} 個臨時語音頻道**\n"
-                f"-# {entry} · {state}"
-            ),
-        ]
-        if next_step:
-            children.append(discord.ui.TextDisplay(f"## 下一步\n-# {next_step}"))
+                f"-# {voice.entry} · {voice.label}"
+        ))
+        if voice.next_step:
+            children.append(self._detail("下一步", voice.next_step))
         if note:
-            children.append(discord.ui.TextDisplay(
-                f"## 最近操作\n-# {discord.utils.escape_markdown(note)}"
-            ))
+            children.append(self._detail("最近操作", note, escape=True))
         children.append(
-            discord.ui.ActionRow(
+            self._actions(
                 _PanelButton(
                     "voice_sync",
                     "重新同步",
                     style=discord.ButtonStyle.primary,
                     disabled=not self.temp_voice_enabled or not status.state_available,
                 ),
-                self._close_button(),
             )
         )
         self._set_container(*children)
-
-    def _offer_item(self, offer: SteamOffer) -> discord.ui.Item:
-        name = discord.utils.escape_markdown(offer.name)
-        price = discord.utils.escape_markdown(offer.old_price) if offer.old_price else "—"
-        text = f"### {name}\n原價　{price}　·　折扣 100%"
-        if offer.header_image:
-            return discord.ui.Section(
-                text,
-                accessory=discord.ui.Thumbnail(
-                    offer.header_image,
-                    description=f"{offer.name} Steam 商店圖片",
-                ),
-            )
-        return discord.ui.TextDisplay(text)
 
     def _render_steam(
         self,
@@ -1224,74 +1236,28 @@ class AdminPanelView(discord.ui.LayoutView):
 
         result = self._steam_result
         error = self._steam_error
-        self.page = "steam"
-        self._rate_display_item = None
-        status = self.steam_free_games.get_guild_status(self.guild_id)
-        problem = self._steam_notification_problem()
-        if not self.steam_free_games_enabled:
-            state = "自動通知依設定停用"
-            channel = "手動查詢仍可使用"
-            role_status = "身分組通知依設定停用"
-            next_step = None
-        elif not status.state_available:
-            state = "狀態檔不可用"
-            channel = "通知頻道無法讀取"
-            role_status = "身分組設定不可用"
-            next_step = "請檢查並修復私有狀態檔後重新啟動 Bot；目前無法修改通知設定。"
-        else:
-            state = (
-                "尚未綁定" if status.channel_id is None
-                else "需要處理" if problem is not None
-                else "狀態檔正常"
-            )
-            channel = (
-                f"通知 <#{status.channel_id}>"
-                if status.channel_id
-                else "尚未綁定通知頻道"
-            )
-            role_status = (
-                "通知身分組 " + " ".join(f"<@&{role_id}>" for role_id in status.role_ids)
-                if status.role_ids
-                else "未設定通知身分組"
-            )
-            next_step = (
-                problem
-                if problem is not None
-                else (
-                    "請確認 Bot 有管理頻道、檢視與傳送訊息權限；"
-                    "既有流程會尋找或建立通知頻道。"
-                    if status.channel_id is None else None
-                )
-            )
+        steam = self._steam_state()
+        status = steam.status
         role_controls_disabled = (
             not self.steam_free_games_enabled or not status.state_available
         )
-        children: list[discord.ui.Item] = [
-            branded_title("Steam 限時免費", ""),
-            self._main_select("steam"),
-            self._module_select("steam"),
-            discord.ui.Separator(),
-            discord.ui.TextDisplay(
+        children = self._header("Steam 限時免費", "steam", "modules")
+        children.append(discord.ui.TextDisplay(
                 "## 通知狀態\n"
                 f"**{status.active_app_count} 款活動中**\n"
-                f"-# {channel} · {role_status} · 每 {int(status.poll_interval_seconds // 60)} 分鐘檢查 · {state}"
-            ),
-            discord.ui.ActionRow(
+                f"-# {steam.channel} · {steam.role_status} · 每 {int(status.poll_interval_seconds // 60)} 分鐘檢查 · {steam.label}"
+        ))
+        children.append(discord.ui.ActionRow(
                 _SteamRoleSelect(
                     disabled=role_controls_disabled,
                     configured=bool(status.role_ids),
                 )
-            ),
-        ]
+        ))
 
-        if next_step:
-            children.append(discord.ui.TextDisplay(f"## 下一步\n-# {next_step}"))
+        if steam.next_step:
+            children.append(self._detail("下一步", steam.next_step))
         if notice:
-            children.append(
-                discord.ui.TextDisplay(
-                    f"## 最近操作\n-# {discord.utils.escape_markdown(notice)}"
-                )
-            )
+            children.append(self._detail("最近操作", notice, escape=True))
 
         if error is not None:
             children.append(
@@ -1332,7 +1298,7 @@ class AdminPanelView(discord.ui.LayoutView):
                     discord.ui.TextDisplay(f"## 查詢結果{query_time}")
                 )
             if offers:
-                children.extend(self._offer_item(offer) for offer in offers)
+                children.extend(offer_items(offer, compact=True)[0] for offer in offers)
                 if len(result.offers) > len(offers):
                     children.append(
                         discord.ui.TextDisplay(
@@ -1341,14 +1307,13 @@ class AdminPanelView(discord.ui.LayoutView):
                     )
 
         children.append(
-            discord.ui.ActionRow(
+            self._actions(
                 _PanelButton(
                     "steam_role_clear",
                     "取消身分組通知",
                     disabled=role_controls_disabled or not status.role_ids,
                 ),
                 _PanelButton("steam_query", "重新查詢", style=discord.ButtonStyle.primary),
-                self._close_button(),
             )
         )
         self._set_container(*children)
@@ -1382,6 +1347,11 @@ class AdminPanelView(discord.ui.LayoutView):
     def _begin_operation(self) -> int:
         self._operation += 1
         return self._operation
+
+    async def _defer_operation(self, interaction: discord.Interaction) -> int | None:
+        operation = self._begin_operation()
+        await interaction.response.defer()
+        return operation if self._is_current(operation) else None
 
     def _is_current(self, operation: int) -> bool:
         return (
@@ -1458,9 +1428,8 @@ class AdminPanelView(discord.ui.LayoutView):
         interaction: discord.Interaction,
         channels: tuple[object | None, ...],
     ) -> None:
-        operation = self._begin_operation()
-        await interaction.response.defer()
-        if not self._is_current(operation):
+        operation = await self._defer_operation(interaction)
+        if operation is None:
             return
         guild_id = getattr(getattr(interaction, "guild", None), "id", None)
         channel_ids = [getattr(channel, "id", None) for channel in channels]
@@ -1505,9 +1474,8 @@ class AdminPanelView(discord.ui.LayoutView):
         interaction: discord.Interaction,
         roles: tuple[discord.Role, ...],
     ) -> None:
-        operation = self._begin_operation()
-        await interaction.response.defer()
-        if not self._is_current(operation):
+        operation = await self._defer_operation(interaction)
+        if operation is None:
             return
         guild_id = getattr(getattr(interaction, "guild", None), "id", None)
         self.user_role_ids = member_role_ids(interaction.user)
@@ -1554,9 +1522,8 @@ class AdminPanelView(discord.ui.LayoutView):
         interaction: discord.Interaction,
         roles: tuple[discord.Role, ...],
     ) -> None:
-        operation = self._begin_operation()
-        await interaction.response.defer()
-        if not self._is_current(operation):
+        operation = await self._defer_operation(interaction)
+        if operation is None:
             return
         if not self.steam_free_games_enabled:
             self._render_steam(notice="Steam 自動通知已停用，未修改身分組設定。")
@@ -1581,48 +1548,35 @@ class AdminPanelView(discord.ui.LayoutView):
         if action == "noop":
             await interaction.response.defer()
             return
-        operation = self._begin_operation()
-        if action in ("overview", "modules", "voice", "steam", "ai_access", "ai_tech"):
-            await interaction.response.defer()
-            if not self._is_current(operation):
-                return
+        if action not in PAGES | {"refresh", "close", "voice_sync", "steam_role_clear", "steam_query"}:
+            return
+        operation = await self._defer_operation(interaction)
+        if operation is None:
+            return
+        if action in PAGES - {"ai"}:
             self._render_page(action)
             await self._edit_original(interaction, operation)
             return
         if action == "close":
-            await interaction.response.defer()
-            if not self._is_current(operation):
-                return
             self._render_closed()
             await self._edit_original(interaction, operation)
             await self.stop_rate_refresh()
             return
-        if action not in {
-            "ai", "refresh", "voice_sync", "steam_role_clear", "steam_query",
-        }:
-            return
-
-        await interaction.response.defer()
-        if not self._is_current(operation):
-            return
         if action == "ai":
-            if not await self._refresh_ai_status(operation):
-                return
-            if not await self._refresh_rate_limits(operation):
+            if not await self._refresh_ai_data(operation):
                 return
             self._render_ai()
         elif action == "refresh":
             if self.page in RATE_PAGES:
-                if not await self._refresh_ai_status(operation):
-                    return
-                if not await self._refresh_rate_limits(operation):
+                if not await self._refresh_ai_data(operation):
                     return
             self._render_page(self.page)
         elif action == "voice_sync":
+            voice = self._voice_state()
             if not self.temp_voice_enabled:
-                self._render_voice("功能已停用，未執行同步。")
-            elif not self.temp_voice.get_guild_status(self.guild_id).state_available:
-                self._render_voice("狀態檔不可用，未執行同步。")
+                self._render_voice("功能已停用，未執行同步。", voice=voice)
+            elif not voice.status.state_available:
+                self._render_voice("狀態檔不可用，未執行同步。", voice=voice)
             else:
                 guild = interaction.guild
                 if guild is None or guild.id != self.guild_id:
@@ -1638,8 +1592,8 @@ class AdminPanelView(discord.ui.LayoutView):
                     else:
                         if not self._is_current(operation):
                             return
-                        status = self.temp_voice.get_guild_status(self.guild_id)
-                        problem = self.temp_voice.entry_problem(guild)
+                        voice = self._voice_state(guild)
+                        status, problem = voice.status, voice.problem
                         if (
                             not status.state_available
                             or status.parent_channel_id is None
@@ -1648,9 +1602,9 @@ class AdminPanelView(discord.ui.LayoutView):
                             detail = problem or (
                                 "入口頻道尚未綁定，請稍後重試並確認 Bot 有管理頻道權限。"
                             )
-                            self._render_voice(f"同步未完成；{detail}")
+                            self._render_voice(f"同步未完成；{detail}", voice=voice)
                         else:
-                            self._render_voice("入口檢查通過；已執行同步流程。")
+                            self._render_voice("入口檢查通過；已執行同步流程。", voice=voice)
         elif action == "steam_role_clear":
             if not self.steam_free_games_enabled:
                 self._render_steam(notice="Steam 自動通知已停用，未修改身分組設定。")
