@@ -33,13 +33,12 @@ AUDIT_REASON_PREFIX = "horo-DCB calendar action by Discord user"
 class CalendarManager:
     def __init__(
         self,
-        state_path: Path | str = DEFAULT_STATE_PATH,
         *,
         board_view_factory: Callable[
             [str, Sequence[discord.ScheduledEvent]], discord.ui.LayoutView
-        ] | None = None,
+        ],
     ) -> None:
-        self._state_path = Path(state_path)
+        self._state_path = DEFAULT_STATE_PATH
         self._state_available = True
         self._bindings: dict[int, CalendarBinding] = {}
         self._locks: defaultdict[int, asyncio.Lock] = defaultdict(asyncio.Lock)
@@ -237,8 +236,6 @@ class CalendarManager:
     def _build_board_view(
         self, guild_name: str, events: Sequence[discord.ScheduledEvent],
     ) -> discord.ui.LayoutView:
-        if self._board_view_factory is None:
-            raise RuntimeError("Calendar board view factory is not configured.")
         return self._board_view_factory(guild_name, events)
 
     async def bind(

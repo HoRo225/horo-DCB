@@ -49,8 +49,8 @@ def _is_voice_channel(channel: object | None) -> bool:
 
 
 class TempVoiceManager:
-    def __init__(self, state_path: Path | str = DEFAULT_STATE_PATH) -> None:
-        self._state_path = Path(state_path)
+    def __init__(self) -> None:
+        self._state_path = DEFAULT_STATE_PATH
         # ponytail: one global lock serializes guilds; use per-guild locks only after measuring cross-guild blocking.
         self._lock = asyncio.Lock()
         self._state_available = True

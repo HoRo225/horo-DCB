@@ -200,7 +200,7 @@ async def _send_native_ai_chunks(
     *,
     reply_first: bool,
     image_urls: tuple[str, ...] = (),
-    can_send: Any = None,
+    can_send: Any,
 ) -> str:
     link_message = build_ai_native_image_links(image_urls)
     if not chunks and not link_message:
@@ -210,7 +210,7 @@ async def _send_native_ai_chunks(
         start = 0
         sent_any = False
         if reply_first and chunks:
-            if can_send is not None and not await can_send():
+            if not await can_send():
                 return "unauthorized"
             await message.reply(
                 chunks[0],
@@ -221,7 +221,7 @@ async def _send_native_ai_chunks(
             sent_any = True
 
         for chunk in chunks[start:]:
-            if can_send is not None and not await can_send():
+            if not await can_send():
                 return "unauthorized"
             await message.channel.send(
                 chunk,
@@ -230,7 +230,7 @@ async def _send_native_ai_chunks(
             sent_any = True
 
         if link_message:
-            if can_send is not None and not await can_send():
+            if not await can_send():
                 return "unauthorized"
             if not sent_any and reply_first:
                 await message.reply(
@@ -253,7 +253,7 @@ async def _send_native_ai_chunks(
 async def send_ai_answer(
     message: discord.Message, answer: str, *,
     image_urls: tuple[str, ...] = (),
-    text_display_enabled: bool = True, can_send: Any = None,
+    text_display_enabled: bool, can_send: Any,
 ) -> str:
     image_urls = normalize_reply_image_urls(image_urls)
     if not text_display_enabled:
@@ -272,7 +272,7 @@ async def send_ai_answer(
     sent_count = 0
     try:
         for index, chunk in enumerate(display_chunks):
-            if can_send is not None and not await can_send():
+            if not await can_send():
                 return "unauthorized"
             view = build_ai_text_display_view(
                 chunk, image_urls=image_urls if index == 0 else (),
@@ -373,7 +373,7 @@ async def handle_message(
         if output_started:
             return
         error_text = str(exc) if isinstance(exc, ImageAttachmentError) else codex_error_text(outcome)
-        budget = min(5.0, codex.cleanup_timeout_seconds)
+        budget = codex.cleanup_timeout_seconds
         if deadline is not None:
             remaining = deadline - asyncio.get_running_loop().time()
             if remaining > 0:

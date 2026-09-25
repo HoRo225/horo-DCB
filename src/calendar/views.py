@@ -46,10 +46,8 @@ CALENDAR_STATE_UNAVAILABLE_NOTICE = (
 def render_board_text(
     guild_name: str,
     events: list[discord.ScheduledEvent] | tuple[discord.ScheduledEvent, ...],
-    *,
-    now: datetime | None = None,
 ) -> str:
-    current = (now or calendar_now()).astimezone(CALENDAR_TZ)
+    current = calendar_now().astimezone(CALENDAR_TZ)
     event_days = {
         local.day
         for event in events
@@ -111,7 +109,6 @@ def render_board_text(
 class _CalendarAdminChannelSelect(discord.ui.ChannelSelect):
     def __init__(self) -> None:
         super().__init__(
-            custom_id="horo:calendar:admin:channel",
             channel_types=[discord.ChannelType.text],
             placeholder="選擇新的行事曆頻道",
             min_values=1,
@@ -144,7 +141,7 @@ class _CalendarAdminChannelSelect(discord.ui.ChannelSelect):
 
 
 class _CalendarAdminActionButton(discord.ui.Button):
-    def __init__(self, action: str, *, disabled: bool) -> None:
+    def __init__(self, action: str) -> None:
         label, style = {
             "apply": ("套用綁定", discord.ButtonStyle.primary),
             "refresh": ("重新整理", discord.ButtonStyle.secondary),
@@ -154,9 +151,7 @@ class _CalendarAdminActionButton(discord.ui.Button):
         }[action]
         super().__init__(
             label=label,
-            custom_id=f"horo:calendar:admin:{action}",
             style=style,
-            disabled=disabled,
         )
         self.action = action
 
@@ -257,7 +252,7 @@ class CalendarAdminView(discord.ui.LayoutView):
         self._publish_lock = asyncio.Lock()
         self._channel_select = _CalendarAdminChannelSelect()
         self._action_buttons = {
-            action: _CalendarAdminActionButton(action, disabled=False)
+            action: _CalendarAdminActionButton(action)
             for action in (
                 "apply", "refresh", "unbind", "unbind_confirm", "unbind_cancel",
             )
@@ -714,15 +709,13 @@ class CalendarEditPickerView(discord.ui.View):
         user_id: int,
         guild_id: int,
         events: list[discord.ScheduledEvent],
-        *,
-        page: int = 0,
     ) -> None:
         super().__init__(timeout=5 * 60)
         self.manager = manager
         self.user_id = user_id
         self.guild_id = guild_id
         self.events = tuple(events)
-        self.page = page
+        self.page = 0
         self._page_count = max(1, (len(self.events) + EVENTS_PER_PAGE - 1) // EVENTS_PER_PAGE)
         self._publish_lock = asyncio.Lock()
         self._edit_select = _EditSelect(placeholder="選擇活動", options=[])

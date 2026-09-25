@@ -22,7 +22,6 @@ from src.steam.provider import SteamFetchResult, SteamOffer
 from src.voice.manager import TempVoiceManager
 
 MAX_STEAM_OFFERS_SHOWN = 5
-PANEL_ACCENT_COLOUR = BRAND_COLOUR
 RATE_REFRESH_SECONDS = 30.0
 RATE_EXPIRY_MARGIN_SECONDS = 10.0
 RATE_PAGES = frozenset({"overview", "ai", "ai_tech"})
@@ -182,20 +181,19 @@ class AdminPanelView(discord.ui.LayoutView):
         codex_status: CodexRuntimeStatus,
         temp_voice: TempVoiceManager,
         steam_free_games: SteamFreeGamesNotifier,
-        access_service: AiAccessService | None = None,
+        access_service: AiAccessService,
+        panel_registry: PanelSessionRegistry,
+        panel_session: PanelSession,
         user_role_ids: frozenset[int] = frozenset(),
         temp_voice_enabled: bool = True,
         steam_free_games_enabled: bool = True,
-        codex_rate_limits: CodexRateLimits | None = None,
-        panel_registry: PanelSessionRegistry | None = None,
-        panel_session: PanelSession | None = None,
     ) -> None:
         super().__init__(timeout=15 * 60)
         self.user_id = user_id
         self.guild_id = guild_id
         self.codex_client = codex_client
         self.codex_access = codex_access
-        self.access_service = access_service or AiAccessService(codex_access, codex_client)
+        self.access_service = access_service
         self.codex_status = codex_status
         self.temp_voice = temp_voice
         self.steam_free_games = steam_free_games
@@ -205,7 +203,7 @@ class AdminPanelView(discord.ui.LayoutView):
         self.user_role_ids = user_role_ids
         self.temp_voice_enabled = temp_voice_enabled
         self.steam_free_games_enabled = steam_free_games_enabled
-        self.codex_rate_limits = codex_rate_limits or CodexRateLimits()
+        self.codex_rate_limits = CodexRateLimits()
         self._panel_registry = panel_registry
         self._panel_session = panel_session
         self._rate_refresh_task: asyncio.Task[None] | None = None
@@ -304,16 +302,12 @@ class AdminPanelView(discord.ui.LayoutView):
         ]
         self.clear_items()
         self.add_item(
-            discord.ui.Container(*normalized, accent_colour=PANEL_ACCENT_COLOUR)
+            discord.ui.Container(*normalized, accent_colour=BRAND_COLOUR)
         )
         self._desired_children = tuple(self.children)
 
     def record_published(self) -> None:
         self._published_children = tuple(self.children)
-
-    @staticmethod
-    def _row(*buttons: _PanelButton) -> discord.ui.ActionRow:
-        return discord.ui.ActionRow(*buttons)
 
     @staticmethod
     def _main_select(current: str) -> discord.ui.ActionRow:
@@ -346,10 +340,6 @@ class AdminPanelView(discord.ui.LayoutView):
     @staticmethod
     def _close_button() -> _PanelButton:
         return _PanelButton("close", "關閉", style=discord.ButtonStyle.secondary)
-
-    @staticmethod
-    def _title(heading: str) -> discord.ui.Item:
-        return branded_title(heading, "")
 
     def _ai_display(self) -> tuple[str, str, str]:
         plan = (
@@ -384,10 +374,6 @@ class AdminPanelView(discord.ui.LayoutView):
             return f"週期未提供（{slot}）"
         return f"{minutes} 分鐘"
 
-    @staticmethod
-    def _rate_percent(value: int | float) -> str:
-        return f"{value:g}"
-
     def _rate_text(self, *, stopped: bool = False, compact: bool = False) -> str:
         lines = ["## 帳號額度" if compact else "## Codex 帳號額度"]
         limits = self.codex_rate_limits
@@ -403,12 +389,12 @@ class AdminPanelView(discord.ui.LayoutView):
                 heading = label if window.window_minutes is None else f"{label}額度"
                 if compact:
                     lines.append(
-                        f"**{label} · 剩餘 {self._rate_percent(remaining)}%**"
+                        f"**{label} · 剩餘 {remaining:g}%**"
                     )
                 else:
                     lines.append(
-                        f"**{heading}**　剩餘 {self._rate_percent(remaining)}% · "
-                        f"已用 {self._rate_percent(used)}%"
+                        f"**{heading}**　剩餘 {remaining:g}% · "
+                        f"已用 {used:g}%"
                     )
                 if window.resets_at is None:
                     lines.append("-# 重設時間未提供")
@@ -442,9 +428,6 @@ class AdminPanelView(discord.ui.LayoutView):
         self._rate_display_item = discord.ui.TextDisplay(self._rate_text(compact=compact))
         return self._rate_display_item
 
-    def _apply_rate_limits(self, result: CodexRateLimits) -> None:
-        self.codex_rate_limits = result
-
     async def _refresh_rate_limits(self, operation: int | None = None) -> bool:
         if self._rate_interaction is not None and not await self._can_publish():
             return False
@@ -455,17 +438,14 @@ class AdminPanelView(discord.ui.LayoutView):
             return False
         if self._rate_interaction is not None and not await self._can_publish():
             return False
-        self._apply_rate_limits(result)
+        self.codex_rate_limits = result
         return True
 
     def _registry_current(self) -> bool:
-        if self._panel_registry is None:
-            return True
-        return self._panel_session is not None and self._panel_registry.is_current(self._panel_session)
+        return self._panel_registry.is_current(self._panel_session)
 
     def _remove_registry(self) -> None:
-        if self._panel_registry is not None and self._panel_session is not None:
-            self._panel_registry.retire(self._panel_session)
+        self._panel_registry.retire(self._panel_session)
 
     def retire_session(self) -> None:
         self.stop()
@@ -495,8 +475,7 @@ class AdminPanelView(discord.ui.LayoutView):
         if self._retirement_task is not None and not self._retirement_task.done():
             return
         self._retirement_task = asyncio.create_task(self._close_stale_message())
-        if self._panel_registry is not None and self._panel_session is not None:
-            self._panel_registry.track(self._panel_session, self._retirement_task)
+        self._panel_registry.track(self._panel_session, self._retirement_task)
 
     async def _close_stale_message(self) -> None:
         try:
@@ -538,8 +517,7 @@ class AdminPanelView(discord.ui.LayoutView):
         if not self._before_cutoff():
             return
         self._rate_refresh_task = asyncio.create_task(self._rate_refresh_loop())
-        if self._panel_registry is not None and self._panel_session is not None:
-            self._panel_registry.track(self._panel_session, self._rate_refresh_task)
+        self._panel_registry.track(self._panel_session, self._rate_refresh_task)
 
     async def _publish_rate_stop_notice(self) -> None:
         item = self._rate_display_item
@@ -614,7 +592,7 @@ class AdminPanelView(discord.ui.LayoutView):
                         or not self._registry_current()
                     ):
                         continue
-                    self._apply_rate_limits(result)
+                    self.codex_rate_limits = result
                     item.content = self._rate_text(compact=self.page != "ai_tech")
                     try:
                         await interaction.edit_original_response(
@@ -977,7 +955,7 @@ class AdminPanelView(discord.ui.LayoutView):
             )
 
         children: list[discord.ui.Item] = [
-            self._title("管理控制台"),
+            branded_title("管理控制台", ""),
             self._main_select("overview"),
             discord.ui.Separator(),
             discord.ui.TextDisplay("\n".join(status_lines)),
@@ -987,10 +965,10 @@ class AdminPanelView(discord.ui.LayoutView):
         if shortcuts:
             children.extend((
                 discord.ui.TextDisplay("## 下一步\n-# 選擇下方入口前往設定或檢查頁面。"),
-                self._row(*shortcuts),
+                discord.ui.ActionRow(*shortcuts),
             ))
         children.append(
-            self._row(_PanelButton("refresh", "重新整理"), self._close_button())
+            discord.ui.ActionRow(_PanelButton("refresh", "重新整理"), self._close_button())
         )
         self._set_container(*children)
 
@@ -1000,7 +978,7 @@ class AdminPanelView(discord.ui.LayoutView):
         plan = self._ai_display()[0]
         authenticated = "已登入" if self.codex_status.authenticated else "未登入"
         children: list[discord.ui.Item] = [
-            self._title("AI 助手"),
+            branded_title("AI 助手", ""),
             self._main_select("ai"),
             self._ai_select("ai"),
             discord.ui.Separator(),
@@ -1029,7 +1007,7 @@ class AdminPanelView(discord.ui.LayoutView):
                 f"## 最近操作\n-# {discord.utils.escape_markdown(note)}"
             ))
         children.append(
-            self._row(_PanelButton("refresh", "重新整理"), self._close_button())
+            discord.ui.ActionRow(_PanelButton("refresh", "重新整理"), self._close_button())
         )
         self._set_container(*children)
 
@@ -1069,7 +1047,7 @@ class AdminPanelView(discord.ui.LayoutView):
             self.guild_id, next(iter(channel_ids), None), self.user_role_ids,
         )
         children: list[discord.ui.Item] = [
-            self._title("AI 使用權限"),
+            branded_title("AI 使用權限", ""),
             self._main_select("ai_access"),
             self._ai_select("ai_access"),
             discord.ui.Separator(),
@@ -1095,7 +1073,7 @@ class AdminPanelView(discord.ui.LayoutView):
                     role_ids=role_ids,
                 )
             ),
-            self._row(self._close_button()),
+            discord.ui.ActionRow(self._close_button()),
         ]
         if note:
             children.insert(-1, discord.ui.TextDisplay(
@@ -1109,7 +1087,7 @@ class AdminPanelView(discord.ui.LayoutView):
         plan, runtime, search = self._ai_display()
         sdk = self.codex_status.sdk_version or "Unknown"
         children: list[discord.ui.Item] = [
-            self._title("AI 技術資訊"),
+            branded_title("AI 技術資訊", ""),
             self._main_select("ai_tech"),
             self._ai_select("ai_tech"),
             discord.ui.Separator(),
@@ -1130,7 +1108,7 @@ class AdminPanelView(discord.ui.LayoutView):
                 "## 安全邊界\n**Read-only · Deny-all**\n"
                 "-# Shell、MCP、Apps、Subagents 與全域 Memories 均停用"
             ),
-            self._row(_PanelButton("refresh", "重新整理"), self._close_button()),
+            discord.ui.ActionRow(_PanelButton("refresh", "重新整理"), self._close_button()),
         ))
         self._set_container(*children)
 
@@ -1139,7 +1117,7 @@ class AdminPanelView(discord.ui.LayoutView):
         self._rate_display_item = None
         codex_summary = self._codex_summary()
         children: list[discord.ui.Item] = [
-            self._title("功能模組"),
+            branded_title("功能模組", ""),
             self._main_select("modules"),
             self._module_select(None),
             discord.ui.Separator(),
@@ -1150,7 +1128,7 @@ class AdminPanelView(discord.ui.LayoutView):
             (
                 discord.ui.TextDisplay(self._voice_summary()),
                 discord.ui.TextDisplay(self._steam_summary()),
-                self._row(_PanelButton("refresh", "重新整理"), self._close_button()),
+                discord.ui.ActionRow(_PanelButton("refresh", "重新整理"), self._close_button()),
             )
         )
         self._set_container(*children)
@@ -1183,7 +1161,7 @@ class AdminPanelView(discord.ui.LayoutView):
             entry = f"入口 <#{status.parent_channel_id}>"
             next_step = None
         children: list[discord.ui.Item] = [
-            self._title("臨時語音"),
+            branded_title("臨時語音", ""),
             self._main_select("voice"),
             self._module_select("voice"),
             discord.ui.Separator(),
@@ -1200,7 +1178,7 @@ class AdminPanelView(discord.ui.LayoutView):
                 f"## 最近操作\n-# {discord.utils.escape_markdown(note)}"
             ))
         children.append(
-            self._row(
+            discord.ui.ActionRow(
                 _PanelButton(
                     "voice_sync",
                     "重新同步",
@@ -1287,7 +1265,7 @@ class AdminPanelView(discord.ui.LayoutView):
             not self.steam_free_games_enabled or not status.state_available
         )
         children: list[discord.ui.Item] = [
-            self._title("Steam 限時免費"),
+            branded_title("Steam 限時免費", ""),
             self._main_select("steam"),
             self._module_select("steam"),
             discord.ui.Separator(),
@@ -1361,7 +1339,7 @@ class AdminPanelView(discord.ui.LayoutView):
                     )
 
         children.append(
-            self._row(
+            discord.ui.ActionRow(
                 _PanelButton(
                     "steam_role_clear",
                     "取消身分組通知",
@@ -1377,9 +1355,9 @@ class AdminPanelView(discord.ui.LayoutView):
         self.page = "closed"
         self._rate_display_item = None
         self._set_container(
-            self._title("管理控制台"),
+            branded_title("管理控制台", ""),
             discord.ui.TextDisplay("-# 控制台已關閉；重新輸入 /控制台 可再開啟。"),
-            self._row(_PanelButton("closed", "已關閉", disabled=True)),
+            discord.ui.ActionRow(_PanelButton("closed", "已關閉", disabled=True)),
         )
         self.stop()
 
@@ -1409,9 +1387,6 @@ class AdminPanelView(discord.ui.LayoutView):
             and (self._rate_interaction is None or self._before_cutoff())
         )
 
-    async def _edit(self, interaction: discord.Interaction, operation: int) -> None:
-        await self._edit_owned(interaction, operation, original=False)
-
     async def _edit_original(
         self,
         interaction: discord.Interaction,
@@ -1425,15 +1400,13 @@ class AdminPanelView(discord.ui.LayoutView):
         if not self._is_current(operation):
             return
         publication = asyncio.create_task(self._publish_edit(interaction, operation, original=original))
-        if self._panel_registry is not None and self._panel_session is not None:
-            self._panel_registry.track(self._panel_session, publication)
+        self._panel_registry.track(self._panel_session, publication)
         try:
             await publication
         except asyncio.CancelledError:
             # A direct callback cancellation still propagates, even after retirement.
             if (
                 asyncio.current_task().cancelling()
-                or self._panel_session is None
                 or not self._panel_session.retired
             ):
                 raise

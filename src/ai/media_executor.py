@@ -22,6 +22,8 @@ from src.ai.protocol import (
 
 _HEADER_LIMIT = 1024
 _KINDS = frozenset({"image", "video", "lottie"})
+_MAX_WORKERS = 2
+_MAX_PENDING = 4
 _WORKER_ERRORS = {
     "image_format": "目前無法解讀這個圖片格式。",
     "image_invalid": "圖片格式驗證失敗，請重新上傳圖片。",
@@ -43,18 +45,11 @@ class _Job:
     pipes: set[asyncio.Task[object]] = field(default_factory=set)
     collector: asyncio.Task[tuple[str, bytes]] | None = None
     temporary_dir: Path | None = None
-    state: str = "QUEUED"
 
 
 class MediaExecutor:
-    def __init__(self, max_workers: int = 2, max_pending: int = 4) -> None:
-        if type(max_workers) is not int or max_workers <= 0:
-            raise ValueError("max_workers must be positive")
-        if type(max_pending) is not int or max_pending < 0:
-            raise ValueError("max_pending must be non-negative")
-        self.max_workers = max_workers
-        self.max_pending = max_pending
-        self._permits = asyncio.Semaphore(max_workers)
+    def __init__(self) -> None:
+        self._permits = asyncio.Semaphore(_MAX_WORKERS)
         self._jobs: set[_Job] = set()
         self._closed = False
         self._failed = False
@@ -83,7 +78,7 @@ class MediaExecutor:
             raise CodexBridgeError("unavailable")
         if self._closed or self._failed:
             raise CodexBridgeError("unavailable")
-        if len(self._jobs) >= self.max_workers + self.max_pending:
+        if len(self._jobs) >= _MAX_WORKERS + _MAX_PENDING:
             raise CodexBridgeError("busy")
 
         job = _Job(deadline)
@@ -132,8 +127,6 @@ class MediaExecutor:
         content_type: str | None,
     ) -> tuple[str, bytes] | Exception:
         acquired = False
-        clean = False
-        abort = False
         result: tuple[str, bytes] | None = None
         error: Exception | None = None
         try:
@@ -157,9 +150,8 @@ class MediaExecutor:
 
             if job.cancelled.is_set():
                 raise CodexBridgeError("unavailable")
-            job.state = "STARTING"
             job.temporary_dir = Path(tempfile.mkdtemp(prefix="horo-media-"))
-            spawn = asyncio.create_task(self._spawn(kind, content_type, job.temporary_dir))
+            spawn = asyncio.create_task(self._spawn(job.temporary_dir))
             cancelled = asyncio.create_task(job.cancelled.wait())
             try:
                 done, _pending = await asyncio.wait(
@@ -168,7 +160,6 @@ class MediaExecutor:
                 if cancelled in done and spawn not in done:
                     job.process = await asyncio.shield(spawn)
                     self._register_waiter(job)
-                    abort = True
                     raise CodexBridgeError("unavailable")
                 job.process = spawn.result()
                 self._register_waiter(job)
@@ -177,19 +168,14 @@ class MediaExecutor:
                 await asyncio.gather(cancelled, return_exceptions=True)
 
             if job.cancelled.is_set():
-                abort = True
                 raise CodexBridgeError("unavailable")
-            job.state = "RUNNING"
             result = await self._exchange(job, kind, data, content_type)
-            clean = True
         except (ImageAttachmentError, CodexBridgeError) as exc:
-            abort = True
             error = exc
         except Exception:
-            abort = True
             error = CodexBridgeError("unavailable")
         finally:
-            cleanup_ok = await self._cleanup(job, abort=abort or not clean)
+            cleanup_ok = await self._cleanup(job)
             if cleanup_ok:
                 if acquired:
                     self._permits.release()
@@ -345,9 +331,7 @@ class MediaExecutor:
             await asyncio.sleep(min(remaining, 0.05))
         return True
 
-    async def _cleanup(self, job: _Job, *, abort: bool) -> bool:
-        del abort
-        job.state = "REAPING"
+    async def _cleanup(self, job: _Job) -> bool:
         loop = asyncio.get_running_loop()
         deadline = loop.time() + 5
         process = job.process
@@ -373,7 +357,6 @@ class MediaExecutor:
                 await asyncio.gather(job.collector, return_exceptions=True)
             if job.temporary_dir is not None:
                 shutil.rmtree(job.temporary_dir)
-            job.state = "DONE"
             return True
         except (OSError, TimeoutError):
             return False
@@ -400,10 +383,7 @@ class MediaExecutor:
         if not task.cancelled():
             task.exception()
 
-    async def _spawn(
-        self, kind: str, content_type: str | None, temporary_dir: Path,
-    ) -> asyncio.subprocess.Process:
-        del kind, content_type
+    async def _spawn(self, temporary_dir: Path) -> asyncio.subprocess.Process:
         root = Path(__file__).resolve().parents[2]
         return await asyncio.create_subprocess_exec(
             sys.executable, "-E", "-s", "-B", "-m", "src.ai.media_worker",

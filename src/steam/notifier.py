@@ -43,19 +43,12 @@ class SteamGuildStatus:
 
 
 class SteamFreeGamesNotifier:
-    def __init__(
-        self,
-        state_path: Path | str = DEFAULT_STATE_PATH,
-        poll_interval_seconds: float = POLL_INTERVAL_SECONDS,
-        *,
-        provider: SteamOfferProvider | None = None,
-    ) -> None:
-        self._state_path = Path(state_path)
-        self._poll_interval_seconds = poll_interval_seconds
+    def __init__(self) -> None:
+        self._state_path = DEFAULT_STATE_PATH
         self._state_available = True
         self._guilds: dict[int, _GuildState] = {}
         self._guild_locks: defaultdict[int, asyncio.Lock] = defaultdict(asyncio.Lock)
-        self.provider = provider or SteamOfferProvider()
+        self.provider = SteamOfferProvider()
         self._task: asyncio.Task[None] | None = None
 
         try:
@@ -70,7 +63,7 @@ class SteamFreeGamesNotifier:
         state = self._guilds.get(guild_id)
         return SteamGuildStatus(
             state_available=self._state_available,
-            poll_interval_seconds=self._poll_interval_seconds,
+            poll_interval_seconds=POLL_INTERVAL_SECONDS,
             channel_id=state.channel_id if state is not None else None,
             active_app_count=len(state.active_app_ids) if state is not None else 0,
             role_ids=tuple(sorted(state.role_ids)) if state is not None else (),
@@ -291,7 +284,7 @@ class SteamFreeGamesNotifier:
             if not self._state_available:
                 break
 
-            await asyncio.sleep(self._poll_interval_seconds)
+            await asyncio.sleep(POLL_INTERVAL_SECONDS)
 
     async def fetch_current_offers(self) -> SteamFetchResult | None:
         return await self.provider.fetch_current_offers()

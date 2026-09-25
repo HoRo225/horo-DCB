@@ -50,11 +50,11 @@ class ThreadStore:
         record = self._threads.get(key)
         return record["thread_id"] if record is not None else None  # type: ignore[return-value]
 
-    def set(self, key: str, thread_id: str, *, updated_at: int | None = None) -> None:
+    def set(self, key: str, thread_id: str) -> None:
         candidate = self._threads.copy()
         candidate[key] = {
             "thread_id": thread_id,
-            "updated_at": int(time.time()) if updated_at is None else updated_at,
+            "updated_at": int(time.time()),
         }
         self._persist(candidate)
         self._threads = candidate

@@ -52,7 +52,7 @@ def _result_image_url(result: object) -> str | None:
 
 
 def _extract_reply_image_urls(
-    items: object, reply: str = "",
+    items: object, reply: str,
 ) -> tuple[str, ...]:
     if not isinstance(items, (list, tuple)):
         return ()
@@ -90,7 +90,6 @@ class CodexService:
         self.interrupt_timeout_seconds = 5.0
         self.archive_timeout_seconds = 5.0
         self._fatal_called = False
-        self.fatal_exit = os._exit
         self.last_error: str | None = None
         self._status_task: asyncio.Task[dict[str, object]] | None = None
         self._rate_task: asyncio.Task[CodexRateLimits] | None = None
@@ -164,10 +163,10 @@ class CodexService:
         self._admission.closed = True
         self.last_error = "unavailable"
         logging.error("Codex runtime stopped after an unresponsive SDK operation.")
-        self.fatal_exit(1)
+        os._exit(1)
 
     async def _interrupt(self, handle: Any, collector: asyncio.Task[Any]) -> None:
-        deadline = asyncio.get_running_loop().time() + min(5.0, self.interrupt_timeout_seconds)
+        deadline = asyncio.get_running_loop().time() + self.interrupt_timeout_seconds
         cleanup = asyncio.create_task(handle.interrupt())
         tasks = {cleanup, collector}
         while not all(task.done() for task in tasks):

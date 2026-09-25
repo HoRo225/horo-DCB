@@ -39,8 +39,8 @@ class CodexBridgeClient:
         self._session: aiohttp.ClientSession | None = None
         self._cooldowns: dict[int, float] = {}
 
-    def try_start_request(self, user_id: int, *, now: float | None = None) -> bool:
-        current = time.monotonic() if now is None else now
+    def try_start_request(self, user_id: int) -> bool:
+        current = time.monotonic()
         last_request = self._cooldowns.get(user_id)
         if (
             last_request is not None
@@ -57,15 +57,12 @@ class CodexBridgeClient:
     @asynccontextmanager
     async def accepted_request(self, key: str, *, access: CodexAccess | None = None,
                                user_id: int | None = None):
-        try:
-            async with self._admission.claim(
-                key, queue_timeout_seconds=min(self.queue_timeout_seconds, self.work_timeout_seconds),
-                access=access, user_id=user_id,
-            ) as job:
-                job.deadline = job.accepted_at + self.work_timeout_seconds
-                yield job
-        except TimeoutError:
-            raise CodexBridgeError("timeout") from None
+        async with self._admission.claim(
+            key, queue_timeout_seconds=self.queue_timeout_seconds,
+            access=access, user_id=user_id,
+        ) as job:
+            job.deadline = job.accepted_at + self.work_timeout_seconds
+            yield job
 
     async def cancel_member(self, guild_id: int, user_id: int) -> None:
         await self._admission.cancel(guild_id=guild_id, user_id=user_id)

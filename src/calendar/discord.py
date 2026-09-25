@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
-from datetime import datetime
 
 import discord
 
@@ -33,12 +32,10 @@ class CalendarController:
         self,
         guild_name: str,
         events: Sequence[discord.ScheduledEvent],
-        *,
-        now: datetime | None = None,
     ) -> CalendarBoardView:
         return CalendarBoardView(
             self,
-            render_board_text(guild_name, list(events), now=now),
+            render_board_text(guild_name, list(events)),
             can_edit=any(is_external_scheduled(event) for event in events),
         )
 

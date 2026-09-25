@@ -10,7 +10,7 @@ from discord import app_commands
 from src.admin.panel import AdminPanelView, load_codex_rate_limits, load_codex_status
 from src.admin.sessions import PanelSession, PanelSessionRegistry
 from src.ai import discord as ai_discord
-from src.ai.access import DEFAULT_CODEX_ACCESS_STATE_PATH, CodexAccess, member_role_ids
+from src.ai.access import CodexAccess, member_role_ids
 from src.ai.access_service import AiAccessService
 from src.ai.client import CodexBridgeClient
 from src.ai.media_executor import MediaExecutor
@@ -21,10 +21,6 @@ from src.calendar.manager import CalendarManager
 from src.config import AppConfig
 from src.steam.notifier import SteamFreeGamesNotifier
 from src.voice.manager import TempVoiceManager
-
-AI_TEXT_DISPLAY_ENABLED = True
-TEMP_VOICE_ENABLED = False
-STEAM_FREE_GAMES_ENABLED = False
 
 _SHUTDOWN_BUDGET_SECONDS = 25.0
 _SHUTDOWN_STAGE_SECONDS = 5.0
@@ -40,13 +36,10 @@ class HoroBot(discord.Client):
         calendar: CalendarManager,
         *,
         media_executor: MediaExecutor,
-        ai_text_display_enabled: bool = AI_TEXT_DISPLAY_ENABLED,
-        temp_voice_enabled: bool = TEMP_VOICE_ENABLED,
-        steam_free_games_enabled: bool = STEAM_FREE_GAMES_ENABLED,
-        access_service: AiAccessService | None = None,
-        calendar_controller: CalendarController | None = None,
-        shutdown_budget_seconds: float = _SHUTDOWN_BUDGET_SECONDS,
-        shutdown_stage_seconds: float = _SHUTDOWN_STAGE_SECONDS,
+        ai_text_display_enabled: bool,
+        temp_voice_enabled: bool,
+        steam_free_games_enabled: bool,
+        calendar_controller: CalendarController,
     ) -> None:
         intents = discord.Intents.default()
         intents.message_content = True
@@ -58,11 +51,11 @@ class HoroBot(discord.Client):
         )
         self.codex = codex
         self.codex_access = codex_access
-        self.access_service = access_service or AiAccessService(codex_access, codex)
+        self.access_service = AiAccessService(codex_access, codex)
         self.temp_voice = temp_voice
         self.steam_free_games = steam_free_games
         self.calendar = calendar
-        self.calendar_controller = calendar_controller or calendar
+        self.calendar_controller = calendar_controller
         self.media_executor = media_executor
         self.ai_text_display_enabled = ai_text_display_enabled
         self.temp_voice_enabled = temp_voice_enabled
@@ -71,11 +64,7 @@ class HoroBot(discord.Client):
         self.tree = app_commands.CommandTree(self)
         self._closing = False
         self._close_task: asyncio.Task[None] | None = None
-        self._shutdown_budget_seconds = shutdown_budget_seconds
-        self._shutdown_stage_seconds = shutdown_stage_seconds
         self._shutdown_tasks: set[asyncio.Task[None]] = set()
-        self.shutdown_failures: tuple[str, ...] = ()
-        self.shutdown_pending: frozenset[str] = frozenset()
 
         @self.tree.command(name="控制台", description="開啟管理控制台")
         @app_commands.guild_only()
@@ -139,7 +128,7 @@ class HoroBot(discord.Client):
                     return
                 view.codex_status = status.result()
                 if limits is not None:
-                    view._apply_rate_limits(limits.result())
+                    view.codex_rate_limits = limits.result()
                 view._render_overview()
                 async with view._edit_lock:
                     if not await view._can_publish():
@@ -203,9 +192,7 @@ class HoroBot(discord.Client):
 
     async def _close_owned(self) -> None:
         loop = asyncio.get_running_loop()
-        deadline = loop.time() + self._shutdown_budget_seconds
-        failures: list[str] = []
-        pending_names: set[str] = set()
+        deadline = loop.time() + _SHUTDOWN_BUDGET_SECONDS
 
         async def run_stage(name: str, awaitable: Any) -> None:
             task = asyncio.create_task(awaitable)
@@ -218,13 +205,11 @@ class HoroBot(discord.Client):
 
             task.add_done_callback(observe)
             remaining = min(
-                self._shutdown_stage_seconds,
+                _SHUTDOWN_STAGE_SECONDS,
                 max(0.0, deadline - loop.time()),
             )
             done, _ = await asyncio.wait({task}, timeout=remaining)
             if not done:
-                failures.append(name)
-                pending_names.add(name)
                 task.cancel()
                 await asyncio.sleep(0)
                 logging.error("%s shutdown timed out.", name.capitalize())
@@ -232,15 +217,11 @@ class HoroBot(discord.Client):
             try:
                 task.result()
             except asyncio.CancelledError:
-                failures.append(name)
                 logging.error("%s shutdown was cancelled.", name.capitalize())
             except Exception:
-                failures.append(name)
                 logging.error("%s shutdown failed.", name.capitalize())
 
-        registry = getattr(self, "_admin_panels", None)
-        if registry is not None:
-            await run_stage("panels", registry.close(deadline=deadline))
+        await run_stage("panels", self._admin_panels.close(deadline=deadline))
         await run_stage("codex", self.codex.close())
         await run_stage("media", self.media_executor.close(deadline=deadline))
         await asyncio.gather(
@@ -248,8 +229,6 @@ class HoroBot(discord.Client):
             run_stage("calendar", self.calendar.close()),
         )
         await run_stage("discord", super().close())
-        self.shutdown_failures = tuple(failures)
-        self.shutdown_pending = frozenset(pending_names)
 
     async def on_ready(self) -> None:
         await sync_discord_brand(self)
@@ -350,7 +329,7 @@ class HoroBot(discord.Client):
         await ai_discord.archive_scope(self.codex, guild.id)
 
     async def on_message(self, message: discord.Message) -> None:
-        if getattr(self, "_closing", False):
+        if self._closing:
             return
         await ai_discord.handle_message(
             message, bot_user_id=self.user.id if self.user is not None else None,
@@ -375,11 +354,7 @@ def main() -> None:
         "http://codex:8765",
         config.codex_bridge_token,
     )
-    codex_access = CodexAccess(
-        config.codex_enabled,
-        config.codex_allowed_guild_id,
-        state_path=DEFAULT_CODEX_ACCESS_STATE_PATH,
-    )
+    codex_access = CodexAccess(config.codex_enabled, config.codex_allowed_guild_id)
     temp_voice = TempVoiceManager()
     steam_free_games = SteamFreeGamesNotifier()
     controller: CalendarController

@@ -12,7 +12,6 @@ def main(state_path: Path | str = DEFAULT_CODEX_ACCESS_STATE_PATH) -> None:
     access = CodexAccess(
         config.codex_enabled,
         config.codex_allowed_guild_id,
-        state_path=state_path,
     )
     safe_summary = {
         "codex_enabled": config.codex_enabled,

@@ -8,8 +8,6 @@ from src.ai.protocol import valid_bridge_token
 _TRUE_VALUES = {"1", "true", "yes", "on"}
 _FALSE_VALUES = {"0", "false", "no", "off"}
 _UNCONFIGURED_PREFIXES = (
-    "__REQUIRED",
-    "__GENERATE",
     "[REDACTED_SECRET]",
 )
 

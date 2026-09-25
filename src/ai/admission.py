@@ -4,9 +4,12 @@ import asyncio
 from collections import deque
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
-from src.ai.access import CodexAccess
 from src.ai.protocol import CodexBridgeError, scope_matches
+
+if TYPE_CHECKING:
+    from src.ai.access import CodexAccess
 
 
 @dataclass(eq=False, slots=True)

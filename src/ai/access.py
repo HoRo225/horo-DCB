@@ -24,8 +24,6 @@ class CodexAccess:
         self,
         enabled: bool,
         guild_id: int | None,
-        *,
-        state_path: Path | str | None = None,
     ) -> None:
         self.enabled = enabled
         self.guild_id = guild_id
@@ -35,9 +33,7 @@ class CodexAccess:
         self.generation = 0
         self.mutation_lock = asyncio.Lock()
         self._suspended = False
-        self._state_path = Path(state_path) if state_path is not None else None
-        if self._state_path is None:
-            return
+        self._state_path = DEFAULT_CODEX_ACCESS_STATE_PATH
         try:
             payload = json.loads(self._state_path.read_text(encoding="utf-8"))
             if not isinstance(payload, dict) or (
@@ -122,8 +118,6 @@ class CodexAccess:
         channel_ids: frozenset[int],
         role_ids: frozenset[int],
     ) -> None:
-        if self._state_path is None:
-            return
         write_json_atomic(self._state_path, {
             "version": 3,
             "guild_id": guild_id,
