@@ -1,11 +1,10 @@
 from __future__ import annotations
 
-import json
 from pathlib import Path
 import time
 
 from src.ai.protocol import scope_matches, valid_conversation_key
-from src.state import write_json_atomic
+from src.state import read_json_state, write_json_atomic
 
 
 class ThreadStore:
@@ -20,15 +19,13 @@ class ThreadStore:
 
     def _load(self) -> dict[str, dict[str, object]]:
         try:
-            payload = json.loads(self.path.read_text(encoding="utf-8"))
+            payload = read_json_state(self.path, 1)
         except FileNotFoundError:
             raise
-        except (OSError, json.JSONDecodeError) as exc:
+        except (OSError, ValueError) as exc:
             raise ValueError("invalid thread mapping") from exc
         if (
-            not isinstance(payload, dict)
-            or payload.get("version") != 1
-            or not isinstance(payload.get("threads"), dict)
+            not isinstance(payload.get("threads"), dict)
         ):
             raise ValueError("invalid thread mapping")
         threads: dict[str, dict[str, object]] = {}

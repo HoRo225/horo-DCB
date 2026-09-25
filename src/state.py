@@ -1,14 +1,41 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Callable
 import json
+import logging
 import os
 from pathlib import Path
 import tempfile
+from typing import Any, TypeVar
+
+
+T = TypeVar("T")
 
 
 def consume_task_exception(task: asyncio.Future[object]) -> BaseException | None:
     return None if task.cancelled() else task.exception()
+
+
+def read_json_state(path: Path | str, version: int) -> dict[str, Any]:
+    payload = json.loads(Path(path).read_text(encoding="utf-8"))
+    if (
+        not isinstance(payload, dict)
+        or type(payload.get("version")) is not int
+        or payload["version"] != version
+    ):
+        raise ValueError("invalid state version")
+    return payload
+
+
+def load_state_or_disable(load: Callable[[], T], empty: T, message: str) -> tuple[T, bool]:
+    try:
+        return load(), True
+    except FileNotFoundError:
+        return empty, True
+    except (OSError, ValueError, TypeError):
+        logging.exception(message)
+        return empty, False
 
 
 def write_json_atomic(path: Path | str, payload: object) -> None:
@@ -24,6 +51,8 @@ def write_json_atomic(path: Path | str, payload: object) -> None:
             os.chmod(temporary, 0o600)
             json.dump(payload, output, ensure_ascii=False, indent=2)
             output.write("\n")
+            output.flush()
+            os.fsync(output.fileno())
         os.replace(temporary, path)
     finally:
         if temporary is not None:

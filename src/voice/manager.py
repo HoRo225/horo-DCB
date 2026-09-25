@@ -2,14 +2,13 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass
-import json
 import logging
 from pathlib import Path
 from typing import Iterable
 
 import discord
 
-from src.state import write_json_atomic
+from src.state import load_state_or_disable, read_json_state, write_json_atomic
 
 ENTRY_CHANNEL_NAME = "➕ 建立語音"
 CHANNEL_NAME_PREFIX = "▍"
@@ -57,13 +56,10 @@ class TempVoiceManager:
         self._parents: dict[int, int] = {}
         self._children: dict[int, tuple[int, int]] = {}
 
-        try:
-            self._parents, self._children = self._load_state()
-        except (OSError, ValueError, TypeError):
-            self._state_available = False
-            logging.exception(
-                "臨時語音狀態檔無法讀取；為避免建立無法追蹤的頻道，臨時語音功能已停用。"
-            )
+        (self._parents, self._children), self._state_available = load_state_or_disable(
+            self._load_state, ({}, {}),
+            "臨時語音狀態檔無法讀取；為避免建立無法追蹤的頻道，臨時語音功能已停用。",
+        )
 
     def get_guild_status(self, guild_id: int) -> TempVoiceGuildStatus:
         return TempVoiceGuildStatus(
@@ -146,16 +142,7 @@ class TempVoiceManager:
         return records
 
     def _load_state(self) -> tuple[dict[int, int], dict[int, tuple[int, int]]]:
-        if not self._state_path.exists():
-            return {}, {}
-
-        payload = json.loads(self._state_path.read_text(encoding="utf-8"))
-        if not isinstance(payload, dict):
-            raise ValueError("invalid temp voice state")
-
-        version = payload.get("version")
-        if version != STATE_VERSION:
-            raise ValueError("invalid temp voice state version")
+        payload = read_json_state(self._state_path, STATE_VERSION)
 
         parents = self._parse_parents(payload.get("parents"))
         children = self._parse_children(payload.get("children"))

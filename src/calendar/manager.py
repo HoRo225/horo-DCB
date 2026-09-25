@@ -4,7 +4,6 @@ import asyncio
 from collections.abc import Callable, Sequence
 from collections import defaultdict
 from datetime import datetime, timedelta
-import json
 import logging
 from pathlib import Path
 
@@ -23,7 +22,7 @@ from src.calendar.models import (
     calendar_now,
 )
 from src.calendar.discord_models import can_manage_events, is_external_scheduled
-from src.state import write_json_atomic
+from src.state import load_state_or_disable, read_json_state, write_json_atomic
 
 STATE_VERSION = 1
 DEFAULT_STATE_PATH = Path("/app/data/calendar_board.json")
@@ -46,11 +45,9 @@ class CalendarManager:
         self._client: discord.Client | None = None
         self._task: asyncio.Task[None] | None = None
         self._board_view_factory = board_view_factory
-        try:
-            self._bindings = self._load_state()
-        except (OSError, ValueError, TypeError):
-            self._state_available = False
-            logging.exception("行事曆看板狀態檔無法讀取；行事曆已停止寫入。")
+        self._bindings, self._state_available = load_state_or_disable(
+            self._load_state, {}, "行事曆看板狀態檔無法讀取；行事曆已停止寫入。"
+        )
 
     @property
     def state_available(self) -> bool:
@@ -66,11 +63,7 @@ class CalendarManager:
         return self._versions.get(guild_id, 0)
 
     def _load_state(self) -> dict[int, CalendarBinding]:
-        if not self._state_path.exists():
-            return {}
-        payload = json.loads(self._state_path.read_text(encoding="utf-8"))
-        if not isinstance(payload, dict) or payload.get("version") != STATE_VERSION:
-            raise ValueError("invalid calendar state version")
+        payload = read_json_state(self._state_path, STATE_VERSION)
         records = payload.get("guilds")
         if not isinstance(records, list):
             raise ValueError("invalid calendar guild list")

@@ -3,7 +3,6 @@ from __future__ import annotations
 import asyncio
 from collections import defaultdict
 from dataclasses import dataclass, field
-import json
 import logging
 from pathlib import Path
 from typing import Iterable
@@ -11,7 +10,7 @@ from typing import Iterable
 import aiohttp
 import discord
 
-from src.state import write_json_atomic
+from src.state import load_state_or_disable, read_json_state, write_json_atomic
 from src.steam.provider import SteamFetchResult, SteamOffer, SteamOfferProvider
 from src.steam.views import build_offer_view
 
@@ -51,13 +50,10 @@ class SteamFreeGamesNotifier:
         self.provider = SteamOfferProvider()
         self._task: asyncio.Task[None] | None = None
 
-        try:
-            self._guilds = self._load_state()
-        except (OSError, ValueError, TypeError):
-            self._state_available = False
-            logging.exception(
-                "Steam 免費遊戲狀態檔無法讀取；為避免重複洗版，通知功能已停用。"
-            )
+        self._guilds, self._state_available = load_state_or_disable(
+            self._load_state, {},
+            "Steam 免費遊戲狀態檔無法讀取；為避免重複洗版，通知功能已停用。",
+        )
 
     def get_guild_status(self, guild_id: int) -> SteamGuildStatus:
         state = self._guilds.get(guild_id)
@@ -103,12 +99,7 @@ class SteamFreeGamesNotifier:
         return None
 
     def _load_state(self) -> dict[int, _GuildState]:
-        if not self._state_path.exists():
-            return {}
-
-        payload = json.loads(self._state_path.read_text(encoding="utf-8"))
-        if not isinstance(payload, dict) or payload.get("version") != STATE_VERSION:
-            raise ValueError("invalid Steam notifier state version")
+        payload = read_json_state(self._state_path, STATE_VERSION)
 
         guild_records = payload.get("guilds")
         if not isinstance(guild_records, list):

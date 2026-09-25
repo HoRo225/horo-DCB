@@ -1,11 +1,9 @@
 from __future__ import annotations
 
 import asyncio
-import json
-import logging
 from pathlib import Path
 
-from src.state import write_json_atomic
+from src.state import load_state_or_disable, read_json_state, write_json_atomic
 
 DEFAULT_CODEX_ACCESS_STATE_PATH = Path("/app/data/codex_access.json")
 MAX_CODEX_ALLOWED_CHANNELS = 25
@@ -43,39 +41,30 @@ class CodexAccess:
         self.mutation_lock = asyncio.Lock()
         self._suspended = False
         self._state_path = DEFAULT_CODEX_ACCESS_STATE_PATH
-        try:
-            payload = json.loads(self._state_path.read_text(encoding="utf-8"))
-            if not isinstance(payload, dict) or (
-                type(payload.get("guild_id")) is not int
-                or payload["guild_id"] <= 0
-                or payload["guild_id"] != guild_id
-            ):
-                raise ValueError("invalid Codex access state")
-            version = payload.get("version")
-            if type(version) is not int:
-                raise ValueError("invalid Codex access state")
-            if version == 3 and set(payload) == {
-                "version", "guild_id", "channel_ids", "role_ids"
-            }:
-                channel_ids = payload.get("channel_ids")
-                role_ids = payload.get("role_ids")
-                if (
-                    not valid_allowlist_ids(channel_ids, container=list, minimum=1)
-                    or not valid_allowlist_ids(role_ids, container=list, minimum=0)
-                    or guild_id in role_ids
-                ):
-                    raise ValueError("invalid Codex access state")
-                self.channel_ids = frozenset(channel_ids)
-                self.role_ids = frozenset(role_ids)
-            else:
-                raise ValueError("invalid Codex access state")
-        except FileNotFoundError:
-            return
-        except (OSError, ValueError, TypeError):
-            self.channel_ids = frozenset()
-            self.role_ids = frozenset()
-            self.state_available = False
-            logging.error("Codex 白名單狀態檔無法讀取；AI 對話已停用。")
+        (self.channel_ids, self.role_ids), self.state_available = load_state_or_disable(
+            self._load_state,
+            (frozenset(), frozenset()),
+            "Codex 白名單狀態檔無法讀取；AI 對話已停用。",
+        )
+
+    def _load_state(self) -> tuple[frozenset[int], frozenset[int]]:
+        payload = read_json_state(self._state_path, 3)
+        if (
+            type(payload.get("guild_id")) is not int
+            or payload["guild_id"] <= 0
+            or payload["guild_id"] != self.guild_id
+            or set(payload) != {"version", "guild_id", "channel_ids", "role_ids"}
+        ):
+            raise ValueError("invalid Codex access state")
+        channel_ids = payload.get("channel_ids")
+        role_ids = payload.get("role_ids")
+        if (
+            not valid_allowlist_ids(channel_ids, container=list, minimum=1)
+            or not valid_allowlist_ids(role_ids, container=list, minimum=0)
+            or self.guild_id in role_ids
+        ):
+            raise ValueError("invalid Codex access state")
+        return frozenset(channel_ids), frozenset(role_ids)
 
     def denial_reason(
         self,
