@@ -1,0 +1,10 @@
+[Unit]
+Description=Check approved Horo Codex SDK image every five minutes
+
+[Timer]
+OnBootSec=1min
+OnUnitInactiveSec=5min
+Unit=horo-codex-update.service
+
+[Install]
+WantedBy=timers.target

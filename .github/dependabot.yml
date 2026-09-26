@@ -1,0 +1,21 @@
+version: 2
+updates:
+  - package-ecosystem: pip
+    directory: /
+    schedule:
+      interval: cron
+      cronjob: "0 0 * * *"
+      timezone: Asia/Taipei
+    allow:
+      - dependency-name: openai-codex
+      - dependency-name: openai-codex-cli-bin
+    groups:
+      codex-sdk:
+        patterns:
+          - openai-codex
+          - openai-codex-cli-bin
+    cooldown:
+      exclude:
+        - openai-codex
+        - openai-codex-cli-bin
+    open-pull-requests-limit: 1

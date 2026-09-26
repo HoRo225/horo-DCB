@@ -1,14 +1,27 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import time
+from collections.abc import Callable
 from contextlib import asynccontextmanager
+from contextvars import ContextVar
 
 import aiohttp
 
 from src.ai.access import CodexAccess
 from src.ai.admission import AcceptedJob, Admission
+from src.ai.model_settings import (
+    ModelInfo,
+    ModelSettings,
+    ModelSettingsStore,
+    parse_model_catalog,
+)
 from src.ai.protocol import (
+    MAX_PROGRESS_SUMMARY_CHARACTERS,
+    MAX_STREAM_FRAME_BYTES,
+    PROGRESS_STAGES,
+    PROTOCOL_VERSION,
     READY_REASONS,
     SAFE_ERROR_CODES,
     CodexArchiveResult,
@@ -45,6 +58,10 @@ class CodexBridgeClient:
         self._admission = Admission()
         self._session: aiohttp.ClientSession | None = None
         self._cooldowns: dict[int, float] = {}
+        self.model_settings = ModelSettingsStore()
+        self._accepted_models: ContextVar[ModelSettings | None] = ContextVar(
+            "codex_accepted_models", default=None
+        )
 
     def try_start_request(self, user_id: int) -> bool:
         current = time.monotonic()
@@ -69,16 +86,24 @@ class CodexBridgeClient:
         parent_channel_id: int | None = None,
         deadline: float | None = None,
     ):
-        async with self._admission.claim(
-            key,
-            queue_timeout_seconds=self.queue_timeout_seconds,
-            access=access,
-            user_id=user_id,
-            parent_channel_id=parent_channel_id,
-            work_timeout_seconds=self.work_timeout_seconds,
-            deadline=deadline,
-        ) as job:
-            yield job
+        try:
+            models = self.model_settings.snapshot()
+        except OSError, ValueError:
+            raise CodexBridgeError("model_configuration_invalid") from None
+        token = self._accepted_models.set(models)
+        try:
+            async with self._admission.claim(
+                key,
+                queue_timeout_seconds=self.queue_timeout_seconds,
+                access=access,
+                user_id=user_id,
+                parent_channel_id=parent_channel_id,
+                work_timeout_seconds=self.work_timeout_seconds,
+                deadline=deadline,
+            ) as job:
+                yield job
+        finally:
+            self._accepted_models.reset(token)
 
     async def cancel_member(self, guild_id: int, user_id: int) -> None:
         await self._admission.cancel(guild_id=guild_id, user_id=user_id)
@@ -90,6 +115,7 @@ class CodexBridgeClient:
             self._session = aiohttp.ClientSession(
                 timeout=aiohttp.ClientTimeout(total=self.timeout_seconds),
                 headers={"Authorization": f"Bearer {self.token}"},
+                read_bufsize=MAX_STREAM_FRAME_BYTES,
             )
 
     async def close(self, *, deadline: float | None = None) -> None:
@@ -139,43 +165,37 @@ class CodexBridgeClient:
     async def get_runtime_status(self) -> CodexRuntimeStatus:
         body = await self._request("GET", "/v1/status", timeout_seconds=3)
         try:
-            version = body.get("protocol_version", 1)
-            if type(version) is not int or version not in (1, 2):
+            version = body.get("protocol_version")
+            if type(version) is not int or version != PROTOCOL_VERSION:
                 raise ValueError("invalid protocol version")
             if any(type(body[field]) is not bool for field in ("available", "authenticated")):
                 raise ValueError("invalid status flag")
-            if version == 2:
-                if any(
-                    type(body[field]) is not int or body[field] < 0
-                    for field in (
-                        "thread_count",
-                        "active_requests",
-                        "queued_requests",
+            if any(
+                type(body[field]) is not int or body[field] < 0
+                for field in (
+                    "thread_count",
+                    "active_requests",
+                    "queued_requests",
+                )
+            ):
+                raise ValueError("invalid status counts")
+            if (
+                type(body["ready"]) is not bool
+                or type(body["status_stale"]) is not bool
+                or body["reason"] not in READY_REASONS
+                or body["ready"] != (body["reason"] == "ready")
+                or (
+                    body["ready"]
+                    and (not body["available"] or not body["authenticated"] or body["status_stale"])
+                )
+                or (
+                    body["status_fetched_at"] is not None
+                    and (
+                        type(body["status_fetched_at"]) is not int or body["status_fetched_at"] <= 0
                     )
-                ):
-                    raise ValueError("invalid status counts")
-                if (
-                    type(body["ready"]) is not bool
-                    or type(body["status_stale"]) is not bool
-                    or body["reason"] not in READY_REASONS
-                    or body["ready"] != (body["reason"] == "ready")
-                    or (
-                        body["ready"]
-                        and (
-                            not body["available"]
-                            or not body["authenticated"]
-                            or body["status_stale"]
-                        )
-                    )
-                    or (
-                        body["status_fetched_at"] is not None
-                        and (
-                            type(body["status_fetched_at"]) is not int
-                            or body["status_fetched_at"] <= 0
-                        )
-                    )
-                ):
-                    raise ValueError("invalid readiness status")
+                )
+            ):
+                raise ValueError("invalid readiness status")
             return CodexRuntimeStatus(
                 available=body["available"] is True,
                 authenticated=body["authenticated"] is True,
@@ -195,20 +215,10 @@ class CodexBridgeClient:
                     else None
                 ),
                 protocol_version=version,
-                ready=body["ready"]
-                if version == 2
-                else body["available"] and body["authenticated"],
-                reason=body["reason"]
-                if version == 2
-                else (
-                    "ready"
-                    if body["available"] and body["authenticated"]
-                    else "auth_required"
-                    if body["available"]
-                    else "unavailable"
-                ),
-                status_fetched_at=body["status_fetched_at"] if version == 2 else None,
-                status_stale=body["status_stale"] if version == 2 else False,
+                ready=body["ready"],
+                reason=body["reason"],
+                status_fetched_at=body["status_fetched_at"],
+                status_stale=body["status_stale"],
                 bot_active_requests=len(self._admission.active_keys),
                 bot_queued_requests=len(self._admission.waiting),
             )
@@ -226,6 +236,13 @@ class CodexBridgeClient:
         except ValueError:
             return CodexRateLimits(error="invalid_response")
 
+    async def get_models(self) -> tuple[ModelInfo, ...]:
+        body = await self._request("GET", "/v1/models", timeout_seconds=10)
+        try:
+            return parse_model_catalog(body)
+        except TypeError, ValueError:
+            raise CodexBridgeError("unavailable") from None
+
     async def chat(
         self,
         key: str,
@@ -233,6 +250,8 @@ class CodexBridgeClient:
         images: tuple[str, ...],
         *,
         job: AcceptedJob,
+        on_progress: Callable[[str, str], None] | None = None,
+        models: ModelSettings | None = None,
     ) -> CodexChatReply:
         current = asyncio.current_task()
         if (
@@ -250,25 +269,70 @@ class CodexBridgeClient:
         http_remaining = job.http_deadline - now
         if budget_ms < 1 or http_remaining <= 0:
             raise CodexBridgeError("timeout")
-        body = await self._request(
-            "POST",
-            "/v1/chat",
-            payload={
-                "conversation_key": key,
-                "text": text,
-                "images": list(images),
-                "budget_ms": budget_ms,
-                "parent_channel_id": job.parent_channel_id,
-            },
-            timeout_seconds=min(budget_ms / 1000 + self.cleanup_timeout_seconds, http_remaining),
-        )
-        reply = body.get("reply")
-        if not isinstance(reply, str) or not reply:
-            raise CodexBridgeError("unavailable")
-        return CodexChatReply(
-            text=reply,
-            image_urls=normalize_reply_image_urls(body.get("image_urls", ())),
-        )
+        selected_models = models or self._accepted_models.get()
+        if selected_models is None:
+            raise CodexBridgeError("invalid_request")
+        if self._session is None or self._session.closed:
+            await self.start()
+        assert self._session is not None
+        try:
+            async with self._session.post(
+                f"{self.base_url}/v1/chat",
+                json={
+                    "conversation_key": key,
+                    "text": text,
+                    "images": list(images),
+                    "budget_ms": budget_ms,
+                    "parent_channel_id": job.parent_channel_id,
+                    "models": selected_models.to_payload(),
+                },
+                timeout=aiohttp.ClientTimeout(
+                    total=min(budget_ms / 1000 + self.cleanup_timeout_seconds, http_remaining)
+                ),
+            ) as response:
+                if response.status >= 400:
+                    try:
+                        body = await response.json()
+                    except aiohttp.ContentTypeError, ValueError:
+                        body = {}
+                    raise CodexBridgeError(body.get("error") if isinstance(body, dict) else None)
+                if response.content_type != "application/x-ndjson":
+                    raise CodexBridgeError("unavailable")
+                while True:
+                    line = await response.content.readline()
+                    if not line or len(line) > MAX_STREAM_FRAME_BYTES or not line.endswith(b"\n"):
+                        raise CodexBridgeError("unavailable")
+                    event = json.loads(line)
+                    if not isinstance(event, dict):
+                        raise CodexBridgeError("unavailable")
+                    event_type = event.get("type")
+                    if event_type == "progress":
+                        stage, summary = event.get("stage"), event.get("summary")
+                        if (
+                            not isinstance(stage, str)
+                            or stage not in PROGRESS_STAGES
+                            or not isinstance(summary, str)
+                            or len(summary) > MAX_PROGRESS_SUMMARY_CHARACTERS
+                        ):
+                            raise CodexBridgeError("unavailable")
+                        if on_progress is not None:
+                            on_progress(stage, summary)
+                    elif event_type == "error":
+                        raise CodexBridgeError(event.get("error"))
+                    elif event_type == "completed":
+                        reply = event.get("reply")
+                        if not isinstance(reply, str) or not reply:
+                            raise CodexBridgeError("unavailable")
+                        return CodexChatReply(
+                            text=reply,
+                            image_urls=normalize_reply_image_urls(event.get("image_urls", ())),
+                        )
+                    else:
+                        raise CodexBridgeError("unavailable")
+        except TimeoutError:
+            raise CodexBridgeError("timeout") from None
+        except aiohttp.ClientError, UnicodeError, ValueError:
+            raise CodexBridgeError("unavailable") from None
 
     async def archive_scope(
         self,

@@ -22,6 +22,12 @@ services:
     restart: unless-stopped
     volumes:
       - codex_data_srv:/app/codex
+      - type: bind
+        source: /srv/horo-dcb-data/deployment
+        target: /run/horo-dcb-update
+        read_only: true
+        bind:
+          create_host_path: false
     healthcheck:
       test:
         - CMD

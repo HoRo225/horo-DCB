@@ -24,6 +24,7 @@ from src.ai.message_context import clean_bot_mention as clean_bot_mention
 from src.ai.message_context import get_referenced_message as get_referenced_message
 from src.ai.message_context import message_mentions_bot as message_mentions_bot
 from src.ai.message_context import visible_message_text as visible_message_text
+from src.ai.output import AiProgress, build_ai_text_display_view
 from src.ai.output import _send_native_ai_chunks as _send_native_ai_chunks
 from src.ai.output import codex_error_text as codex_error_text
 from src.ai.output import send_ai_answer as send_ai_answer
@@ -149,9 +150,36 @@ async def handle_message(
     queue_ms = images_ms = sdk_ms = discord_ms = 0.0
     outcome = "unavailable"
     output_started = False
+    status_written = False
+    generation = access.generation
+    current_job = None
+
+    async def can_send() -> bool:
+        deadline = current_job.deadline if current_job is not None else accepted_deadline
+        if (
+            not access.is_current(generation)
+            or (current_job is not None and not current_job.current)
+            or asyncio.get_running_loop().time() >= deadline
+        ):
+            return False
+        guild = message.guild
+        author = guild.get_member(message.author.id) if member_cache_enabled else None
+        if author is None:
+            try:
+                author = await asyncio.wait_for(guild.fetch_member(message.author.id), 2)
+            except discord.HTTPException, aiohttp.ClientError, TimeoutError, AttributeError:
+                return False
+        return (
+            access.is_current(generation)
+            and (current_job is None or current_job.current)
+            and asyncio.get_running_loop().time() < deadline
+            and codex_conversation_key_for_message(message, access, author=author) == key
+        )
+
+    progress = AiProgress(can_send=can_send, deadline=accepted_deadline)
 
     async def send_error(exc: Exception, *, deadline: float | None = None) -> None:
-        nonlocal outcome, discord_ms
+        nonlocal outcome, discord_ms, status_written
         outcome = (
             exc.code
             if isinstance(exc, CodexBridgeError)
@@ -160,6 +188,9 @@ async def handle_message(
             else "invalid_request"
         )
         if output_started:
+            return
+        await progress.stop()
+        if not await can_send():
             return
         error_text = (
             str(exc) if isinstance(exc, ImageAttachmentError) else codex_error_text(outcome)
@@ -173,16 +204,26 @@ async def handle_message(
         started = time.monotonic()
         try:
             async with asyncio.timeout(budget):
-                await message.reply(
-                    error_text,
-                    mention_author=False,
-                )
-        except discord.HTTPException, TimeoutError:
+                if progress.message is not None:
+                    await progress.message.edit(
+                        view=build_ai_text_display_view(error_text),
+                        allowed_mentions=discord.AllowedMentions.none(),
+                    )
+                    status_written = True
+                else:
+                    await message.reply(
+                        error_text,
+                        mention_author=False,
+                        allowed_mentions=discord.AllowedMentions.none(),
+                    )
+        except discord.HTTPException, aiohttp.ClientError, TimeoutError:
             logging.error("Discord AI 狀態回覆送出失敗。")
         finally:
             discord_ms += (time.monotonic() - started) * 1000
 
     try:
+        if text_display_enabled:
+            await progress.start(message)
         async with codex.accepted_request(
             key,
             access=access,
@@ -194,55 +235,19 @@ async def handle_message(
             ),
             deadline=accepted_deadline,
         ) as job:
+            current_job = job
+            progress.update("preparing")
             assert job.started_at is not None
             queue_ms = (job.started_at - job.accepted_at) * 1000
 
             try:
                 async with asyncio.timeout_at(job.deadline):
-
-                    async def can_send() -> bool:
-                        if not job.current or asyncio.get_running_loop().time() >= job.deadline:
-                            return False
-                        guild = message.guild
-                        author = None
-                        if member_cache_enabled:
-                            author = guild.get_member(message.author.id)
-                        if author is None:
-                            try:
-                                author = await asyncio.wait_for(
-                                    guild.fetch_member(message.author.id), 2
-                                )
-                            except (
-                                discord.HTTPException,
-                                aiohttp.ClientError,
-                                TimeoutError,
-                                AttributeError,
-                            ):
-                                return False
-                        if author is None:
-                            return False
-                        return (
-                            job.current
-                            and asyncio.get_running_loop().time() < job.deadline
-                            and codex_conversation_key_for_message(
-                                message,
-                                access,
-                                author=author,
-                            )
-                            == key
-                        )
-
                     async with message.channel.typing():
                         async with asyncio.timeout_at(job.work_deadline):
                             if not await can_send():
                                 raise CodexBridgeError("unauthorized")
                             if len(cleaned_content) > MAX_PROMPT_CHARACTERS:
-                                await message.reply(
-                                    "問題最多 4,000 個字元，請縮短後再試。",
-                                    mention_author=False,
-                                )
-                                outcome = "invalid_request"
-                                return
+                                raise ImageAttachmentError("問題最多 4,000 個字元，請縮短後再試。")
                             if (
                                 mentions_bot
                                 and referenced_message is None
@@ -250,12 +255,9 @@ async def handle_message(
                             ):
                                 referenced_message = await get_referenced_message(message)
                                 if referenced_message is None:
-                                    await message.reply(
+                                    raise ImageAttachmentError(
                                         "目前無法讀取被回覆的訊息，請重新回覆或重新上傳內容。",
-                                        mention_author=False,
                                     )
-                                    outcome = "invalid_request"
-                                    return
 
                             referenced_context = referenced_message if mentions_bot else None
                             if referenced_context is not None:
@@ -303,12 +305,9 @@ async def handle_message(
                                 images_ms = (time.monotonic() - started) * 1000
                             referenced_text = visible_message_text(referenced_context)
                             if not cleaned_content and not images and not referenced_text:
-                                await message.reply(
+                                raise ImageAttachmentError(
                                     "請輸入問題，或附上圖片、GIF、表情或貼圖。",
-                                    mention_author=False,
                                 )
-                                outcome = "invalid_request"
-                                return
                             prompt = build_codex_prompt(cleaned_content, referenced_context)
                             if not prompt and images:
                                 prompt = "請說明我提供的內容。"
@@ -316,9 +315,13 @@ async def handle_message(
                                 raise CodexBridgeError("unauthorized")
                         started = time.monotonic()
                         try:
-                            reply = await codex.chat(key, prompt, images, job=job)
+                            progress.update("generating")
+                            reply = await codex.chat(
+                                key, prompt, images, job=job, on_progress=progress.update
+                            )
                         finally:
                             sdk_ms = (time.monotonic() - started) * 1000
+                    await progress.stop()
                     output_started = True
                     started = time.monotonic()
                     try:
@@ -328,6 +331,7 @@ async def handle_message(
                             image_urls=reply.image_urls,
                             text_display_enabled=text_display_enabled,
                             can_send=can_send,
+                            progress_message=progress.message,
                         )
                     finally:
                         discord_ms = (time.monotonic() - started) * 1000
@@ -342,7 +346,19 @@ async def handle_message(
         # Rejected admission and expired queues report immediately, without requeueing.
         queue_ms = (time.monotonic() - queued_at) * 1000
         await send_error(exc, deadline=accepted_deadline)
+    except aiohttp.ClientError, TimeoutError:
+        # A failed initial Discord send may already exist; never replay an ambiguous send.
+        outcome = "unavailable"
     finally:
+        await progress.stop()
+        if progress.message is not None and (
+            outcome in {"cancelled", "unauthorized"} or (not output_started and not status_written)
+        ):
+            try:
+                async with asyncio.timeout(3):
+                    await progress.message.delete()
+            except discord.HTTPException, aiohttp.ClientError, TimeoutError:
+                logging.error("Discord AI 進度卡清理失敗。")
         logging.info(
             "AI request result=%s queue_ms=%.1f images_ms=%.1f sdk_ms=%.1f discord_ms=%.1f",
             outcome,

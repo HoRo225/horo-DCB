@@ -1,0 +1,141 @@
+name: Codex SDK release
+on:
+  workflow_run:
+    workflows: [Codex CI]
+    types: [completed]
+  workflow_dispatch:
+    inputs:
+      pull_request:
+        description: 'Dependabot PR number to retry; empty publishes the current main commit'
+        required: false
+        type: string
+permissions: {}
+concurrency:
+  group: codex-sdk-release
+  cancel-in-progress: false
+jobs:
+  approve:
+    if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      checks: read
+      contents: write
+      pull-requests: write
+    outputs:
+      sha: ${{ steps.guard.outputs.sha }}
+    steps:
+      - id: guard
+        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7
+        with:
+          script: |
+            const {owner, repo} = context.repo;
+            if (`${owner}/${repo}`.toLowerCase() !== 'horo225/horo-dcb') throw Error('Unexpected repository');
+            const branch = (await github.rest.repos.getBranch({owner,repo,branch:'main'})).data;
+            const run = context.payload.workflow_run;
+            let number = context.payload.inputs?.pull_request;
+            if (run) {
+              if (run.event !== 'pull_request' || run.head_repository?.full_name !== `${owner}/${repo}` || run.conclusion !== 'success') {
+                core.notice('Not an eligible SDK PR run'); return;
+              }
+              const workflow = (await github.rest.actions.getWorkflow({owner,repo,workflow_id:run.workflow_id})).data;
+              if (workflow.path !== '.github/workflows/ci.yml') throw Error('Unexpected workflow');
+              const prs = await github.paginate(github.rest.repos.listPullRequestsAssociatedWithCommit,{owner,repo,commit_sha:run.head_sha,per_page:100});
+              const eligible = prs.filter(p => p.base.ref === 'main' && p.user.login === 'dependabot[bot]');
+              if (eligible.length !== 1) { core.notice('No unique Dependabot PR'); return; }
+              number = eligible[0].number;
+            }
+            if (!number) {
+              if (context.ref !== 'refs/heads/main') throw Error('Bootstrap must run from main');
+              core.setOutput('sha',branch.commit.sha); return;
+            }
+            if (!/^\d+$/.test(String(number))) throw Error('Invalid PR number');
+            const pr = (await github.rest.pulls.get({owner,repo,pull_number:Number(number)})).data;
+            if (pr.user.login !== 'dependabot[bot]' || pr.base.ref !== 'main' ||
+                pr.base.repo.full_name !== `${owner}/${repo}` || pr.head.repo?.full_name !== `${owner}/${repo}`) throw Error('Unexpected PR origin');
+            if (run && pr.head.sha !== run.head_sha) throw Error('PR changed after validation');
+            if (!pr.merged && pr.state !== 'open') throw Error('PR is closed');
+            const files = await github.paginate(github.rest.pulls.listFiles,{owner,repo,pull_number:pr.number,per_page:100});
+            if (files.length !== 1 || files[0].filename !== 'requirements.txt' || files[0].status !== 'modified') throw Error('Only SDK pins may change');
+            const content = async ref => {
+              const result = (await github.rest.repos.getContent({owner,repo,path:'requirements.txt',ref})).data;
+              if (Array.isArray(result) || result.encoding !== 'base64') throw Error('Invalid requirements');
+              return Buffer.from(result.content,'base64').toString('utf8').replace(/\r\n/g,'\n');
+            };
+            let originalBase=pr.base.sha;
+            if (pr.merged) {
+              const mergeCommit=(await github.rest.repos.getCommit({owner,repo,ref:pr.merge_commit_sha})).data;
+              if (mergeCommit.parents.length!==2 || mergeCommit.parents[1].sha!==pr.head.sha) throw Error('Unexpected recovered merge ancestry');
+              originalBase=mergeCommit.parents[0].sha;
+            }
+            const before = await content(originalBase), after = await content(pr.head.sha);
+            const pattern = /^(openai-codex(?:-cli-bin)?)==([0-9]+\.[0-9]+\.[0-9]+)$/gm;
+            const pins = text => {
+              const matches = [...text.matchAll(pattern)];
+              if (matches.length !== 2 || new Set(matches.map(m=>m[1])).size !== 2 || matches[0][2] !== matches[1][2]) throw Error('Expected matching stable SDK/CLI pins');
+              return matches[0][2].split('.').map(Number);
+            };
+            const oldVersion=pins(before), newVersion=pins(after);
+            const comparison = newVersion.map((n,i)=>n-oldVersion[i]).find(n=>n!==0) || 0;
+            if (comparison <= 0 || before.replace(pattern,'$1==SDK_VERSION') !== after.replace(pattern,'$1==SDK_VERSION')) throw Error('Not an SDK-only upgrade');
+            const checks = await github.paginate(github.rest.checks.listForRef,{owner,repo,ref:pr.head.sha,per_page:100});
+            if (!checks.some(c=>c.name==='Codex CI' && c.conclusion==='success' && c.app?.slug==='github-actions')) throw Error('Missing successful head CI');
+            let sha=pr.merge_commit_sha;
+            if (!pr.merged) {
+              if (pr.base.sha !== branch.commit.sha) throw Error('PR must be up to date with main');
+              const comparison=(await github.rest.repos.compareCommitsWithBasehead({owner,repo,basehead:`${branch.commit.sha}...${pr.head.sha}`})).data;
+              if (comparison.merge_base_commit.sha!==branch.commit.sha) throw Error('PR head does not include the current main commit');
+              const merged=(await github.rest.pulls.merge({owner,repo,pull_number:pr.number,sha:pr.head.sha,merge_method:'merge'})).data;
+              if (!merged.merged) throw Error('Merge refused');
+              sha=merged.sha;
+            }
+            if (!/^[0-9a-f]{40}$/.test(sha || '')) throw Error('No immutable merged commit');
+            core.setOutput('sha',sha);
+  publish:
+    needs: approve
+    if: needs.approve.outputs.sha != ''
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ needs.approve.outputs.sha }}
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: '3.14.7'
+      - run: python -m pip install -r requirements.txt ruff==0.16.9
+      - run: python -m pip check
+      - run: ruff check src ops
+      - run: python ops/image_metadata.py --check-sdk > /tmp/image-metadata.json
+      - name: Build immutable approved source
+        env:
+          SOURCE_SHA: ${{ needs.approve.outputs.sha }}
+        run: |
+          SDK=$(python -c "import json; print(json.load(open('/tmp/image-metadata.json'))['sdk'])")
+          CLI=$(python -c "import json; print(json.load(open('/tmp/image-metadata.json'))['cli'])")
+          FINGERPRINT=$(python -c "import json; print(json.load(open('/tmp/image-metadata.json'))['fingerprint'])")
+          docker build --platform linux/amd64 --build-arg SOURCE_SHA="$SOURCE_SHA" --build-arg SDK_VERSION="$SDK" --build-arg CLI_VERSION="$CLI" --build-arg CODE_FINGERPRINT="$FINGERPRINT" --tag "ghcr.io/horo225/horo-dcb:sha-$SOURCE_SHA" .
+          docker run --rm "ghcr.io/horo225/horo-dcb:sha-$SOURCE_SHA" python -m src.ai.bridge --help
+      - name: Reject superseded releases
+        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7
+        env:
+          SOURCE_SHA: ${{ needs.approve.outputs.sha }}
+        with:
+          script: |
+            const branch=(await github.rest.repos.getBranch({...context.repo,branch:'main'})).data;
+            if (branch.commit.sha!==process.env.SOURCE_SHA) throw Error('Release superseded; publish the current main commit instead');
+      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Publish image
+        env:
+          SOURCE_SHA: ${{ needs.approve.outputs.sha }}
+        run: |
+          docker push "ghcr.io/horo225/horo-dcb:sha-$SOURCE_SHA"
+          docker tag "ghcr.io/horo225/horo-dcb:sha-$SOURCE_SHA" ghcr.io/horo225/horo-dcb:sdk-stable
+          docker push ghcr.io/horo225/horo-dcb:sdk-stable

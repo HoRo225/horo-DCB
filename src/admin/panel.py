@@ -10,7 +10,7 @@ import aiohttp
 import discord
 
 from src.admin import presentation
-from src.admin.components import _CalendarChannelSelect
+from src.admin.components import _CalendarChannelSelect, _ModelSettingSelect
 from src.admin.components import (
     _CodexChannelSelect as _CodexChannelSelect,
 )
@@ -49,6 +49,7 @@ from src.ai.access import (
 )
 from src.ai.access_service import AiAccessService
 from src.ai.client import CodexBridgeClient
+from src.ai.model_settings import DEFAULT_MODEL_SETTINGS, ModelChoice, ModelInfo, ModelSettings
 from src.ai.protocol import EMPTY_CODEX_RUNTIME_STATUS, CodexRateLimits, CodexRuntimeStatus
 from src.brand import BRAND_COLOUR, CARD_FILENAME, brand_files, branded_title
 from src.calendar.manager import CalendarManager
@@ -74,6 +75,7 @@ MAIN_PAGES = (
 AI_PAGES = (
     ("ai", "狀態", "帳號狀態與額度"),
     ("ai_access", "使用權限", "頻道與身分組白名單"),
+    ("ai_models", "模型設定", "主模型、備援與推理強度"),
     ("ai_tech", "技術資訊", "版本、工作與安全邊界"),
 )
 MODULE_PAGES = (
@@ -133,6 +135,11 @@ class AdminPanelView(discord.ui.LayoutView):
         self.codex_access = codex_access
         self.access_service = access_service
         self.codex_status = codex_status
+        self.model_catalog: tuple[ModelInfo, ...] = ()
+        self.model_draft: ModelSettings | None = None
+        self.model_notice: str | None = None
+        self.model_pages = {"primary": 0, "fallback": 0}
+        self.model_catalog_available = False
         self.temp_voice = temp_voice
         self.steam_free_games = steam_free_games
         self._steam_result: SteamFetchResult | None = None
@@ -315,7 +322,7 @@ class AdminPanelView(discord.ui.LayoutView):
         selected = current if current in {"overview", "ai", "modules"} else None
         placeholder = (
             "返回 AI 助手"
-            if current in {"ai_access", "ai_tech"}
+            if current in {"ai_access", "ai_tech", "ai_models"}
             else "返回功能模組"
             if current in {"voice", "steam", "calendar"}
             else "選擇頁面"
@@ -628,6 +635,8 @@ class AdminPanelView(discord.ui.LayoutView):
             presentation.render_ai_access(self)
         elif page == "ai_tech":
             presentation.render_ai_tech(self)
+        elif page == "ai_models":
+            presentation.render_ai_models(self)
         elif page == "modules":
             presentation.render_modules(self)
         elif page == "voice":
@@ -960,6 +969,194 @@ class AdminPanelView(discord.ui.LayoutView):
                 self.calendar_unbind_target = None
         return lambda: presentation.render_calendar(self, note)
 
+    async def _load_models(self, operation: int) -> bool:
+        if not await self._can_publish() or not self._is_current(operation):
+            return False
+        try:
+            catalog = await self.codex_client.get_models()
+        except Exception:
+            logging.error("管理控制台讀取模型清單失敗。")
+            catalog = ()
+        if (
+            not self._is_current(operation)
+            or not await self._can_publish()
+            or not self._is_current(operation)
+        ):
+            return False
+        self.model_catalog = catalog
+        self.model_catalog_available = bool(catalog)
+        if self.model_draft is None:
+            try:
+                self.model_draft = self.codex_client.model_settings.snapshot()
+            except ValueError:
+                self.model_draft = DEFAULT_MODEL_SETTINGS
+        self.model_notice = None if catalog else "目前無法取得模型清單；未變更已儲存設定。"
+        last_page = max(0, (len(catalog) - 1) // 24)
+        for side in self.model_pages:
+            self.model_pages[side] = min(self.model_pages[side], last_page)
+        return True
+
+    def _model_setting_select(self, field: str) -> _ModelSettingSelect:
+        side, kind = field.split("_")
+        choice = getattr(self.model_draft, side)
+        if kind == "model":
+            start = self.model_pages[side] * 24
+            options = [
+                discord.SelectOption(
+                    label=info.display_name[:100],
+                    description=info.model[:100],
+                    value=str(index),
+                    default=choice is not None and choice.model == info.model,
+                )
+                for index, info in enumerate(self.model_catalog[start : start + 24], start)
+            ]
+            if side == "fallback":
+                options.insert(
+                    0, discord.SelectOption(label="停用備援", value="off", default=choice is None)
+                )
+            placeholder = "選擇主模型" if side == "primary" else "選擇備援模型（可停用）"
+            disabled = not self.model_catalog_available
+        else:
+            info = next(
+                (item for item in self.model_catalog if choice and item.model == choice.model), None
+            )
+            options = [
+                discord.SelectOption(
+                    label="模型預設",
+                    value="default",
+                    default=choice is None
+                    or choice.effort is None
+                    or (info is not None and choice.effort == info.default_effort),
+                )
+            ]
+            if info is not None:
+                options.extend(
+                    discord.SelectOption(
+                        label=effort[:100], value=str(index), default=choice.effort == effort
+                    )
+                    for index, effort in enumerate(info.supported_efforts)
+                    if effort != info.default_effort
+                )
+            placeholder = "主模型推理強度" if side == "primary" else "備援模型推理強度"
+            disabled = not self.model_catalog_available or info is None
+        if not options:
+            options = [discord.SelectOption(label="無可用模型", value="unavailable")]
+        key = ("model_setting", field)
+        item = self._control_cache.get(key)
+        if item is None:
+            item = _ModelSettingSelect(
+                field, options=options, placeholder=placeholder, disabled=disabled
+            )
+            self._control_cache[key] = item
+        assert isinstance(item, _ModelSettingSelect)
+        item.options, item.placeholder, item.disabled = options, placeholder, disabled
+        return item
+
+    async def handle_model_select(
+        self, interaction: discord.Interaction, field: str, value: str
+    ) -> None:
+        async def work(operation: int) -> Callable[[], None] | None:
+            if (
+                self.page != "ai_models"
+                or not self.model_catalog_available
+                or self.model_draft is None
+                or field
+                not in {"primary_model", "fallback_model", "primary_effort", "fallback_effort"}
+                or not await self._can_publish()
+                or not self._is_current(operation)
+            ):
+                return None
+            side, kind = field.split("_")
+            choice = getattr(self.model_draft, side)
+            if kind == "model":
+                if side == "fallback" and value == "off":
+                    selected = None
+                else:
+                    try:
+                        index = int(value)
+                    except ValueError:
+                        return None
+                    start = self.model_pages[side] * 24
+                    if not start <= index < min(start + 24, len(self.model_catalog)):
+                        return None
+                    info = self.model_catalog[index]
+                    effort = (
+                        choice.effort
+                        if choice and choice.effort in info.supported_efforts
+                        else None
+                    )
+                    selected = ModelChoice(info.model, effort)
+            else:
+                info = next(
+                    (item for item in self.model_catalog if choice and item.model == choice.model),
+                    None,
+                )
+                if info is None:
+                    return None
+                if value == "default":
+                    effort = None
+                else:
+                    try:
+                        index = int(value)
+                    except ValueError:
+                        return None
+                    if not 0 <= index < len(info.supported_efforts):
+                        return None
+                    effort = info.supported_efforts[index]
+                selected = ModelChoice(choice.model, effort)
+            self.model_draft = ModelSettings(
+                selected if side == "primary" else self.model_draft.primary,
+                selected if side == "fallback" else self.model_draft.fallback,
+            )
+            self.model_notice = "草稿尚未儲存；按「儲存設定」後套用於後續請求。"
+            return lambda: presentation.render_ai_models(self)
+
+        await self._run_operation(interaction, work)
+
+    async def _model_action(self, action: str, operation: int) -> Callable[[], None] | None:
+        if action == "ai_models" or action == "refresh":
+            if not await self._load_models(operation):
+                return None
+            return lambda: presentation.render_ai_models(self)
+        if self.page != "ai_models" or self.model_draft is None:
+            return None
+        if not await self._can_publish() or not self._is_current(operation):
+            return None
+        if action == "model_save":
+            if not await self._load_models(operation):
+                return None
+            valid = self.model_catalog_available
+            for choice in (self.model_draft.primary, self.model_draft.fallback):
+                if choice is None:
+                    continue
+                info = next(
+                    (item for item in self.model_catalog if item.model == choice.model), None
+                )
+                valid = (
+                    valid
+                    and info is not None
+                    and (choice.effort is None or choice.effort in info.supported_efforts)
+                )
+            if not valid:
+                self.model_notice = "模型或推理強度已失效，請重新選擇；已儲存設定未變更。"
+            else:
+                async with self._edit_lock:
+                    if not await self._can_publish() or not self._is_current(operation):
+                        return None
+                    try:
+                        self.codex_client.model_settings.save(self.model_draft)
+                    except OSError, ValueError:
+                        self.model_notice = "設定無法儲存；原設定未變更。"
+                    else:
+                        self.model_notice = "已儲存全 Bot 模型設定；只影響後續接納的請求。"
+        else:
+            _, side, direction = action.split("_")
+            last_page = max(0, (len(self.model_catalog) - 1) // 24)
+            self.model_pages[side] = min(
+                last_page, max(0, self.model_pages[side] + (1 if direction == "next" else -1))
+            )
+        return lambda: presentation.render_ai_models(self)
+
     async def handle_action(self, interaction: discord.Interaction, action: str) -> None:
         if action == "noop":
             await self._acknowledge(interaction)
@@ -973,6 +1170,11 @@ class AdminPanelView(discord.ui.LayoutView):
             "calendar_unbind",
             "calendar_unbind_confirm",
             "calendar_unbind_cancel",
+            "model_save",
+            "model_primary_prev",
+            "model_primary_next",
+            "model_fallback_prev",
+            "model_fallback_next",
         }:
             return
 
@@ -989,6 +1191,12 @@ class AdminPanelView(discord.ui.LayoutView):
             self.calendar_unbind_target = None
 
         async def work(operation: int) -> Callable[[], None] | None:
+            if (
+                action == "ai_models"
+                or action.startswith("model_")
+                or (action == "refresh" and self.page == "ai_models")
+            ):
+                return await self._model_action(action, operation)
             if calendar_action:
                 return await self._calendar_action(
                     interaction, action, operation, channel, target, revision

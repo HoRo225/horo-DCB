@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import hmac
+import json
 import logging
 import os
 import sys
@@ -16,12 +17,14 @@ from openai_codex import AsyncCodex, CodexConfig
 
 from src.ai.protocol import (
     ERROR_HTTP_STATUS,
+    MAX_PROGRESS_SUMMARY_CHARACTERS,
+    MAX_STREAM_FRAME_BYTES,
     CodexBridgeError,
     valid_bridge_token,
     validate_archive_payload,
     validate_chat_payload,
 )
-from src.ai.runtime import CODEX_WORKSPACE, CodexService
+from src.ai.runtime import CODEX_WORKSPACE, SDK_SHUTDOWN_TIMEOUT_SECONDS, CodexService
 from src.ai.thread_store import ThreadStore
 
 
@@ -109,7 +112,16 @@ def create_app(token: str, service: Any) -> web.Application:
             logging.error("Codex bridge rate-limit request failed.")
             return _error("unavailable")
 
-    async def chat(request: web.Request) -> web.Response:
+    async def models(request: web.Request) -> web.Response:
+        if not _authorized(request):
+            return _error("unauthorized")
+        try:
+            return web.json_response(await service.models())
+        except Exception:
+            logging.error("Codex bridge model catalog request failed.")
+            return _error("unavailable")
+
+    async def chat(request: web.Request) -> web.StreamResponse:
         if not _authorized(request):
             return _error("unauthorized")
         try:
@@ -118,22 +130,87 @@ def create_app(token: str, service: Any) -> web.Application:
             return _error("invalid_request")
         try:
             payload = validate_chat_payload(raw_payload)
-            reply = await service.chat(
+        except CodexBridgeError as exc:
+            return _error(exc.code)
+
+        response = web.StreamResponse(headers={"Content-Type": "application/x-ndjson"})
+        loop = asyncio.get_running_loop()
+        # The SDK keeps its original budget; allow its bounded interrupt cleanup to finish.
+        deadline = loop.time() + payload.budget_ms / 1000 + SDK_SHUTDOWN_TIMEOUT_SECONDS
+        latest: dict[str, str] | None = None
+        changed = asyncio.Event()
+
+        def progress(snapshot: dict[str, str]) -> None:
+            nonlocal latest
+            latest = {
+                "type": "progress",
+                "stage": snapshot["stage"],
+                "summary": snapshot["summary"][-MAX_PROGRESS_SUMMARY_CHARACTERS:],
+            }
+            changed.set()
+
+        async def write(frame: dict[str, object]) -> None:
+            data = (json.dumps(frame, ensure_ascii=False, separators=(",", ":")) + "\n").encode()
+            if len(data) > MAX_STREAM_FRAME_BYTES:
+                data = b'{"type":"error","error":"unavailable"}\n'
+            # A slow receiver must not hold the SDK request open indefinitely.
+            async with asyncio.timeout_at(min(deadline, loop.time() + 5)):
+                await response.write(data)
+
+        async with asyncio.timeout_at(deadline):
+            await response.prepare(request)
+        owner = asyncio.create_task(
+            service.chat(
                 payload.conversation_key,
                 payload.text,
                 payload.images,
+                models=payload.models,
+                on_progress=progress,
                 budget_ms=payload.budget_ms,
                 parent_channel_id=payload.parent_channel_id,
             )
-            body: dict[str, object] = {"reply": reply.text}
-            if reply.image_urls:
-                body["image_urls"] = list(reply.image_urls)
-            return web.json_response(body)
-        except CodexBridgeError as exc:
-            return _error(exc.code)
-        except Exception:
-            logging.error("Codex bridge chat request failed.")
-            return _error("unavailable")
+        )
+        owner.add_done_callback(lambda _task: changed.set())
+        try:
+            await write({"type": "progress", "stage": "queued", "summary": ""})
+            while not owner.done():
+                async with asyncio.timeout_at(deadline):
+                    await changed.wait()
+                changed.clear()
+                if owner.done():
+                    break
+                snapshot, latest = latest, None
+                if snapshot is not None:
+                    await write(snapshot)
+            try:
+                reply = owner.result()
+            except CodexBridgeError as exc:
+                await write({"type": "error", "error": exc.code})
+            except asyncio.CancelledError:
+                await write({"type": "error", "error": "unavailable"})
+            except Exception:
+                logging.error("Codex bridge chat request failed.")
+                await write({"type": "error", "error": "unavailable"})
+            else:
+                await write(
+                    {"type": "completed", "reply": reply.text, "image_urls": list(reply.image_urls)}
+                )
+            async with asyncio.timeout_at(min(deadline, loop.time() + 5)):
+                await response.write_eof()
+            return response
+        finally:
+            # Cancel the request owner; its shielded collector confirms SDK termination.
+            if not owner.done():
+                owner.cancel()
+            while not owner.done():
+                try:
+                    await asyncio.shield(owner)
+                except asyncio.CancelledError:
+                    continue
+                except Exception:
+                    break
+            if not owner.cancelled():
+                owner.exception()
 
     async def archive(request: web.Request) -> web.Response:
         if not _authorized(request):
@@ -160,6 +237,7 @@ def create_app(token: str, service: Any) -> web.Application:
     app.router.add_get("/livez", live)
     app.router.add_get("/v1/status", runtime_status)
     app.router.add_get("/v1/rate-limits", rate_limits)
+    app.router.add_get("/v1/models", models)
     app.router.add_post("/v1/chat", chat)
     app.router.add_post("/v1/archive", archive)
     return app

@@ -1,0 +1,14 @@
+[Unit]
+Description=Update Horo Codex SDK image with cold rollback
+After=docker.service network-online.target
+Wants=network-online.target
+Requires=docker.service
+
+[Service]
+Type=oneshot
+User=root
+UMask=0077
+WorkingDirectory=/srv/horo-dcb
+ExecStart=/usr/bin/python3 /srv/horo-dcb/ops/sdk_update.py update
+TimeoutStartSec=20min
+
