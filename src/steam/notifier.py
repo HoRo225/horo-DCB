@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections import defaultdict
-from typing import Iterable
+from typing import Callable, Iterable
 
 import aiohttp
 import discord
@@ -115,6 +115,8 @@ class SteamFreeGamesNotifier:
         self,
         guild: discord.Guild,
         roles: Iterable[discord.Role],
+        *,
+        still_current: Callable[[], bool] | None = None,
     ) -> None:
         if self._closing or not self._state_available:
             raise SteamConfigurationError("Steam 通知狀態目前不可用。")
@@ -132,6 +134,8 @@ class SteamFreeGamesNotifier:
             role_ids.add(role.id)
 
         async with self._guild_locks[guild.id]:
+            if still_current is not None and not still_current():
+                return
             if self._closing or not self._state_available:
                 raise SteamConfigurationError("Steam 通知狀態目前不可用。")
 
@@ -152,8 +156,15 @@ class SteamFreeGamesNotifier:
             if not self._persist_or_disable():
                 raise SteamConfigurationError("Steam 通知設定目前無法保存。")
 
-    async def clear_notification_roles(self, guild_id: int) -> bool:
+    async def clear_notification_roles(
+        self,
+        guild_id: int,
+        *,
+        still_current: Callable[[], bool] | None = None,
+    ) -> bool:
         async with self._guild_locks[guild_id]:
+            if still_current is not None and not still_current():
+                return False
             if self._closing or not self._state_available:
                 raise SteamConfigurationError("Steam 通知狀態目前不可用。")
             state = self._guilds.get(guild_id)

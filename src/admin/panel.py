@@ -61,6 +61,7 @@ from src.steam.notifier import (
 from src.steam.provider import SteamFetchResult
 from src.voice.manager import TempVoiceManager
 
+IDLE_TIMEOUT_SECONDS = 120.0
 RATE_REFRESH_SECONDS = 30.0
 RATE_EXPIRY_MARGIN_SECONDS = 10.0
 RATE_PAGES = frozenset({"overview", "ai", "ai_tech"})
@@ -119,7 +120,7 @@ class AdminPanelView(discord.ui.LayoutView):
         temp_voice_enabled: bool = True,
         steam_free_games_enabled: bool = True,
     ) -> None:
-        super().__init__(timeout=15 * 60)
+        super().__init__(timeout=None)
         self.user_id = user_id
         self.guild_id = guild_id
         self.guild = guild
@@ -146,6 +147,8 @@ class AdminPanelView(discord.ui.LayoutView):
         self._rate_refresh_task: asyncio.Task[None] | None = None
         self._rate_interaction: discord.Interaction | None = None
         self._rate_cutoff_at: float | None = None
+        self._idle_task: asyncio.Task[None] | None = None
+        self._idle_deadline: float | None = None
         self._retirement_task: asyncio.Task[None] | None = None
         self._rate_display_item: discord.ui.TextDisplay | None = None
         self._operation = 0
@@ -160,10 +163,10 @@ class AdminPanelView(discord.ui.LayoutView):
         opened = False
         try:
             await interaction.response.defer(ephemeral=True)
+            self.bind_interaction(interaction)
+            self._panel_registry.attach_view(self._panel_session, self)
             if not self._registry_current():
                 return
-            self._panel_registry.attach_view(self._panel_session, self)
-            self.bind_interaction(interaction)
             if not await self._refresh_ai_data():
                 return
             presentation.render_overview(self)
@@ -178,6 +181,10 @@ class AdminPanelView(discord.ui.LayoutView):
                 self.record_published()
             if not await self._can_publish():
                 return
+            if self._idle_deadline is None:
+                self._idle_deadline = time.monotonic() + IDLE_TIMEOUT_SECONDS
+            self._idle_task = asyncio.create_task(self._idle_loop())
+            self._panel_registry.track(self._panel_session, self._idle_task)
             self.start_rate_refresh(interaction)
             opened = True
         finally:
@@ -189,6 +196,7 @@ class AdminPanelView(discord.ui.LayoutView):
     async def interaction_check(self, interaction: discord.Interaction, /) -> bool:
         allowed = (
             self._registry_current()
+            and self._before_idle_deadline()
             and (self._rate_interaction is None or self._before_cutoff())
             and interaction.user.id == self.user_id
             and interaction.guild_id == self.guild_id
@@ -196,6 +204,7 @@ class AdminPanelView(discord.ui.LayoutView):
         )
         if allowed:
             self.user_role_ids = member_role_ids(interaction.user)
+            self._idle_deadline = time.monotonic() + IDLE_TIMEOUT_SECONDS
             return True
         if not interaction.response.is_done():
             await interaction.response.send_message(
@@ -395,25 +404,40 @@ class AdminPanelView(discord.ui.LayoutView):
         self._panel_registry.retire(self._panel_session)
 
     def retire_session(self) -> None:
+        self._operation += 1
         self.stop()
-        if self._retirement_task is None:
-            self.close_stale_message()
-        task = self._rate_refresh_task
-        if (
-            task is not None
-            and task is not asyncio.current_task()
-            and not task.done()
-            and not task.cancelling()
-        ):
-            task.cancel()
+        current = asyncio.current_task()
+        for task in tuple(self._panel_session.tasks):
+            if (
+                task is not current
+                and task is not self._retirement_task
+                and not task.done()
+                and not task.cancelling()
+            ):
+                task.cancel()
+        self.close_stale_message()
 
     def bind_interaction(self, interaction: discord.Interaction) -> None:
-        if self._rate_interaction is not None:
+        if self._rate_interaction is not None and interaction.id <= self._rate_interaction.id:
             return
         self._rate_interaction = interaction
         expires_at = getattr(interaction, "expires_at", None)
-        if isinstance(expires_at, datetime):
-            self._rate_cutoff_at = expires_at.timestamp() - RATE_EXPIRY_MARGIN_SECONDS
+        self._rate_cutoff_at = (
+            expires_at.timestamp() - RATE_EXPIRY_MARGIN_SECONDS
+            if isinstance(expires_at, datetime)
+            else None
+        )
+
+    def _before_idle_deadline(self) -> bool:
+        return self._idle_deadline is None or time.monotonic() < self._idle_deadline
+
+    async def _idle_loop(self) -> None:
+        while self._registry_current():
+            remaining = self._idle_deadline - time.monotonic()
+            if remaining <= 0:
+                self._remove_registry()
+                return
+            await asyncio.sleep(remaining)
 
     def _before_cutoff(self) -> bool:
         return self._rate_cutoff_at is not None and time.time() < self._rate_cutoff_at
@@ -422,26 +446,37 @@ class AdminPanelView(discord.ui.LayoutView):
         return (
             self._registry_current()
             and self._before_cutoff()
+            and self._before_idle_deadline()
             and await self._current_admin()
             and self._registry_current()
             and self._before_cutoff()
+            and self._before_idle_deadline()
         )
 
     def close_stale_message(self) -> None:
-        if self._retirement_task is not None and not self._retirement_task.done():
+        if self._retirement_task is not None:
             return
         self._retirement_task = asyncio.create_task(self._close_stale_message())
         self._panel_registry.track(self._panel_session, self._retirement_task)
 
     async def _close_stale_message(self) -> None:
-        try:
-            async with asyncio.timeout(3):
-                async with self._edit_lock:
+        async with self._edit_lock:
+            interaction = self._rate_interaction
+            if interaction is None:
+                return
+            try:
+                async with asyncio.timeout(3):
+                    await interaction.delete_original_response()
+            except discord.NotFound:
+                return
+            except Exception:
+                logging.error("Admin panel message deletion failed.")
+                try:
                     self._render_closed()
-                    if self._rate_interaction is not None:
-                        await self._rate_interaction.edit_original_response(view=self)
-        except Exception:
-            logging.error("Admin panel retirement notification failed.")
+                    async with asyncio.timeout(3):
+                        await interaction.edit_original_response(view=self)
+                except Exception:
+                    logging.error("Admin panel retirement notification failed.")
 
     async def _current_admin(self) -> bool:
         interaction = self._rate_interaction
@@ -520,7 +555,7 @@ class AdminPanelView(discord.ui.LayoutView):
                 await asyncio.sleep(min(RATE_REFRESH_SECONDS, remaining))
                 if not await self._current_admin():
                     return
-                if cutoff - time.time() <= 0:
+                if not self._before_cutoff():
                     continue
                 if self.page not in RATE_PAGES:
                     continue
@@ -554,7 +589,7 @@ class AdminPanelView(discord.ui.LayoutView):
                     self.codex_rate_limits = result
                     item.content = presentation.rate_text(self, compact=self.page != "ai_tech")
                     try:
-                        await interaction.edit_original_response(view=self)
+                        await self._rate_interaction.edit_original_response(view=self)
                         self.record_published()
                     except discord.Forbidden, discord.NotFound:
                         return
@@ -572,13 +607,9 @@ class AdminPanelView(discord.ui.LayoutView):
                 self.stop()
 
     async def stop_rate_refresh(self) -> None:
-        task = self._rate_refresh_task
-        self._rate_refresh_task = None
         self._remove_registry()
-        self.stop()
-        if task is not None and task is not asyncio.current_task() and not task.done():
-            task.cancel()
-            await asyncio.gather(task, return_exceptions=True)
+        if self._retirement_task is not None:
+            await asyncio.shield(self._retirement_task)
 
     async def on_timeout(self) -> None:
         await self.stop_rate_refresh()
@@ -616,9 +647,14 @@ class AdminPanelView(discord.ui.LayoutView):
         self._operation += 1
         return self._operation
 
+    async def _acknowledge(self, interaction: discord.Interaction) -> None:
+        await interaction.response.defer()
+        if self._registry_current() and self._before_idle_deadline():
+            self.bind_interaction(interaction)
+
     async def _defer_operation(self, interaction: discord.Interaction) -> int | None:
         operation = self._begin_operation()
-        await interaction.response.defer()
+        await self._acknowledge(interaction)
         return operation if self._is_current(operation) else None
 
     async def _run_operation(
@@ -631,18 +667,21 @@ class AdminPanelView(discord.ui.LayoutView):
         operation = await self._defer_operation(interaction)
         if operation is None:
             return
+        if close:
+            await self.stop_rate_refresh()
+            return
+        # Manager guards reject stale starts; accepted mutations finish their cleanup.
         render = await work(operation)
         if render is None or not self._is_current(operation):
             return
         render()
         await self._edit_original(interaction, operation)
-        if close:
-            await self.stop_rate_refresh()
 
     def _is_current(self, operation: int) -> bool:
         return (
             operation == self._operation
             and self._registry_current()
+            and self._before_idle_deadline()
             and (self._rate_interaction is None or self._before_cutoff())
         )
 
@@ -807,14 +846,18 @@ class AdminPanelView(discord.ui.LayoutView):
         interaction: discord.Interaction,
         roles: tuple[discord.Role, ...],
     ) -> None:
-        async def work(_operation: int) -> Callable[[], None]:
+        async def work(operation: int) -> Callable[[], None]:
             if not self.steam_free_games_enabled:
                 note = "Steam 自動通知已停用，未修改身分組設定。"
             elif interaction.guild is None:
                 note = "無法取得目前伺服器。"
             else:
                 try:
-                    await self.steam_free_games.set_notification_roles(interaction.guild, roles)
+                    await self.steam_free_games.set_notification_roles(
+                        interaction.guild,
+                        roles,
+                        still_current=lambda: self._is_current(operation),
+                    )
                 except SteamConfigurationError as exc:
                     note = str(exc)
                 else:
@@ -827,7 +870,7 @@ class AdminPanelView(discord.ui.LayoutView):
         self, interaction: discord.Interaction, channel: object | None
     ) -> None:
         if self.page != "calendar":
-            await interaction.response.defer()
+            await self._acknowledge(interaction)
             return
 
         async def work(operation: int) -> Callable[[], None] | None:
@@ -918,7 +961,7 @@ class AdminPanelView(discord.ui.LayoutView):
             else:
                 if not current():
                     return None
-                ok = await manager.refresh_guild(self.guild)
+                ok = await manager.refresh_guild(self.guild, is_current=current)
                 note = "✓ 行事曆看板已重新整理。" if ok else "⚠️ 行事曆看板目前無法重新整理。"
         except CalendarUserError as exc:
             note = f"⚠️ {exc}"
@@ -928,7 +971,7 @@ class AdminPanelView(discord.ui.LayoutView):
 
     async def handle_action(self, interaction: discord.Interaction, action: str) -> None:
         if action == "noop":
-            await interaction.response.defer()
+            await self._acknowledge(interaction)
             return
         if action not in PAGES | {
             "refresh",
@@ -947,7 +990,7 @@ class AdminPanelView(discord.ui.LayoutView):
             action == "refresh" and self.page == "calendar"
         )
         if calendar_action and self.page != "calendar":
-            await interaction.response.defer()
+            await self._acknowledge(interaction)
             return
         channel = self.pending_calendar_channel
         target = self.calendar_unbind_target
@@ -987,7 +1030,11 @@ class AdminPanelView(discord.ui.LayoutView):
                 if guild is None or guild.id != self.guild_id:
                     return lambda: presentation.render_voice(self, "無法取得目前伺服器。")
                 try:
-                    await self.temp_voice.reconcile([guild], prune_absent=False)
+                    await self.temp_voice.reconcile(
+                        [guild],
+                        prune_absent=False,
+                        still_current=lambda: self._is_current(operation),
+                    )
                 except Exception:
                     logging.exception("管理控制台重新同步臨時語音失敗。")
                     return lambda: presentation.render_voice(
@@ -1013,7 +1060,8 @@ class AdminPanelView(discord.ui.LayoutView):
                 else:
                     try:
                         removed = await self.steam_free_games.clear_notification_roles(
-                            self.guild_id
+                            self.guild_id,
+                            still_current=lambda: self._is_current(operation),
                         )
                     except SteamConfigurationError as exc:
                         note = str(exc)

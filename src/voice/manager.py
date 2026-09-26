@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from dataclasses import dataclass
-from typing import Iterable
+from typing import Callable, Iterable
 
 import discord
 
@@ -351,6 +351,7 @@ class TempVoiceManager:
         guilds: Iterable[discord.Guild],
         *,
         prune_absent: bool = True,
+        still_current: Callable[[], bool] | None = None,
     ) -> None:
         if not self._state_available:
             return
@@ -358,6 +359,8 @@ class TempVoiceManager:
         guild_map = {guild.id: guild for guild in guilds}
 
         async with self._lock:
+            if still_current is not None and not still_current():
+                return
             changed = False
             usable_entries: list[discord.VoiceChannel] = []
 
