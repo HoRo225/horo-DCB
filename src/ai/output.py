@@ -1,7 +1,10 @@
 from __future__ import annotations
 
-import discord
+import logging
+from typing import Any
 
+import aiohttp
+import discord
 
 DISCORD_MESSAGE_LIMIT = 2_000
 MAX_DISCORD_RESPONSE_CHUNKS = 8
@@ -37,11 +40,7 @@ def _update_code_fence_language(text: str, language: str | None) -> str | None:
             continue
 
         label = stripped[3:].strip()
-        if (
-            label
-            and len(label) <= 32
-            and all(char.isalnum() or char in "+-_.#" for char in label)
-        ):
+        if label and len(label) <= 32 and all(char.isalnum() or char in "+-_.#" for char in label):
             current = label
         else:
             current = ""
@@ -115,7 +114,9 @@ def _split_discord_markdown(
 
 
 def split_discord_message(
-    text: str, *, max_chunks: int = MAX_DISCORD_RESPONSE_CHUNKS,
+    text: str,
+    *,
+    max_chunks: int = MAX_DISCORD_RESPONSE_CHUNKS,
 ) -> list[str]:
     return _split_discord_markdown(
         text,
@@ -138,10 +139,7 @@ def build_ai_native_image_links(image_urls: tuple[str, ...]) -> str:
         return ""
 
     for omitted in range(len(urls) + 1):
-        suffix = (
-            f"\n\n（另有 {omitted} 個圖片連結因訊息長度限制省略。）"
-            if omitted else ""
-        )
+        suffix = f"\n\n（另有 {omitted} 個圖片連結因訊息長度限制省略。）" if omitted else ""
         content = "\n".join(("圖片連結：", *urls)) + suffix
         if len(content) <= DISCORD_MESSAGE_LIMIT:
             return content
@@ -151,7 +149,9 @@ def build_ai_native_image_links(image_urls: tuple[str, ...]) -> str:
 
 
 def build_ai_text_display_view(
-    content: str, *, image_urls: tuple[str, ...] = (),
+    content: str,
+    *,
+    image_urls: tuple[str, ...] = (),
 ) -> discord.ui.LayoutView:
     view = discord.ui.LayoutView(timeout=None)
     view.add_item(discord.ui.TextDisplay(content))
@@ -161,3 +161,133 @@ def build_ai_text_display_view(
             gallery.add_item(media=url)
         view.add_item(gallery)
     return view
+
+
+def codex_error_text(code: str) -> str:
+    if code == "busy":
+        return "AI 目前忙碌，請稍後再試。"
+    if code == "unauthorized":
+        return "Codex 目前未對此身分組或頻道開放。"
+    if code == "auth_required":
+        return "AI 尚未完成登入，請聯絡管理員。"
+    if code == "timeout":
+        return "AI 回覆逾時，請稍後再試。"
+    if code == "model_capacity":
+        return "目前模型滿載，請稍後再試。"
+    if code == "usage_limit_or_unavailable":
+        return "Codex 額度已用盡或服務暫時無法使用，請稍後再試。"
+    return "AI 服務暫時無法回覆，請稍後再試。"
+
+
+async def _send_native_ai_chunks(
+    message: discord.Message,
+    chunks: list[str],
+    *,
+    reply_first: bool,
+    image_urls: tuple[str, ...] = (),
+    can_send: Any,
+) -> str:
+    link_message = build_ai_native_image_links(image_urls)
+    if not chunks and not link_message:
+        return "unavailable"
+
+    try:
+        start = 0
+        sent_any = False
+        if reply_first and chunks:
+            if not await can_send():
+                return "unauthorized"
+            await message.reply(
+                chunks[0],
+                mention_author=False,
+            )
+            start = 1
+            sent_any = True
+
+        for chunk in chunks[start:]:
+            if not await can_send():
+                return "unauthorized"
+            await message.channel.send(
+                chunk,
+            )
+            sent_any = True
+
+        if link_message:
+            if not await can_send():
+                return "unauthorized"
+            if not sent_any and reply_first:
+                await message.reply(
+                    link_message,
+                    mention_author=False,
+                )
+            else:
+                await message.channel.send(
+                    link_message,
+                )
+            sent_any = True
+    except discord.HTTPException, aiohttp.ClientError:
+        logging.error("Discord AI 回覆送出失敗。")
+        return "unavailable"
+    return "success" if sent_any else "unavailable"
+
+
+async def send_ai_answer(
+    message: discord.Message,
+    answer: str,
+    *,
+    image_urls: tuple[str, ...] = (),
+    text_display_enabled: bool,
+    can_send: Any,
+) -> str:
+    if not text_display_enabled:
+        return await _send_native_ai_chunks(
+            message,
+            split_discord_message(
+                answer,
+                max_chunks=MAX_DISCORD_RESPONSE_CHUNKS - bool(image_urls),
+            ),
+            reply_first=True,
+            image_urls=image_urls,
+            can_send=can_send,
+        )
+
+    display_chunks = split_discord_text_display(answer)
+    sent_count = 0
+    try:
+        for index, chunk in enumerate(display_chunks):
+            if not await can_send():
+                return "unauthorized"
+            view = build_ai_text_display_view(
+                chunk,
+                image_urls=image_urls if index == 0 else (),
+            )
+            if index == 0:
+                await message.reply(
+                    view=view,
+                    mention_author=False,
+                )
+            else:
+                await message.channel.send(
+                    view=view,
+                )
+            sent_count += 1
+    except aiohttp.ClientError:
+        logging.error("Discord AI TextDisplay 回覆送出失敗。")
+        return "unavailable"
+    except discord.HTTPException as exc:
+        if exc.status in {403, 404}:
+            logging.error("Discord AI TextDisplay 回覆無法送達。")
+            return "unavailable"
+        logging.error("Discord AI TextDisplay 回覆送出失敗，改用原生文字。")
+        remaining = answer if not sent_count else "\n".join(display_chunks[sent_count:])
+        return await _send_native_ai_chunks(
+            message,
+            split_discord_message(
+                remaining,
+                max_chunks=MAX_DISCORD_RESPONSE_CHUNKS - bool(image_urls if not sent_count else ()),
+            ),
+            reply_first=not sent_count,
+            image_urls=image_urls if not sent_count else (),
+            can_send=can_send,
+        )
+    return "success" if sent_count else "unavailable"

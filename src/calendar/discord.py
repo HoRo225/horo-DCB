@@ -6,8 +6,10 @@ from io import BytesIO
 import discord
 
 from src.brand import BANNER_FILENAME, brand_files
+from src.calendar.discord_models import is_external_scheduled
 from src.calendar.image import MONTH_IMAGE_FILENAME, render_month_png
 from src.calendar.manager import CalendarManager
+from src.calendar.models import CalendarUserError, calendar_now
 from src.calendar.views import (
     CalendarAdminView,
     CalendarBoardView,
@@ -18,8 +20,6 @@ from src.calendar.views import (
     render_month_text,
     render_upcoming_text,
 )
-from src.calendar.models import CalendarUserError
-from src.calendar.discord_models import is_external_scheduled
 
 
 class CalendarController:
@@ -37,22 +37,25 @@ class CalendarController:
         guild_name: str,
         events: Sequence[discord.ScheduledEvent],
     ) -> tuple[CalendarBoardView, list[discord.File]]:
+        now = calendar_now()
         events = list(events)
         files = brand_files(BANNER_FILENAME)
         # ponytail: renders on the event loop (~tens of ms); move to asyncio.to_thread if many boards refresh at once.
-        month_image = render_month_png(events)
+        month_image = render_month_png(events, now=now)
         if month_image is None:
-            month: discord.ui.Item = discord.ui.TextDisplay(render_month_text(events))
+            month: discord.ui.Item = discord.ui.TextDisplay(render_month_text(events, now=now))
         else:
             files.append(discord.File(BytesIO(month_image), filename=MONTH_IMAGE_FILENAME))
-            month = discord.ui.MediaGallery(discord.MediaGalleryItem(
-                f"attachment://{MONTH_IMAGE_FILENAME}",
-                description="本月行事曆：今天以綠色填滿，有活動的日期加上外框",
-            ))
+            month = discord.ui.MediaGallery(
+                discord.MediaGalleryItem(
+                    f"attachment://{MONTH_IMAGE_FILENAME}",
+                    description="本月行事曆：今天以綠色填滿，有活動的日期加上外框",
+                )
+            )
         view = CalendarBoardView(
             self,
             (
-                discord.ui.TextDisplay(render_board_heading(guild_name)),
+                discord.ui.TextDisplay(render_board_heading(guild_name, now=now)),
                 month,
                 discord.ui.TextDisplay(render_upcoming_text(events)),
             ),
@@ -85,11 +88,19 @@ class CalendarController:
             )
 
     async def handle_board_action(
-        self, interaction: discord.Interaction, action: str,
+        self,
+        interaction: discord.Interaction,
+        action: str,
     ) -> None:
+        try:
+            self.manager._assert_accepting_work()
+        except CalendarUserError as exc:
+            await self._reply_ephemeral(interaction, str(exc))
+            return
         if not self.board_interaction_is_current(interaction):
             await self._reply_ephemeral(
-                interaction, "這個行事曆看板已失效，請使用目前綁定的看板。",
+                interaction,
+                "這個行事曆看板已失效，請使用目前綁定的看板。",
             )
             return
         if interaction.guild is None:
@@ -108,7 +119,8 @@ class CalendarController:
             events = self.manager.get_editable_events(interaction.guild)
             if not events:
                 await self._reply_ephemeral(
-                    interaction, "目前沒有可由 Horo 編輯的 External 活動。",
+                    interaction,
+                    "目前沒有可由 Horo 編輯的 External 活動。",
                 )
                 return
             await interaction.response.send_message(

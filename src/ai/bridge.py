@@ -2,12 +2,12 @@ from __future__ import annotations
 
 import argparse
 import asyncio
-from dataclasses import asdict
 import hmac
 import logging
 import os
-from pathlib import Path
 import sys
+from dataclasses import asdict
+from pathlib import Path
 from typing import Any
 
 from aiohttp import web
@@ -15,8 +15,11 @@ from aiohttp.web_log import AccessLogger
 from openai_codex import AsyncCodex, CodexConfig
 
 from src.ai.protocol import (
-    CodexBridgeError, ERROR_HTTP_STATUS, valid_bridge_token,
-    validate_archive_payload, validate_chat_payload,
+    ERROR_HTTP_STATUS,
+    CodexBridgeError,
+    valid_bridge_token,
+    validate_archive_payload,
+    validate_chat_payload,
 )
 from src.ai.runtime import CODEX_WORKSPACE, CodexService
 from src.ai.thread_store import ThreadStore
@@ -33,7 +36,7 @@ _TOKEN_KEY = web.AppKey("bridge_token", str)
 _CONFIG_OVERRIDES = (
     'web_search="live"',
     "features.standalone_web_search=true",
-    'check_for_update_on_startup=false',
+    "check_for_update_on_startup=false",
     'forced_login_method="chatgpt"',
     'cli_auth_credentials_store="file"',
     "agents.enabled=false",
@@ -85,7 +88,9 @@ def create_app(token: str, service: Any) -> web.Application:
 
     async def live(_request: web.Request) -> web.Response:
         alive = service.live
-        return web.json_response({"status": "live" if alive else "draining"}, status=200 if alive else 503)
+        return web.json_response(
+            {"status": "live" if alive else "draining"}, status=200 if alive else 503
+        )
 
     async def runtime_status(request: web.Request) -> web.Response:
         if not _authorized(request):
@@ -142,7 +147,9 @@ def create_app(token: str, service: Any) -> web.Application:
         except CodexBridgeError as exc:
             return _error(exc.code)
         try:
-            result = await service.archive_scope(scope.guild_id, scope.channel_id, include_children=scope.include_children)
+            result = await service.archive_scope(
+                scope.guild_id, scope.channel_id, include_children=scope.include_children
+            )
         except Exception:
             logging.error("Codex bridge archive request failed.")
             return _error("unavailable")
@@ -240,8 +247,11 @@ def main() -> None:
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
     )
     web.run_app(
-        _runtime_app(), host="0.0.0.0", port=8765,
-        handler_cancellation=True, shutdown_timeout=5,
+        _runtime_app(),
+        host="0.0.0.0",
+        port=8765,
+        handler_cancellation=True,
+        shutdown_timeout=5,
         access_log_class=_HealthAccessLogger,
     )
 

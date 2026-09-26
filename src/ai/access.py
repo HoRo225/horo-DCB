@@ -96,10 +96,7 @@ class CodexAccess:
 
     @property
     def configured(self) -> bool:
-        return bool(
-            self.state_available and self.channel_ids
-            and self.role_ids
-        )
+        return bool(self.state_available and self.channel_ids and self.role_ids)
 
     def _persist(
         self,
@@ -107,12 +104,15 @@ class CodexAccess:
         channel_ids: frozenset[int],
         role_ids: frozenset[int],
     ) -> None:
-        write_json_atomic(self._state_path, {
-            "version": 3,
-            "guild_id": guild_id,
-            "channel_ids": sorted(channel_ids),
-            "role_ids": sorted(role_ids),
-        })
+        write_json_atomic(
+            self._state_path,
+            {
+                "version": 3,
+                "guild_id": guild_id,
+                "channel_ids": sorted(channel_ids),
+                "role_ids": sorted(role_ids),
+            },
+        )
 
     def set_channels(
         self,

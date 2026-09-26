@@ -1,15 +1,16 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Callable, Sequence
-from collections import defaultdict
-from datetime import datetime, timedelta
 import logging
+from collections import defaultdict
+from collections.abc import Callable, Sequence
+from datetime import datetime, timedelta
 from pathlib import Path
 
 import aiohttp
 import discord
 
+from src.calendar.discord_models import can_manage_events, is_external_scheduled
 from src.calendar.models import (
     CALENDAR_TZ,
     CalendarBinding,
@@ -19,10 +20,12 @@ from src.calendar.models import (
     CalendarUserError,
     calendar_now,
 )
-from src.calendar.discord_models import can_manage_events, is_external_scheduled
 from src.discord_utils import is_text_channel, missing_channel_permissions
 from src.state import (
-    cancel_task, load_state_or_disable, read_json_state, start_task,
+    cancel_task,
+    load_state_or_disable,
+    read_json_state,
+    start_task,
     write_json_atomic,
 )
 
@@ -47,6 +50,7 @@ class CalendarManager:
         self._versions: defaultdict[int, int] = defaultdict(int)
         self._client: discord.Client | None = None
         self._task: asyncio.Task[None] | None = None
+        self._closing = False
         self._board_view_factory = board_view_factory
         self._bindings, self._state_available = load_state_or_disable(
             self._load_state, {}, "行事曆看板狀態檔無法讀取；行事曆已停止寫入。"
@@ -144,16 +148,15 @@ class CalendarManager:
                 "Bot 缺少必要的活動權限：" + "、".join(missing_guild_permissions)
             )
         missing = missing_channel_permissions(
-            channel, bot_member,
+            channel,
+            bot_member,
             (
                 ("view_channel", "View Channel"),
                 ("send_messages", "Send Messages"),
             ),
         )
         if missing:
-            raise CalendarUserError(
-                "Bot 在行事曆頻道缺少必要權限：" + ", ".join(missing)
-            )
+            raise CalendarUserError("Bot 在行事曆頻道缺少必要權限：" + ", ".join(missing))
 
     def _binding_channel(self, guild: discord.Guild) -> discord.TextChannel:
         binding = self.get_binding(guild.id)
@@ -172,10 +175,18 @@ class CalendarManager:
         try:
             message = channel.get_partial_message(message_id)
             await message.delete()
-        except (discord.NotFound, discord.Forbidden, discord.HTTPException):
+        except discord.NotFound, discord.Forbidden, discord.HTTPException:
             return
 
+    def stop_new_work(self) -> None:
+        self._closing = True
+
+    def _assert_accepting_work(self) -> None:
+        if self._closing:
+            raise CalendarUserError("行事曆正在關閉，請稍後再試。")
+
     async def start(self, client: discord.Client) -> None:
+        self._assert_accepting_work()
         self._client = client
         self._task = start_task(
             self._task,
@@ -184,6 +195,7 @@ class CalendarManager:
         )
 
     async def close(self) -> None:
+        self.stop_new_work()
         await cancel_task(self._task)
         self._task = None
         self._client = None
@@ -200,10 +212,14 @@ class CalendarManager:
         if client is None:
             return
         await client.wait_until_ready()
-        while True:
+        while not self._closing:
             await asyncio.sleep(self.seconds_until_next_midnight())
+            if self._closing:
+                return
             for guild_id in tuple(self._bindings):
                 guild = client.get_guild(guild_id)
+                if self._closing:
+                    return
                 if guild is not None:
                     try:
                         await self.refresh_guild(guild)
@@ -221,7 +237,9 @@ class CalendarManager:
         return sorted(guild.scheduled_events, key=lambda event: event.start_time)
 
     def _build_board(
-        self, guild_name: str, events: Sequence[discord.ScheduledEvent],
+        self,
+        guild_name: str,
+        events: Sequence[discord.ScheduledEvent],
     ) -> tuple[discord.ui.LayoutView, list[discord.File]]:
         return self._board_view_factory(guild_name, events)
 
@@ -233,8 +251,10 @@ class CalendarManager:
         actor_id: int,
         is_current: Callable[[], bool] | None = None,
     ) -> CalendarBinding:
+        self._assert_accepting_work()
         version = self._versions[guild.id]
         async with self._locks[guild.id]:
+            self._assert_accepting_work()
             if not self._state_available:
                 raise CalendarUserError("行事曆狀態目前不可用，無法綁定。")
             if is_current is not None and not is_current():
@@ -247,7 +267,11 @@ class CalendarManager:
                 message = await channel.send(files=files, view=view)
             except (discord.Forbidden, discord.HTTPException) as exc:
                 raise CalendarUserError("Bot 無法在指定頻道建立行事曆看板。") from exc
-            if version != self._versions[guild.id] or (is_current is not None and not is_current()):
+            if (
+                self._closing
+                or version != self._versions[guild.id]
+                or (is_current is not None and not is_current())
+            ):
                 await self._safe_delete_message(channel, message.id)
                 raise CalendarUserError("行事曆頻道已變更，請重新綁定。")
             old_binding = self._bindings.get(guild.id)
@@ -259,7 +283,7 @@ class CalendarManager:
             except CalendarUserError:
                 try:
                     await message.delete()
-                except (discord.Forbidden, discord.HTTPException):
+                except discord.Forbidden, discord.HTTPException:
                     pass
                 raise
             if old_binding is not None and (
@@ -272,11 +296,16 @@ class CalendarManager:
             return new_binding
 
     async def unbind(
-        self, guild: discord.Guild, *, actor_id: int,
+        self,
+        guild: discord.Guild,
+        *,
+        actor_id: int,
         expected_binding: CalendarBinding | None = None,
         is_current: Callable[[], bool] | None = None,
     ) -> bool:
+        self._assert_accepting_work()
         async with self._locks[guild.id]:
+            self._assert_accepting_work()
             if not self._state_available:
                 raise CalendarUserError("行事曆狀態目前不可用，無法解除綁定。")
             if is_current is not None and not is_current():
@@ -295,10 +324,12 @@ class CalendarManager:
             return True
 
     async def refresh_guild(self, guild: discord.Guild) -> bool:
-        if not self._state_available:
+        if self._closing or not self._state_available:
             return False
         version = self._versions[guild.id]
         async with self._locks[guild.id]:
+            if self._closing:
+                return False
             binding = self._bindings.get(guild.id)
             if binding is None:
                 return False
@@ -307,6 +338,8 @@ class CalendarManager:
                 try:
                     channel = await guild.fetch_channel(binding.channel_id)
                 except discord.NotFound:
+                    if self._closing:
+                        return False
                     new_bindings = dict(self._bindings)
                     new_bindings.pop(guild.id, None)
                     try:
@@ -314,9 +347,9 @@ class CalendarManager:
                     except CalendarUserError:
                         pass
                     return False
-                except (asyncio.TimeoutError, aiohttp.ClientError, discord.DiscordException):
+                except asyncio.TimeoutError, aiohttp.ClientError, discord.DiscordException:
                     return False
-            if not is_text_channel(channel):
+            if self._closing or not is_text_channel(channel):
                 return False
             try:
                 self._assert_bot_permissions(guild, channel)
@@ -326,14 +359,16 @@ class CalendarManager:
                     message = channel.get_partial_message(binding.message_id)
                     await message.edit(attachments=files, view=view)
                     return True
-                except (asyncio.TimeoutError, aiohttp.ClientError):
+                except asyncio.TimeoutError, aiohttp.ClientError:
                     logging.error("Discord 行事曆看板更新失敗。")
                     return False
                 except discord.NotFound:
+                    if self._closing:
+                        return False
                     # Attachments are consumed by the failed edit; rebuild them.
                     view, files = self._build_board(guild.name, events)
                     replacement = await channel.send(files=files, view=view)
-                    if version != self._versions[guild.id]:
+                    if self._closing or version != self._versions[guild.id]:
                         await self._safe_delete_message(channel, replacement.id)
                         return False
                     new_bindings = dict(self._bindings)
@@ -347,14 +382,14 @@ class CalendarManager:
                     except CalendarUserError:
                         try:
                             await replacement.delete()
-                        except (discord.Forbidden, discord.HTTPException):
+                        except discord.Forbidden, discord.HTTPException:
                             pass
                         return False
                     return True
             except CalendarUserError:
                 logging.error("行事曆看板重新整理失敗。")
                 return False
-            except (discord.Forbidden, discord.HTTPException):
+            except discord.Forbidden, discord.HTTPException:
                 logging.exception("Discord 行事曆看板更新失敗。")
                 return False
 
@@ -409,13 +444,9 @@ class CalendarManager:
     ) -> discord.ScheduledEvent:
         event = guild.get_scheduled_event(event_id)
         if event is None:
-            raise CalendarEditUnavailable(
-                "這個活動已被刪除或取消，請從看板重新選擇活動。"
-            )
+            raise CalendarEditUnavailable("這個活動已被刪除或取消，請從看板重新選擇活動。")
         if not is_external_scheduled(event):
-            raise CalendarEditUnavailable(
-                "這個活動已失效或不再可編輯，請從看板重新選擇活動。"
-            )
+            raise CalendarEditUnavailable("這個活動已失效或不再可編輯，請從看板重新選擇活動。")
         return event
 
     async def create_event(
@@ -424,6 +455,7 @@ class CalendarManager:
         event_input: CalendarEventInput,
         actor: discord.Member | discord.User,
     ) -> discord.ScheduledEvent:
+        self._assert_accepting_work()
         self.assert_user_can_manage(actor)
         self._binding_channel(guild)
         if event_input.start_time <= calendar_now():
@@ -449,9 +481,7 @@ class CalendarManager:
             ) from exc
         except discord.Forbidden as exc:
             logging.exception("Discord 建立行事曆活動失敗。")
-            raise CalendarUserError(
-                "Bot 缺少活動權限，請管理員確認活動權限後再試。"
-            ) from exc
+            raise CalendarUserError("Bot 缺少活動權限，請管理員確認活動權限後再試。") from exc
         except discord.HTTPException as exc:
             logging.exception("Discord 建立行事曆活動失敗。")
             raise CalendarUserError("Discord 暫時無法建立活動，請稍後再試。") from exc
@@ -464,6 +494,7 @@ class CalendarManager:
         event_input: CalendarEventInput,
         actor: discord.Member | discord.User,
     ) -> discord.ScheduledEvent:
+        self._assert_accepting_work()
         self.assert_user_can_manage(actor)
         self._binding_channel(guild)
         if type(event_id) is not int or event_id <= 0:
@@ -488,14 +519,10 @@ class CalendarManager:
             ) from exc
         except discord.NotFound as exc:
             logging.exception("Discord 編輯行事曆活動失敗。")
-            raise CalendarEditUnavailable(
-                "這個活動已被刪除或取消，請從看板重新選擇活動。"
-            ) from exc
+            raise CalendarEditUnavailable("這個活動已被刪除或取消，請從看板重新選擇活動。") from exc
         except discord.Forbidden as exc:
             logging.exception("Discord 編輯行事曆活動失敗。")
-            raise CalendarUserError(
-                "Bot 缺少活動權限，請管理員確認活動權限後再試。"
-            ) from exc
+            raise CalendarUserError("Bot 缺少活動權限，請管理員確認活動權限後再試。") from exc
         except discord.HTTPException as exc:
             logging.exception("Discord 編輯行事曆活動失敗。")
             raise CalendarUserError("Discord 暫時無法修改活動，請稍後再試。") from exc

@@ -1,26 +1,28 @@
 from __future__ import annotations
 
 import asyncio
-from dataclasses import dataclass, field
 import json
 import os
-from pathlib import Path
 import shutil
 import signal
 import struct
 import sys
 import tempfile
+from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Literal
 
 from src.ai.protocol import (
+    MAX_IMAGE_BYTES,
+    MEDIA_CHUNK_BYTES,
+    MEDIA_HEADER_LIMIT,
+    MEDIA_KINDS,
+    OUTPUT_IMAGE_TYPES,
     CodexBridgeError,
     ImageAttachmentError,
-    MAX_IMAGE_BYTES, MEDIA_CHUNK_BYTES, MEDIA_HEADER_LIMIT, MEDIA_KINDS,
-    OUTPUT_IMAGE_TYPES,
     validate_image_bytes,
 )
 from src.state import consume_task_exception
-
 
 _MAX_WORKERS = 2
 _MAX_PENDING = 4
@@ -71,9 +73,10 @@ class MediaExecutor:
             or kind not in MEDIA_KINDS
             or not isinstance(data, bytes)
             or len(data) > MAX_IMAGE_BYTES
-            or (content_type is not None and (
-                not isinstance(content_type, str) or len(content_type) > 128
-            ))
+            or (
+                content_type is not None
+                and (not isinstance(content_type, str) or len(content_type) > 128)
+            )
         ):
             raise CodexBridgeError("unavailable")
         if self._closed or self._failed:
@@ -101,14 +104,13 @@ class MediaExecutor:
 
     async def close(self, *, deadline: float) -> None:
         self._closed = True
-        self._close_deadline = deadline if self._close_deadline is None else min(
-            self._close_deadline, deadline
+        self._close_deadline = (
+            deadline if self._close_deadline is None else min(self._close_deadline, deadline)
         )
         for job in tuple(self._jobs):
             job.cancelled.set()
         tasks = {
-            job.runner for job in self._jobs
-            if job.runner is not None and not job.runner.done()
+            job.runner for job in self._jobs if job.runner is not None and not job.runner.done()
         }
         if tasks:
             remaining = max(0.0, deadline - asyncio.get_running_loop().time())
@@ -134,7 +136,8 @@ class MediaExecutor:
             cancelled = asyncio.create_task(job.cancelled.wait())
             try:
                 done, _pending = await asyncio.wait(
-                    {acquire, cancelled}, return_when=asyncio.FIRST_COMPLETED,
+                    {acquire, cancelled},
+                    return_when=asyncio.FIRST_COMPLETED,
                 )
                 if acquire in done:
                     acquired = True
@@ -142,7 +145,11 @@ class MediaExecutor:
                     acquire.cancel()
                     await asyncio.gather(acquire, return_exceptions=True)
                 if job.cancelled.is_set() or job.deadline <= asyncio.get_running_loop().time():
-                    code = "timeout" if job.deadline <= asyncio.get_running_loop().time() else "unavailable"
+                    code = (
+                        "timeout"
+                        if job.deadline <= asyncio.get_running_loop().time()
+                        else "unavailable"
+                    )
                     raise CodexBridgeError(code)
             finally:
                 cancelled.cancel()
@@ -155,7 +162,8 @@ class MediaExecutor:
             cancelled = asyncio.create_task(job.cancelled.wait())
             try:
                 done, _pending = await asyncio.wait(
-                    {spawn, cancelled}, return_when=asyncio.FIRST_COMPLETED,
+                    {spawn, cancelled},
+                    return_when=asyncio.FIRST_COMPLETED,
                 )
                 if cancelled in done and spawn not in done:
                     job.process = await asyncio.shield(spawn)
@@ -218,7 +226,8 @@ class MediaExecutor:
         cancelled = asyncio.create_task(job.cancelled.wait())
         try:
             done, _pending = await asyncio.wait(
-                {job.collector, cancelled}, return_when=asyncio.FIRST_COMPLETED,
+                {job.collector, cancelled},
+                return_when=asyncio.FIRST_COMPLETED,
             )
             if cancelled in done:
                 raise CodexBridgeError("unavailable")
@@ -233,7 +242,8 @@ class MediaExecutor:
         process: asyncio.subprocess.Process,
     ) -> tuple[str, bytes]:
         done, _pending = await asyncio.wait(
-            job.pipes, return_when=asyncio.FIRST_EXCEPTION,
+            job.pipes,
+            return_when=asyncio.FIRST_EXCEPTION,
         )
         for task in done:
             exception = consume_task_exception(task)
@@ -245,19 +255,23 @@ class MediaExecutor:
         return next(value for value in values if isinstance(value, tuple))
 
     async def _write_request(
-        self, process: asyncio.subprocess.Process, metadata: bytes, data: bytes,
+        self,
+        process: asyncio.subprocess.Process,
+        metadata: bytes,
+        data: bytes,
     ) -> None:
         assert process.stdin is not None
         process.stdin.write(struct.pack(">I", len(metadata)) + metadata)
         await process.stdin.drain()
         for offset in range(0, len(data), MEDIA_CHUNK_BYTES):
-            process.stdin.write(data[offset:offset + MEDIA_CHUNK_BYTES])
+            process.stdin.write(data[offset : offset + MEDIA_CHUNK_BYTES])
             await process.stdin.drain()
         process.stdin.close()
         await process.stdin.wait_closed()
 
     async def _read_reply(
-        self, process: asyncio.subprocess.Process,
+        self,
+        process: asyncio.subprocess.Process,
     ) -> tuple[str, bytes]:
         assert process.stdout is not None
         prefix = await process.stdout.readexactly(4)
@@ -312,7 +326,9 @@ class MediaExecutor:
         return deadline
 
     async def _wait_cleanup_task(
-        self, task: asyncio.Future[object], deadline: float,
+        self,
+        task: asyncio.Future[object],
+        deadline: float,
     ) -> None:
         loop = asyncio.get_running_loop()
         while not task.done():
@@ -358,7 +374,7 @@ class MediaExecutor:
             if job.temporary_dir is not None:
                 shutil.rmtree(job.temporary_dir)
             return True
-        except (OSError, TimeoutError):
+        except OSError, TimeoutError:
             return False
 
     @staticmethod
@@ -379,7 +395,12 @@ class MediaExecutor:
     async def _spawn(self, temporary_dir: Path) -> asyncio.subprocess.Process:
         root = Path(__file__).resolve().parents[2]
         return await asyncio.create_subprocess_exec(
-            sys.executable, "-E", "-s", "-B", "-m", "src.ai.media_worker",
+            sys.executable,
+            "-E",
+            "-s",
+            "-B",
+            "-m",
+            "src.ai.media_worker",
             cwd=root,
             env={
                 "PATH": os.environ.get("PATH", ""),

@@ -57,8 +57,12 @@ class Admission:
 
     @asynccontextmanager
     async def claim(
-        self, key: str, *, queue_timeout_seconds: float = 30,
-        access: CodexAccess | None = None, user_id: int | None = None,
+        self,
+        key: str,
+        *,
+        queue_timeout_seconds: float = 30,
+        access: CodexAccess | None = None,
+        user_id: int | None = None,
         parent_channel_id: int | None = None,
         work_timeout_seconds: float = 150,
         deadline: float | None = None,
@@ -114,19 +118,32 @@ class Admission:
                 self.active_keys.discard(key)
             self._advance()
 
-    async def cancel(self, *, guild_id: int | None = None, channel_id: int | None = None,
-                     user_id: int | None = None, timeout_seconds: float = 5,
-                     include_children: bool = False,
-                     deadline: float | None = None) -> None:
+    async def cancel(
+        self,
+        *,
+        guild_id: int | None = None,
+        channel_id: int | None = None,
+        user_id: int | None = None,
+        timeout_seconds: float = 5,
+        include_children: bool = False,
+        deadline: float | None = None,
+    ) -> None:
         current = asyncio.current_task()
         targets = {
-            job.task for job in tuple(self.jobs.values())
-            if job.task is not current and not job.task.done()
-            and (guild_id is None or scope_matches(
-                job.key, guild_id, channel_id,
-                parent_channel_id=job.parent_channel_id,
-                include_children=include_children,
-            ))
+            job.task
+            for job in tuple(self.jobs.values())
+            if job.task is not current
+            and not job.task.done()
+            and (
+                guild_id is None
+                or scope_matches(
+                    job.key,
+                    guild_id,
+                    channel_id,
+                    parent_channel_id=job.parent_channel_id,
+                    include_children=include_children,
+                )
+            )
             and (user_id is None or job.user_id == user_id)
         }
         for task in targets:

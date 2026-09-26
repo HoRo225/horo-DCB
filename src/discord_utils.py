@@ -1,11 +1,10 @@
 from __future__ import annotations
 
-from collections.abc import Awaitable, Callable, Iterable
 import logging
+from collections.abc import Awaitable, Callable, Iterable
 from typing import TypeGuard, TypeVar
 
 import discord
-
 
 ChannelT = TypeVar("ChannelT", bound=discord.abc.GuildChannel)
 
@@ -20,10 +19,7 @@ def missing_channel_permissions(
     required: Iterable[tuple[str, str]],
 ) -> list[str]:
     permissions = channel.permissions_for(member)
-    return [
-        label for attribute, label in required
-        if not getattr(permissions, attribute, False)
-    ]
+    return [label for attribute, label in required if not getattr(permissions, attribute, False)]
 
 
 async def find_or_create_channel(
@@ -37,7 +33,8 @@ async def find_or_create_channel(
     label: str,
 ) -> tuple[ChannelT | None, bool]:
     candidates = [
-        channel for channel in guild.channels
+        channel
+        for channel in guild.channels
         if isinstance(channel, channel_class)
         and channel.type == channel_type
         and channel.name == name
@@ -61,11 +58,11 @@ async def find_or_create_channel(
         return None, False
     try:
         return await create(name, reason=reason), True
-    except (discord.Forbidden, discord.HTTPException):
+    except discord.Forbidden, discord.HTTPException:
         logging.exception("自動建立%s失敗。", label)
         return None, False
 
 
 def truncate_discord_text(text: str, prefix_limit: int, suffix: str) -> str:
-    prefix = text[:max(0, prefix_limit)].rstrip("\\")
+    prefix = text[: max(0, prefix_limit)].rstrip("\\")
     return f"{prefix}…{suffix}"

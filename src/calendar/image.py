@@ -1,15 +1,16 @@
 from __future__ import annotations
 
 import calendar as month_calendar
+import logging
 from collections.abc import Sequence
+from datetime import datetime
 from functools import cache
 from io import BytesIO
-import logging
 
 from PIL import Image, ImageDraw, ImageFont
 
 from src.calendar.discord_models import event_local_time
-from src.calendar.models import calendar_now
+from src.calendar.models import CALENDAR_TZ, calendar_now
 
 MONTH_IMAGE_FILENAME = "calendar-month.png"
 FONT_DIR = "/usr/share/fonts/opentype/noto"
@@ -43,12 +44,16 @@ def _fonts() -> tuple[ImageFont.FreeTypeFont, ...] | None:
         return None
 
 
-def render_month_png(events: Sequence[object]) -> bytes | None:
+def render_month_png(
+    events: Sequence[object],
+    *,
+    now: datetime | None = None,
+) -> bytes | None:
     fonts = _fonts()
     if fonts is None:
         return None
     title_font, label_font, day_font = fonts
-    now = calendar_now()
+    now = (now or calendar_now()).astimezone(CALENDAR_TZ)
     event_days = {
         local.day
         for event in events
@@ -56,7 +61,8 @@ def render_month_png(events: Sequence[object]) -> bytes | None:
         and (local.year, local.month) == (now.year, now.month)
     }
     weeks = month_calendar.Calendar(firstweekday=month_calendar.SUNDAY).monthdayscalendar(
-        now.year, now.month,
+        now.year,
+        now.month,
     )
     cell_width = (WIDTH - 2 * MARGIN - 6 * GAP) / 7
     grid_top = MARGIN + HEADER_HEIGHT
@@ -67,7 +73,10 @@ def render_month_png(events: Sequence[object]) -> bytes | None:
     for column, label in enumerate("日一二三四五六"):
         center_x = MARGIN + column * (cell_width + GAP) + cell_width / 2
         draw.text(
-            (center_x, grid_top - 20), label, font=label_font, anchor="mm",
+            (center_x, grid_top - 20),
+            label,
+            font=label_font,
+            anchor="mm",
             fill=WEEKEND if column in (0, 6) else MUTED,
         )
     for row, week in enumerate(weeks):
@@ -85,8 +94,11 @@ def render_month_png(events: Sequence[object]) -> bytes | None:
                 width=3,
             )
             draw.text(
-                (left + cell_width / 2, top + CELL_HEIGHT / 2), str(day),
-                font=day_font, anchor="mm", fill=WHITE if today else INK,
+                (left + cell_width / 2, top + CELL_HEIGHT / 2),
+                str(day),
+                font=day_font,
+                anchor="mm",
+                fill=WHITE if today else INK,
             )
     output = BytesIO()
     image.save(output, format="PNG", optimize=True)

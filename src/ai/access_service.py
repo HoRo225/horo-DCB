@@ -8,10 +8,13 @@ from src.ai.access import CodexAccess, valid_allowlist_ids
 from src.ai.client import CodexBridgeClient
 from src.state import consume_task_exception
 
-
 AccessChangeOutcome = Literal[
-    "unchanged", "updated", "updated_with_warning", "persist_failed",
-    "archive_failed", "archived_persist_failed",
+    "unchanged",
+    "updated",
+    "updated_with_warning",
+    "persist_failed",
+    "archive_failed",
+    "archived_persist_failed",
 ]
 
 
@@ -28,28 +31,41 @@ class AiAccessService:
             or guild_id != self.access.guild_id
             or not self.access.enabled
             or not valid_allowlist_ids(selected, container=frozenset, minimum=1)
-            or (roles and (
-                not self.access.state_available
-                or not self.access.channel_ids
-                or guild_id in selected
-            ))
+            or (
+                roles
+                and (
+                    not self.access.state_available
+                    or not self.access.channel_ids
+                    or guild_id in selected
+                )
+            )
         ):
             raise ValueError("invalid Codex access change")
 
     async def change_channels(
-        self, guild_id: int, channel_ids: frozenset[int], *,
+        self,
+        guild_id: int,
+        channel_ids: frozenset[int],
+        *,
         still_current: Callable[[], bool] | None = None,
     ) -> AccessChangeOutcome:
         return await self._accept(guild_id, channel_ids, roles=False, still_current=still_current)
 
     async def change_roles(
-        self, guild_id: int, role_ids: frozenset[int], *,
+        self,
+        guild_id: int,
+        role_ids: frozenset[int],
+        *,
         still_current: Callable[[], bool] | None = None,
     ) -> AccessChangeOutcome:
         return await self._accept(guild_id, role_ids, roles=True, still_current=still_current)
 
     async def _accept(
-        self, guild_id: int, selected: frozenset[int], *, roles: bool,
+        self,
+        guild_id: int,
+        selected: frozenset[int],
+        *,
+        roles: bool,
         still_current: Callable[[], bool] | None,
     ) -> AccessChangeOutcome:
         self._validate(guild_id, selected, roles=roles)
@@ -67,7 +83,11 @@ class AiAccessService:
         return await asyncio.shield(task)
 
     async def _change(
-        self, guild_id: int, selected: frozenset[int], *, roles: bool,
+        self,
+        guild_id: int,
+        selected: frozenset[int],
+        *,
+        roles: bool,
     ) -> AccessChangeOutcome:
         async with self.access.mutation_lock:
             previous = self.access.role_ids if roles else self.access.channel_ids
