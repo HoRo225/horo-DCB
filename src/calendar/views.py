@@ -1,17 +1,5 @@
 from __future__ import annotations
 
-from src.calendar.admin_views import (
-    CALENDAR_STATE_UNAVAILABLE_NOTICE as CALENDAR_STATE_UNAVAILABLE_NOTICE,
-)
-from src.calendar.admin_views import (
-    CalendarAdminView as CalendarAdminView,
-)
-from src.calendar.admin_views import (
-    _CalendarAdminActionButton as _CalendarAdminActionButton,
-)
-from src.calendar.admin_views import (
-    _CalendarAdminChannelSelect as _CalendarAdminChannelSelect,
-)
 from src.calendar.board_views import (
     BOARD_BROWSE_CUSTOM_ID as BOARD_BROWSE_CUSTOM_ID,
 )

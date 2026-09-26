@@ -11,7 +11,6 @@ from src.calendar.image import MONTH_IMAGE_FILENAME, render_month_png
 from src.calendar.manager import CalendarManager
 from src.calendar.models import CalendarUserError, calendar_now
 from src.calendar.views import (
-    CalendarAdminView,
     CalendarBoardView,
     CalendarBrowseView,
     CalendarEditPickerView,
@@ -28,9 +27,6 @@ class CalendarController:
 
     def persistent_board_view(self) -> CalendarBoardView:
         return CalendarBoardView(self, can_edit=False)
-
-    def admin_view(self, *, user_id: int, guild: discord.Guild) -> CalendarAdminView:
-        return CalendarAdminView(self.manager, user_id=user_id, guild=guild)
 
     def build_board(
         self,

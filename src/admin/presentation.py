@@ -401,6 +401,7 @@ def render_overview(view: AdminPanelView) -> None:
         steam_shortcut = view._button("steam", "前往設定")
 
     authenticated = "已登入" if view.codex_status.authenticated else "未登入"
+    calendar_label, calendar_detail = calendar_status(view)
     rows = (
         ("AI 助手", ai.label, ai.detail or f"{ai_display(view)[0]} · {authenticated}", ai_shortcut),
         (
@@ -416,6 +417,7 @@ def render_overview(view: AdminPanelView) -> None:
             steam_shortcut,
         ),
     )
+    rows += (("行事曆", calendar_label, calendar_detail, view._button("calendar", "前往設定")),)
     issues = sum(label == "需要處理" for _, label, _, _ in rows)
     subtitle = f"{len(rows)} 個模組 · " + (f"{issues} 個需要處理" if issues else "狀態正常")
     children = view._header("管理控制台", "overview", subtitle=subtitle)
@@ -554,6 +556,7 @@ def render_modules(view: AdminPanelView) -> None:
     summary = codex_summary(ai_state(view))
     voice = voice_state(view)
     steam = steam_state(view)
+    calendar_label, calendar_detail = calendar_status(view)
     children = view._header("功能模組", "modules", "modules")
     if summary is not None:
         children.append(discord.ui.TextDisplay(summary))
@@ -561,6 +564,10 @@ def render_modules(view: AdminPanelView) -> None:
         (
             discord.ui.TextDisplay(voice_summary(voice)),
             discord.ui.TextDisplay(steam_summary(steam)),
+            discord.ui.Section(
+                f"## 📅 行事曆\n**{calendar_label}**\n-# {calendar_detail}",
+                accessory=view._button("calendar", "前往設定"),
+            ),
             discord.ui.Separator(),
             view._actions(),
         )
@@ -693,4 +700,70 @@ def render_steam(
             ),
         )
     )
+    view._set_container(*children)
+
+
+def calendar_status(view: AdminPanelView) -> tuple[str, str]:
+    manager = view.calendar
+    if not manager.state_available:
+        return "需要處理", "行事曆狀態目前不可用，請檢查儲存狀態並重新啟動 Bot。"
+    binding = manager.get_binding(view.guild_id)
+    if binding is None:
+        return "需要處理", "尚未綁定；選擇文字頻道後按「套用綁定」。"
+    if not manager.binding_channel_is_valid(view.guild):
+        return "需要處理", f"<#{binding.channel_id}> 已不存在或不是一般文字頻道，請重新綁定或解除。"
+    return "狀態正常", f"看板 <#{binding.channel_id}> · 隨活動與日期自動更新"
+
+
+def render_calendar(view: AdminPanelView, note: str | None = None) -> None:
+    manager = view.calendar
+    available = manager.state_available
+    if note is not None:
+        view.calendar_notice = note
+    if not available:
+        view.calendar_unbind_target = None
+    binding = manager.get_binding(view.guild_id) if available else None
+    valid = available and manager.binding_channel_is_valid(view.guild)
+    label, text = calendar_status(view)
+    children = view._header("行事曆", "calendar", "modules", "設定公開看板的位置與更新狀態")
+    children.append(discord.ui.TextDisplay(f"{STATUS_DOTS[label]} **{label}**\n-# {text}"))
+    channel = view.pending_calendar_channel
+    if channel is not None:
+        children.append(discord.ui.TextDisplay(f"**待套用**　<#{channel.id}>"))
+    view._calendar_channel_control.disabled = not available
+    children.append(discord.ui.ActionRow(view._calendar_channel_control))
+    if view.calendar_unbind_target is not None:
+        children.append(
+            discord.ui.TextDisplay(
+                "### 解除綁定？\n-# 看板訊息將被移除；既有 Discord 活動不會刪除。"
+            )
+        )
+        buttons = (
+            view._button("calendar_unbind_confirm", "確認解除", style=discord.ButtonStyle.danger),
+            view._button("calendar_unbind_cancel", "取消"),
+        )
+    else:
+        buttons = (
+            view._button(
+                "calendar_apply",
+                "套用綁定",
+                style=discord.ButtonStyle.primary,
+                disabled=not available or channel is None,
+            ),
+            view._button("calendar_unbind", "解除綁定", disabled=not available or binding is None),
+        )
+        if valid and binding is not None:
+            children.append(
+                discord.ui.ActionRow(
+                    discord.ui.Button(
+                        label="開啟看板",
+                        style=discord.ButtonStyle.link,
+                        url=f"https://discord.com/channels/{view.guild_id}/{binding.channel_id}/{binding.message_id}",
+                    )
+                )
+            )
+    children.extend((discord.ui.Separator(), *_footer_note(view.calendar_notice)))
+    actions = view._actions(*buttons)
+    view._button("refresh", "重新整理", disabled=not available or not valid)
+    children.append(actions)
     view._set_container(*children)

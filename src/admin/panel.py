@@ -10,6 +10,7 @@ import aiohttp
 import discord
 
 from src.admin import presentation
+from src.admin.components import _CalendarChannelSelect
 from src.admin.components import (
     _CodexChannelSelect as _CodexChannelSelect,
 )
@@ -50,6 +51,8 @@ from src.ai.access_service import AiAccessService
 from src.ai.client import CodexBridgeClient
 from src.ai.protocol import EMPTY_CODEX_RUNTIME_STATUS, CodexRateLimits, CodexRuntimeStatus
 from src.brand import BRAND_COLOUR, CARD_FILENAME, brand_files, branded_title
+from src.calendar.manager import CalendarManager
+from src.calendar.models import CalendarBinding, CalendarUserError
 from src.discord_utils import is_text_channel
 from src.steam.notifier import (
     SteamConfigurationError,
@@ -65,7 +68,7 @@ RATE_PAGES = frozenset({"overview", "ai", "ai_tech"})
 MAIN_PAGES = (
     ("overview", "總覽", "控制台首頁"),
     ("ai", "AI 助手", "Codex OAuth 與對話"),
-    ("modules", "功能模組", "臨時語音與 Steam 免費遊戲"),
+    ("modules", "功能模組", "臨時語音、Steam 與行事曆"),
 )
 AI_PAGES = (
     ("ai", "狀態", "帳號狀態與額度"),
@@ -75,6 +78,7 @@ AI_PAGES = (
 MODULE_PAGES = (
     ("voice", "臨時語音", "入口頻道與同步狀態"),
     ("steam", "Steam 免費遊戲", "通知設定與手動查詢"),
+    ("calendar", "行事曆", "公開看板的位置與更新狀態"),
 )
 PAGES = frozenset(page for group in (MAIN_PAGES, AI_PAGES, MODULE_PAGES) for page, *_ in group)
 
@@ -101,6 +105,8 @@ class AdminPanelView(discord.ui.LayoutView):
         *,
         user_id: int,
         guild_id: int,
+        guild: discord.Guild,
+        calendar: CalendarManager,
         codex_client: CodexBridgeClient,
         codex_access: CodexAccess,
         codex_status: CodexRuntimeStatus,
@@ -116,6 +122,12 @@ class AdminPanelView(discord.ui.LayoutView):
         super().__init__(timeout=15 * 60)
         self.user_id = user_id
         self.guild_id = guild_id
+        self.guild = guild
+        self.calendar = calendar
+        self.pending_calendar_channel: discord.TextChannel | None = None
+        self.calendar_unbind_target: CalendarBinding | None = None
+        self.calendar_notice: str | None = None
+        self._calendar_channel_control = _CalendarChannelSelect()
         self.codex_client = codex_client
         self.codex_access = codex_access
         self.access_service = access_service
@@ -296,7 +308,7 @@ class AdminPanelView(discord.ui.LayoutView):
             "返回 AI 助手"
             if current in {"ai_access", "ai_tech"}
             else "返回功能模組"
-            if current in {"voice", "steam"}
+            if current in {"voice", "steam", "calendar"}
             else "選擇頁面"
         )
         return discord.ui.ActionRow(
@@ -331,6 +343,8 @@ class AdminPanelView(discord.ui.LayoutView):
         section: str | None = None,
         subtitle: str = "",
     ) -> list[discord.ui.Item]:
+        if page != "calendar":
+            self.calendar_unbind_target = None
         self.page = page
         self._rate_display_item = None
         children: list[discord.ui.Item] = [branded_title(title, subtitle), self._main_select(page)]
@@ -570,6 +584,7 @@ class AdminPanelView(discord.ui.LayoutView):
         await self.stop_rate_refresh()
 
     def _render_closed(self) -> None:
+        self.calendar_unbind_target = None
         self.page = "closed"
         self._rate_display_item = None
         self._set_container(
@@ -590,6 +605,8 @@ class AdminPanelView(discord.ui.LayoutView):
             presentation.render_modules(self)
         elif page == "voice":
             presentation.render_voice(self)
+        elif page == "calendar":
+            presentation.render_calendar(self)
         elif page == "steam":
             presentation.render_steam(self)
         else:
@@ -806,6 +823,109 @@ class AdminPanelView(discord.ui.LayoutView):
 
         await self._run_operation(interaction, work)
 
+    async def handle_calendar_channel_select(
+        self, interaction: discord.Interaction, channel: object | None
+    ) -> None:
+        if self.page != "calendar":
+            await interaction.response.defer()
+            return
+
+        async def work(operation: int) -> Callable[[], None] | None:
+            if not self.calendar.state_available:
+                return lambda: presentation.render_calendar(self)
+            if (
+                not is_text_channel(channel)
+                or getattr(getattr(channel, "guild", None), "id", None) != self.guild_id
+            ):
+                return lambda: presentation.render_calendar(
+                    self, "只能選擇目前伺服器的一般文字頻道。"
+                )
+            self.pending_calendar_channel = channel
+            self.calendar_unbind_target = None
+            self.calendar_notice = None
+            return lambda: presentation.render_calendar(self)
+
+        await self._run_operation(interaction, work)
+
+    async def _calendar_action(
+        self,
+        interaction: discord.Interaction,
+        action: str,
+        operation: int,
+        channel: discord.TextChannel | None,
+        target: CalendarBinding | None,
+        revision: int,
+    ) -> Callable[[], None] | None:
+        manager = self.calendar
+        if not manager.state_available:
+            return lambda: presentation.render_calendar(self)
+        if action == "calendar_unbind":
+            self.calendar_unbind_target = manager.get_binding(self.guild_id)
+            return lambda: presentation.render_calendar(self)
+        if action == "calendar_unbind_cancel":
+            self.calendar_unbind_target = None
+            return lambda: presentation.render_calendar(self)
+        member_snapshot = self.guild.get_member(self.user_id)
+        if member_snapshot is None:
+            try:
+                async with asyncio.timeout(3):
+                    member_snapshot = await self.guild.fetch_member(self.user_id)
+            except TimeoutError, discord.HTTPException:
+                return None
+        if not member_snapshot.guild_permissions.administrator or not self._is_current(operation):
+            return None
+
+        def current() -> bool:
+            member = self.guild.get_member(self.user_id) or member_snapshot
+            return (
+                self._is_current(operation)
+                and self.page == "calendar"
+                and member is not None
+                and member.guild_permissions.administrator
+                and revision == manager.get_binding_revision(self.guild_id)
+                and (action != "calendar_unbind_confirm" or self.calendar_unbind_target == target)
+            )
+
+        try:
+            if action == "calendar_apply":
+                if channel is None:
+                    note = "⚠️ 請先選擇文字頻道。"
+                else:
+                    binding = await manager.bind(
+                        self.guild,
+                        channel,
+                        actor_id=self.user_id,
+                        is_current=current,
+                    )
+                    if not self._is_current(operation):
+                        return None
+                    note = f"✓ 已綁定到 <#{binding.channel_id}>。"
+                    if self.pending_calendar_channel == channel:
+                        self.pending_calendar_channel = None
+            elif action == "calendar_unbind_confirm":
+                if target is None or self.calendar_unbind_target != target:
+                    note = "解除確認已取消或失效，請重新確認。"
+                else:
+                    removed = await manager.unbind(
+                        self.guild,
+                        actor_id=self.user_id,
+                        expected_binding=target,
+                        is_current=current,
+                    )
+                    note = "✓ 已解除行事曆看板。" if removed else "目前沒有綁定行事曆看板。"
+                if self._is_current(operation):
+                    self.calendar_unbind_target = None
+            else:
+                if not current():
+                    return None
+                ok = await manager.refresh_guild(self.guild)
+                note = "✓ 行事曆看板已重新整理。" if ok else "⚠️ 行事曆看板目前無法重新整理。"
+        except CalendarUserError as exc:
+            note = f"⚠️ {exc}"
+            if action == "calendar_unbind_confirm" and self._is_current(operation):
+                self.calendar_unbind_target = None
+        return lambda: presentation.render_calendar(self, note)
+
     async def handle_action(self, interaction: discord.Interaction, action: str) -> None:
         if action == "noop":
             await interaction.response.defer()
@@ -816,10 +936,30 @@ class AdminPanelView(discord.ui.LayoutView):
             "voice_sync",
             "steam_role_clear",
             "steam_query",
+            "calendar_apply",
+            "calendar_unbind",
+            "calendar_unbind_confirm",
+            "calendar_unbind_cancel",
         }:
             return
 
+        calendar_action = action.startswith("calendar_") or (
+            action == "refresh" and self.page == "calendar"
+        )
+        if calendar_action and self.page != "calendar":
+            await interaction.response.defer()
+            return
+        channel = self.pending_calendar_channel
+        target = self.calendar_unbind_target
+        revision = self.calendar.get_binding_revision(self.guild_id)
+        if (action in PAGES and action != "calendar") or action == "close":
+            self.calendar_unbind_target = None
+
         async def work(operation: int) -> Callable[[], None] | None:
+            if calendar_action:
+                return await self._calendar_action(
+                    interaction, action, operation, channel, target, revision
+                )
             if action in PAGES - {"ai"}:
                 return lambda: self._render_page(action)
             if action == "close":

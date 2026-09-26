@@ -122,3 +122,21 @@ class _SteamRoleSelect(discord.ui.RoleSelect):
         view = self.view
         if isinstance(view, AdminPanelView) and self.values:
             await view.handle_steam_role_select(interaction, tuple(self.values))
+
+
+class _CalendarChannelSelect(discord.ui.ChannelSelect):
+    def __init__(self) -> None:
+        super().__init__(
+            channel_types=[discord.ChannelType.text],
+            placeholder="選擇新的行事曆頻道",
+            min_values=1,
+            max_values=1,
+        )
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        from src.admin.panel import AdminPanelView
+
+        view = self.view
+        if isinstance(view, AdminPanelView):
+            channel = self.values[0].resolve() if self.values else None
+            await view.handle_calendar_channel_select(interaction, channel)

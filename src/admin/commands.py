@@ -9,7 +9,6 @@ from discord import app_commands
 from src.admin.panel import AdminPanelView
 from src.ai.access import member_role_ids
 from src.ai.protocol import EMPTY_CODEX_RUNTIME_STATUS
-from src.brand import CARD_FILENAME, brand_files
 
 if TYPE_CHECKING:
     from src.bot import HoroBot
@@ -28,6 +27,8 @@ def register_admin_commands(bot: HoroBot) -> None:
             view = AdminPanelView(
                 user_id=interaction.user.id,
                 guild_id=interaction.guild.id,
+                guild=interaction.guild,
+                calendar=bot.calendar,
                 codex_client=bot.codex,
                 user_role_ids=member_role_ids(interaction.user),
                 codex_access=bot.codex_access,
@@ -51,21 +52,3 @@ def register_admin_commands(bot: HoroBot) -> None:
             # Retiring our child must not cancel the framework callback.
             if asyncio.current_task().cancelling() or not session.retired:
                 raise
-
-    @bot.tree.command(name="行事曆", description="開啟行事曆管理")
-    @app_commands.guild_only()
-    @app_commands.default_permissions(administrator=True)
-    async def calendar_panel(interaction: discord.Interaction) -> None:
-        if not await bot._admin_command_allowed(interaction):
-            return
-        assert interaction.guild is not None
-        view = bot.calendar_controller.admin_view(
-            user_id=interaction.user.id,
-            guild=interaction.guild,
-        )
-        await interaction.response.send_message(
-            files=brand_files(CARD_FILENAME),
-            view=view,
-            ephemeral=True,
-        )
-        view.last_interaction = interaction
