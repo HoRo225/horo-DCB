@@ -141,7 +141,8 @@ async def sdk_cancel() -> bool:
     from src.ai.runtime import PRIMARY_MODEL
 
     owned: set[asyncio.Task] = set()
-    thread = handle = collector = interrupt_task = None
+    thread = handle = collector = interrupt_task = running_wait = None
+    running = asyncio.Event()
     passed = False
 
     def own(operation):
@@ -163,6 +164,14 @@ async def sdk_cancel() -> bool:
         try:
             async for event in stream:
                 payload = event.payload
+                if (
+                    event.method == "item/agentMessage/delta"
+                    and getattr(payload, "thread_id", None) == handle.thread_id
+                    and getattr(payload, "turn_id", None) == handle.id
+                    and isinstance(getattr(payload, "delta", None), str)
+                    and payload.delta
+                ):
+                    running.set()
                 if (
                     event.method == "turn/completed"
                     and isinstance(payload, TurnCompletedNotification)
@@ -197,13 +206,24 @@ async def sdk_cancel() -> bool:
             )])), work_deadline)
             # A real handle is the accepted-turn acknowledgement; no chat is retried.
             collector = own(collect())
-            await asyncio.sleep(0)
+            running_wait = own(running.wait())
+            done, _ = await asyncio.wait(
+                {running_wait, collector},
+                timeout=max(0, work_deadline - loop.time()),
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+            if collector.done() or running_wait not in done:
+                raise TimeoutError("running turn was not confirmed")
             interrupt_task = own(handle.interrupt())
             await wait(interrupt_task, work_deadline)
             passed = await wait(collector, work_deadline) == "interrupted"
         except Exception:
             passed = False
         finally:
+            # This local Event waiter is not an SDK RPC and may be cancelled.
+            if running_wait is not None and not running_wait.done():
+                running_wait.cancel()
+                await asyncio.gather(running_wait, return_exceptions=True)
             if handle is not None and collector is not None and not collector.done():
                 try:
                     if interrupt_task is None:
@@ -254,7 +274,7 @@ def main() -> int:
         except Exception:
             passed = False
         if passed:
-            print(f"PASS: sdk-cancel accepted-turn interrupted elapsed={time.monotonic() - started:.1f}s")
+            print(f"PASS: sdk-cancel accepted-turn running-delta interrupted elapsed={time.monotonic() - started:.1f}s")
             return 0
         print("FAILED: sdk-cancel accepted-turn interruption or cleanup unconfirmed")
         return 1

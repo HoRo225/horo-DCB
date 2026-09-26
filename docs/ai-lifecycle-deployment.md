@@ -46,7 +46,7 @@ sudo -n docker exec "$bot_id" python /tmp/verify_ai_live.py cancel --parent-chan
 
 驗證工具只使用合成測試 key，`finally` 精準封存當次 key。它從 Bot 環境取得 token，在記憶體傳遞，不讀登入檔或列印 SDK 回覆。取消案例保持連線 2 秒，關閉 HTTP socket，再確認 30 秒內專用 scope 已取消／detach 且服務回到 ready；容器重啟可接受。只有同 scope 的 archive 可以重試，chat 不重送，也不要求其他使用者的 active 計數為零。真正的執行中取消仍需觀察 Discord 專用對話與服務結果。
 
-另用 `sdk-cancel` 驗證公開 SDK 的真實中斷契約。它在正式 Codex 容器開啟獨立驗證程序，沿用既有 `CODEX_HOME` 與登入，不替換 Bridge 的 client。使用暫存工作目錄、相同安全設定與專用 SDK thread；只有取得 turn handle，再收到該 turn 的 `interrupted` 終止事件，且精準封存與 public close 完成才算通過。`completed`／`failed` 不能當作取消證據，測試不重送 turn，也不輸出內容或識別碼。
+另用 `sdk-cancel` 驗證公開 SDK 的真實中斷契約。它在正式 Codex 容器開啟獨立驗證程序，沿用既有 `CODEX_HOME` 與登入，不替換 Bridge 的 client。使用暫存工作目錄、相同安全設定與專用 SDK thread；取得 turn handle 後，先等到相同 thread／turn 的非空 `item/agentMessage/delta` 才提出中斷。只有收到該 turn 的 `interrupted` 終止事件，且精準封存與 public close 完成才算通過。`completed`／`failed` 不能當作取消證據，測試不重送 turn，也不輸出 delta、其他內容或識別碼。
 
 ```bash
 codex_id=$(sudo -n docker compose -p horo-dcb -f /srv/horo-dcb/compose.yaml ps -q codex)
