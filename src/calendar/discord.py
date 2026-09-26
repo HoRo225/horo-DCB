@@ -1,21 +1,24 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
+from io import BytesIO
 
 import discord
 
+from src.brand import BANNER_FILENAME, brand_files
+from src.calendar.discord_models import is_external_scheduled
+from src.calendar.image import MONTH_IMAGE_FILENAME, render_month_png
 from src.calendar.manager import CalendarManager
+from src.calendar.models import CalendarUserError, calendar_now
 from src.calendar.views import (
-    BROWSE_EVENTS_PER_PAGE,
-    CalendarAdminView,
     CalendarBoardView,
     CalendarBrowseView,
     CalendarEditPickerView,
     CalendarEventModal,
-    render_board_text,
+    render_board_heading,
+    render_month_text,
+    render_upcoming_text,
 )
-from src.calendar.models import CalendarUserError
-from src.calendar.discord_models import is_external_scheduled
 
 
 class CalendarController:
@@ -23,21 +26,38 @@ class CalendarController:
         self.manager = manager
 
     def persistent_board_view(self) -> CalendarBoardView:
-        return CalendarBoardView(self, "行事曆", can_edit=False)
+        return CalendarBoardView(self, can_edit=False)
 
-    def admin_view(self, *, user_id: int, guild: discord.Guild) -> CalendarAdminView:
-        return CalendarAdminView(self.manager, user_id=user_id, guild=guild)
-
-    def build_board_view(
+    def build_board(
         self,
         guild_name: str,
         events: Sequence[discord.ScheduledEvent],
-    ) -> CalendarBoardView:
-        return CalendarBoardView(
+    ) -> tuple[CalendarBoardView, list[discord.File]]:
+        now = calendar_now()
+        events = list(events)
+        files = brand_files(BANNER_FILENAME)
+        # ponytail: renders on the event loop (~tens of ms); move to asyncio.to_thread if many boards refresh at once.
+        month_image = render_month_png(events, now=now)
+        if month_image is None:
+            month: discord.ui.Item = discord.ui.TextDisplay(render_month_text(events, now=now))
+        else:
+            files.append(discord.File(BytesIO(month_image), filename=MONTH_IMAGE_FILENAME))
+            month = discord.ui.MediaGallery(
+                discord.MediaGalleryItem(
+                    f"attachment://{MONTH_IMAGE_FILENAME}",
+                    description="本月行事曆：今天以綠色填滿，有活動的日期加上外框",
+                )
+            )
+        view = CalendarBoardView(
             self,
-            render_board_text(guild_name, list(events)),
+            (
+                discord.ui.TextDisplay(render_board_heading(guild_name, now=now)),
+                month,
+                discord.ui.TextDisplay(render_upcoming_text(events)),
+            ),
             can_edit=any(is_external_scheduled(event) for event in events),
         )
+        return view, files
 
     def board_interaction_is_current(self, interaction: discord.Interaction) -> bool:
         if interaction.guild is None or interaction.message is None:
@@ -64,11 +84,19 @@ class CalendarController:
             )
 
     async def handle_board_action(
-        self, interaction: discord.Interaction, action: str,
+        self,
+        interaction: discord.Interaction,
+        action: str,
     ) -> None:
+        try:
+            self.manager._assert_accepting_work()
+        except CalendarUserError as exc:
+            await self._reply_ephemeral(interaction, str(exc))
+            return
         if not self.board_interaction_is_current(interaction):
             await self._reply_ephemeral(
-                interaction, "這個行事曆看板已失效，請使用目前綁定的看板。",
+                interaction,
+                "這個行事曆看板已失效，請使用目前綁定的看板。",
             )
             return
         if interaction.guild is None:
@@ -87,11 +115,11 @@ class CalendarController:
             events = self.manager.get_editable_events(interaction.guild)
             if not events:
                 await self._reply_ephemeral(
-                    interaction, "目前沒有可由 Horo 編輯的 External 活動。",
+                    interaction,
+                    "目前沒有可由 Horo 編輯的 External 活動。",
                 )
                 return
             await interaction.response.send_message(
-                "選擇要編輯的活動：",
                 view=CalendarEditPickerView(
                     self.manager,
                     interaction.user.id,
@@ -106,19 +134,14 @@ class CalendarController:
             if not events:
                 await self._reply_ephemeral(interaction, "目前沒有即將到來的活動。")
                 return
-            view = CalendarBrowseView(interaction.user.id, interaction.guild.id, events)
-            if len(events) <= BROWSE_EVENTS_PER_PAGE:
-                await self._reply_ephemeral(interaction, view.page_text())
-                return
             await interaction.response.send_message(
-                view.page_text(),
-                view=view,
+                view=CalendarBrowseView(interaction.user.id, interaction.guild.id, events),
                 ephemeral=True,
             )
             return
         if action == "refresh":
-            view = self.build_board_view(
+            view, files = self.build_board(
                 interaction.guild.name,
                 self.manager.cached_events(interaction.guild),
             )
-            await interaction.response.edit_message(view=view)
+            await interaction.response.edit_message(attachments=files, view=view)

@@ -1,15 +1,13 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, field
 import os
+from dataclasses import dataclass, field
 
 from src.ai.protocol import valid_bridge_token
 
 _TRUE_VALUES = {"1", "true", "yes", "on"}
 _FALSE_VALUES = {"0", "false", "no", "off"}
-_UNCONFIGURED_PREFIXES = (
-    "[REDACTED_SECRET]",
-)
+_UNCONFIGURED_PREFIXES = ("[REDACTED_SECRET]",)
 
 
 def required_env(name: str) -> str:

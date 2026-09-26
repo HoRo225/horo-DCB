@@ -1,14 +1,13 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Callable, Coroutine
 import json
 import logging
 import os
-from pathlib import Path
 import tempfile
+from collections.abc import Callable, Coroutine
+from pathlib import Path
 from typing import Any, TypeVar
-
 
 T = TypeVar("T")
 
@@ -53,7 +52,7 @@ def load_state_or_disable(load: Callable[[], T], empty: T, message: str) -> tupl
         return load(), True
     except FileNotFoundError:
         return empty, True
-    except (OSError, ValueError, TypeError):
+    except OSError, ValueError, TypeError:
         logging.exception(message)
         return empty, False
 
@@ -75,8 +74,12 @@ def write_json_atomic(path: Path | str, payload: object) -> None:
     temporary = None
     try:
         with tempfile.NamedTemporaryFile(
-            mode="w", encoding="utf-8", dir=path.parent,
-            prefix=f".{path.name}.", suffix=".tmp", delete=False,
+            mode="w",
+            encoding="utf-8",
+            dir=path.parent,
+            prefix=f".{path.name}.",
+            suffix=".tmp",
+            delete=False,
         ) as output:
             temporary = Path(output.name)
             os.chmod(temporary, 0o600)

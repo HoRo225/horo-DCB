@@ -93,6 +93,7 @@ docs/superpowers/
 /releases/
 /scratch/
 /local/
+# Ignore local tests in Git; this does not prevent file creation.
 /tests/
 horo-dcb-bot-reliability-*.tar.gz
 image-identity.json

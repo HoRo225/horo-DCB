@@ -36,10 +36,7 @@ class CalendarEventInput:
     @property
     def duration_minutes(self) -> int:
         seconds = (self.end_time - self.start_time).total_seconds()
-        if (
-            not 60 <= seconds <= 10080 * 60
-            or seconds % 60 != 0
-        ):
+        if not 60 <= seconds <= 10080 * 60 or seconds % 60 != 0:
             raise CalendarUserError("活動長度必須是 1 到 10080 分鐘的整數。")
         return int(seconds // 60)
 
@@ -59,9 +56,7 @@ def parse_calendar_datetime(value: str) -> datetime:
             "時間格式錯誤，請使用 YYYY-MM-DD HH:MM，例如 2026-09-05 20:30。"
         ) from exc
     if parsed.strftime("%Y-%m-%d %H:%M") != raw:
-        raise CalendarUserError(
-            "時間格式錯誤，請使用 YYYY-MM-DD HH:MM，例如 2026-09-05 20:30。"
-        )
+        raise CalendarUserError("時間格式錯誤，請使用 YYYY-MM-DD HH:MM，例如 2026-09-05 20:30。")
     return parsed.replace(tzinfo=CALENDAR_TZ)
 
 

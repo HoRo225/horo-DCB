@@ -1,17 +1,21 @@
 from __future__ import annotations
 
 import base64
-from dataclasses import dataclass
 import os
 import re
+from dataclasses import dataclass
 from typing import Any
 
 import aiohttp
 import discord
+
 from src.ai.media_executor import MediaExecutor
 from src.ai.protocol import (
-    ImageAttachmentError, MEDIA_CHUNK_BYTES, SUPPORTED_IMAGE_TYPES,
-    safe_https_hostname, validate_image_size,
+    MEDIA_CHUNK_BYTES,
+    SUPPORTED_IMAGE_TYPES,
+    ImageAttachmentError,
+    safe_https_hostname,
+    validate_image_size,
 )
 
 IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp", ".gif", ".svg"}
@@ -48,7 +52,10 @@ def select_image_attachments(attachments: list[Any]) -> list[Any]:
         ) or extension in IMAGE_EXTENSIONS
         if not is_image_like:
             continue
-        if content_type not in SUPPORTED_IMAGE_TYPES or extension not in SUPPORTED_IMAGE_TYPES[content_type]:
+        if (
+            content_type not in SUPPORTED_IMAGE_TYPES
+            or extension not in SUPPORTED_IMAGE_TYPES[content_type]
+        ):
             raise ImageAttachmentError("目前只支援 JPEG、PNG、WebP 與 GIF 圖片。")
         selected.append(attachment)
 
@@ -67,7 +74,10 @@ def _data_url(content_type: str, data: bytes, budget: MediaBudget) -> str:
 
 
 async def read_image_attachments(
-    attachments: list[Any], *, executor: MediaExecutor, deadline: float,
+    attachments: list[Any],
+    *,
+    executor: MediaExecutor,
+    deadline: float,
     budget: MediaBudget,
 ) -> tuple[str, ...]:
     data_urls = []
@@ -78,7 +88,9 @@ async def read_image_attachments(
             raise ImageAttachmentError("目前無法讀取這張圖片，請重新上傳後再試。") from exc
         budget.add_source(len(data))
         content_type, normalized = await executor.decode(
-            "image", data, getattr(attachment, "content_type", None),
+            "image",
+            data,
+            getattr(attachment, "content_type", None),
             deadline=deadline,
         )
         data_urls.append(_data_url(content_type, normalized, budget))
@@ -87,12 +99,10 @@ async def read_image_attachments(
 
 def _is_safe_discord_url(url: str) -> bool:
     host = safe_https_hostname(url)
-    return (
-        host is not None and (
-            host in {"cdn.discordapp.com", "media.discordapp.net"}
-            or host.endswith(".discordapp.com")
-            or host.endswith(".discordapp.net")
-        )
+    return host is not None and (
+        host in {"cdn.discordapp.com", "media.discordapp.net"}
+        or host.endswith(".discordapp.com")
+        or host.endswith(".discordapp.net")
     )
 
 
@@ -138,7 +148,9 @@ def select_message_media(messages: list[Any]) -> list[tuple[str, str]]:
             raw_url = getattr(sticker, "url", None)
             url = str(raw_url) if raw_url is not None else None
             sticker_format = getattr(sticker, "format", None)
-            kind = "lottie" if getattr(sticker_format, "name", "").casefold() == "lottie" else "image"
+            kind = (
+                "lottie" if getattr(sticker_format, "name", "").casefold() == "lottie" else "image"
+            )
             sticker_id = getattr(sticker, "id", None)
             add(kind, url, f"sticker:{sticker_id}" if sticker_id is not None else None)
     return selected
@@ -154,9 +166,7 @@ async def _download_discord_media(
             if response.status != 200:
                 raise ImageAttachmentError("目前無法讀取這個 Discord 媒體。")
             if response.content_length is not None:
-                validate_image_size(
-                    response.content_length, total_before + response.content_length
-                )
+                validate_image_size(response.content_length, total_before + response.content_length)
             data = bytearray()
             async for chunk in response.content.iter_chunked(MEDIA_CHUNK_BYTES):
                 data.extend(chunk)
@@ -169,8 +179,11 @@ async def _download_discord_media(
 
 
 async def read_message_media(
-    sources: list[tuple[str, str]], *, budget: MediaBudget,
-    executor: MediaExecutor, deadline: float,
+    sources: list[tuple[str, str]],
+    *,
+    budget: MediaBudget,
+    executor: MediaExecutor,
+    deadline: float,
 ) -> tuple[str, ...]:
     if not sources:
         return ()
@@ -184,7 +197,10 @@ async def read_message_media(
             )
             budget.add_source(len(data))
             normalized_type, normalized = await executor.decode(
-                kind, data, content_type, deadline=deadline,
+                kind,
+                data,
+                content_type,
+                deadline=deadline,
             )
             result.append(_data_url(normalized_type, normalized, budget))
     return tuple(result)

@@ -32,7 +32,7 @@ async def sync_discord_brand(client: discord.Client) -> bool:
         return False
     try:
         profile = await client.fetch_user(user.id)
-    except (discord.HTTPException, aiohttp.ClientError, TimeoutError):
+    except discord.HTTPException, aiohttp.ClientError, TimeoutError:
         logging.warning("Discord 品牌素材同步失敗，沿用目前素材。")
         return False
     return set_discord_brand_urls(

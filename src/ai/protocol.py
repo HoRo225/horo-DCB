@@ -2,11 +2,17 @@ from __future__ import annotations
 
 import base64
 import binascii
-from dataclasses import dataclass
-import math
 import re
+from dataclasses import dataclass
 from urllib.parse import urlsplit
 
+from src.ai.rate_limits import RATE_LIMIT_ERRORS as RATE_LIMIT_ERRORS
+from src.ai.rate_limits import CodexRateLimits as CodexRateLimits
+from src.ai.rate_limits import CodexRateWindow as CodexRateWindow
+from src.ai.rate_limits import _rate_optional_int as _rate_optional_int
+from src.ai.rate_limits import _rate_window as _rate_window
+from src.ai.rate_limits import normalize_rate_limits as normalize_rate_limits
+from src.ai.rate_limits import parse_rate_limits_payload as parse_rate_limits_payload
 
 MAX_IMAGE_ATTACHMENTS = 4
 MAX_PROMPT_CHARACTERS = 4000
@@ -111,12 +117,27 @@ def normalize_reply_image_urls(value: object) -> tuple[str, ...]:
     return tuple(result)
 
 
-def scope_matches(key: str, guild_id: int, channel_id: int | None = None) -> bool:
+def scope_matches(
+    key: str,
+    guild_id: int,
+    channel_id: int | None = None,
+    *,
+    parent_channel_id: int | None = None,
+    include_children: bool = False,
+) -> bool:
     prefix = f"guild:{guild_id}:"
-    return key.startswith(prefix) and (
-        channel_id is None
-        or key == f"{prefix}thread:{channel_id}"
-        or key.startswith(f"{prefix}channel:{channel_id}:user:")
+    if not key.startswith(prefix):
+        return False
+    if channel_id is None:
+        return True
+    if key.startswith(f"{prefix}channel:{channel_id}:user:"):
+        return True
+    if key == f"{prefix}thread:{channel_id}":
+        return True
+    return (
+        include_children
+        and key.startswith(f"{prefix}thread:")
+        and (parent_channel_id is None or parent_channel_id == channel_id)
     )
 
 
@@ -134,108 +155,45 @@ class CodexRuntimeStatus:
     last_error: str | None = None
     bot_active_requests: int = 0
     bot_queued_requests: int = 0
+    protocol_version: int = 2
+    ready: bool = False
+    reason: str = "unavailable"
+    status_fetched_at: int | None = None
+    status_stale: bool = True
+
+
+READY_REASONS = frozenset(
+    {
+        "ready",
+        "initializing",
+        "auth_required",
+        "status_stale",
+        "state_unavailable",
+        "draining",
+        "unavailable",
+    }
+)
+
+
+@dataclass(frozen=True, slots=True)
+class CodexArchiveResult:
+    detached_count: int
+    archived_count: int
+    archive_unconfirmed_count: int
+
+
+def parse_archive_result(raw: object) -> CodexArchiveResult:
+    fields = {"detached_count", "archived_count", "archive_unconfirmed_count"}
+    if (
+        not isinstance(raw, dict)
+        or set(raw) != fields
+        or any(type(raw[field]) is not int or raw[field] < 0 for field in fields)
+    ):
+        raise ValueError("invalid archive result")
+    return CodexArchiveResult(**raw)
 
 
 EMPTY_CODEX_RUNTIME_STATUS = CodexRuntimeStatus(False, False, None, None, None, None, 0)
-
-
-RATE_LIMIT_ERRORS = frozenset({
-    "unavailable", "timeout", "auth_required", "invalid_response",
-})
-
-
-@dataclass(frozen=True, slots=True)
-class CodexRateWindow:
-    slot: str
-    used_percent: int | float
-    window_minutes: int | None
-    resets_at: int | None
-
-
-@dataclass(frozen=True, slots=True)
-class CodexRateLimits:
-    fetched_at: int | None = None
-    windows: tuple[CodexRateWindow, ...] = ()
-    error: str | None = "unavailable"
-
-
-def _rate_optional_int(value: object) -> int | None:
-    if value is None:
-        return None
-    if type(value) is not int or not 0 < value <= 253402300799:
-        raise ValueError("invalid rate-limit integer")
-    return value
-
-
-def _rate_window(slot: str, value: object, *, upstream: bool) -> CodexRateWindow:
-    if not isinstance(value, dict) or slot not in ("primary", "secondary"):
-        raise ValueError("invalid rate-limit window")
-    used = value.get("usedPercent" if upstream else "used_percent")
-    if type(used) not in (int, float) or not 0 <= used <= 100:
-        raise ValueError("invalid rate-limit percentage")
-    if isinstance(used, float) and not math.isfinite(used):
-        raise ValueError("invalid rate-limit percentage")
-    minutes = _rate_optional_int(value.get(
-        "windowDurationMins" if upstream else "window_minutes"
-    ))
-    reset = _rate_optional_int(value.get("resetsAt" if upstream else "resets_at"))
-    return CodexRateWindow(slot, used, minutes, reset)
-
-
-def normalize_rate_limits(raw: object, *, fetched_at: int) -> CodexRateLimits:
-    if not isinstance(raw, dict):
-        raise ValueError("invalid rate-limit response")
-    timestamp = _rate_optional_int(fetched_at)
-    if timestamp is None:
-        raise ValueError("missing rate-limit timestamp")
-    buckets = raw.get("rateLimitsByLimitId")
-    if buckets is not None and not isinstance(buckets, dict):
-        raise ValueError("invalid rate-limit buckets")
-    if isinstance(buckets, dict) and "codex" in buckets:
-        snapshot = buckets["codex"]
-        if not isinstance(snapshot, dict) or snapshot.get("limitId") not in (None, "codex"):
-            raise ValueError("invalid codex rate-limit bucket")
-    else:
-        snapshot = raw.get("rateLimits")
-        if not isinstance(snapshot, dict):
-            raise ValueError("missing rate-limit snapshot")
-        if snapshot.get("limitId") not in (None, "codex"):
-            return CodexRateLimits(timestamp, (), None)
-    windows = tuple(
-        _rate_window(slot, snapshot[slot], upstream=True)
-        for slot in ("primary", "secondary")
-        if snapshot.get(slot) is not None
-    )
-    return CodexRateLimits(timestamp, windows, None)
-
-
-def parse_rate_limits_payload(raw: object) -> CodexRateLimits:
-    if not isinstance(raw, dict) or set(raw) != {"fetched_at", "windows", "error"}:
-        raise ValueError("invalid rate-limit payload")
-    error = raw.get("error")
-    windows = raw.get("windows")
-    if not isinstance(windows, list) or len(windows) > 2:
-        raise ValueError("invalid rate-limit windows")
-    if error is not None:
-        if not isinstance(error, str) or error not in RATE_LIMIT_ERRORS:
-            raise ValueError("invalid rate-limit error")
-        if windows or raw.get("fetched_at") is not None:
-            raise ValueError("error payload contains current values")
-        return CodexRateLimits(error=error)
-    timestamp = _rate_optional_int(raw.get("fetched_at"))
-    if timestamp is None:
-        raise ValueError("missing rate-limit timestamp")
-    result = tuple(
-        _rate_window(
-            value.get("slot") if isinstance(value, dict) else "",
-            value,
-            upstream=False,
-        )
-        for value in windows
-    )
-    if len({window.slot for window in result}) != len(result):
-        raise ValueError("duplicate rate-limit slot")
-    return CodexRateLimits(timestamp, result, None)
 
 
 _THREAD_KEY = re.compile(
@@ -254,20 +212,38 @@ class ChatPayload:
     conversation_key: str
     text: str
     images: tuple[str, ...]
+    budget_ms: int = 120000
+    parent_channel_id: int | None = None
 
 
 def validate_chat_payload(value: object) -> ChatPayload:
-    if not isinstance(value, dict) or set(value) != {
-        "conversation_key",
-        "text",
-        "images",
-    }:
+    required = {"conversation_key", "text", "images"}
+    optional = {"budget_ms", "parent_channel_id"}
+    if (
+        not isinstance(value, dict)
+        or not required <= set(value)
+        or set(value) - required - optional
+    ):
         raise CodexBridgeError("invalid_request")
 
     key = value["conversation_key"]
     text = value["text"]
     images = value["images"]
+    budget_ms = value.get("budget_ms", 120000)
+    parent_channel_id = value.get("parent_channel_id")
     if not valid_conversation_key(key):
+        raise CodexBridgeError("invalid_request")
+    if type(budget_ms) is not int or not 1 <= budget_ms <= 120000:
+        raise CodexBridgeError("invalid_request")
+    is_thread = isinstance(key, str) and ":thread:" in key
+    if is_thread:
+        if parent_channel_id is not None and (
+            type(parent_channel_id) is not int or parent_channel_id <= 0
+        ):
+            raise CodexBridgeError("invalid_request")
+        if parent_channel_id == int(key.rsplit(":", 1)[1]):
+            raise CodexBridgeError("invalid_request")
+    elif parent_channel_id is not None:
         raise CodexBridgeError("invalid_request")
     if not isinstance(text, str) or len(text) > MAX_PROMPT_CHARACTERS:
         raise CodexBridgeError("invalid_request")
@@ -294,7 +270,7 @@ def validate_chat_payload(value: object) -> ChatPayload:
             raise CodexBridgeError("invalid_request")
         try:
             data = base64.b64decode(encoded, validate=True)
-        except (binascii.Error, ValueError):
+        except binascii.Error, ValueError:
             raise CodexBridgeError("invalid_request") from None
         total_image_bytes += len(data)
         try:
@@ -303,19 +279,31 @@ def validate_chat_payload(value: object) -> ChatPayload:
             raise CodexBridgeError("invalid_request") from None
     if not text.strip() and not images:
         raise CodexBridgeError("invalid_request")
-    return ChatPayload(key, text, tuple(images))
+    return ChatPayload(key, text, tuple(images), budget_ms, parent_channel_id)
 
 
-def validate_archive_payload(value: object) -> tuple[int, int | None]:
-    if not isinstance(value, dict) or set(value) - {"guild_id", "channel_id"}:
+@dataclass(frozen=True, slots=True)
+class ArchivePayload:
+    guild_id: int
+    channel_id: int | None = None
+    include_children: bool = False
+
+
+def validate_archive_payload(value: object) -> ArchivePayload:
+    if not isinstance(value, dict) or set(value) - {"guild_id", "channel_id", "include_children"}:
         raise CodexBridgeError("invalid_request")
     guild_id = value.get("guild_id")
     channel_id = value.get("channel_id")
-    if type(guild_id) is not int or guild_id <= 0 or (
-        channel_id is not None and (type(channel_id) is not int or channel_id <= 0)
+    include_children = value.get("include_children", False)
+    if (
+        type(guild_id) is not int
+        or guild_id <= 0
+        or (channel_id is not None and (type(channel_id) is not int or channel_id <= 0))
+        or type(include_children) is not bool
+        or (include_children and channel_id is None)
     ):
         raise CodexBridgeError("invalid_request")
-    return guild_id, channel_id
+    return ArchivePayload(guild_id, channel_id, include_children)
 
 
 def valid_conversation_key(key: object) -> bool:

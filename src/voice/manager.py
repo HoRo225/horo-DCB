@@ -1,22 +1,27 @@
 from __future__ import annotations
 
 import asyncio
-from dataclasses import dataclass
 import logging
-from pathlib import Path
+from dataclasses import dataclass
 from typing import Iterable
 
 import discord
 
 from src.discord_utils import find_or_create_channel, missing_channel_permissions
-from src.state import load_state_or_disable, persist_or_disable, read_json_state, write_json_atomic
+from src.state import load_state_or_disable, persist_or_disable
+from src.voice.state import (
+    DEFAULT_STATE_PATH,
+    load_voice_state,
+    parse_children,
+    parse_parents,
+    save_voice_state,
+)
+from src.voice.state import STATE_VERSION as STATE_VERSION
 
 ENTRY_CHANNEL_NAME = "➕ 建立語音"
 CHANNEL_NAME_PREFIX = "▍"
 CHANNEL_NAME_SUFFIX = " 的語音-🔊"
 CHANNEL_NAME_LIMIT = 100
-STATE_VERSION = 2
-DEFAULT_STATE_PATH = Path("/app/data/temp_voice_channels.json")
 AUDIT_REASON = "horo-DCB temporary voice channel"
 
 _REQUIRED_BOT_PERMISSIONS = (
@@ -54,13 +59,18 @@ class TempVoiceManager:
         # ponytail: one global lock serializes guilds; use per-guild locks only after measuring cross-guild blocking.
         self._lock = asyncio.Lock()
         self._state_available = True
+        self._closing = False
         self._parents: dict[int, int] = {}
         self._children: dict[int, tuple[int, int]] = {}
 
         (self._parents, self._children), self._state_available = load_state_or_disable(
-            self._load_state, ({}, {}),
+            self._load_state,
+            ({}, {}),
             "臨時語音狀態檔無法讀取；為避免建立無法追蹤的頻道，臨時語音功能已停用。",
         )
+
+    def stop_new_work(self) -> None:
+        self._closing = True
 
     def get_guild_status(self, guild_id: int) -> TempVoiceGuildStatus:
         return TempVoiceGuildStatus(
@@ -94,85 +104,19 @@ class TempVoiceManager:
             return f"Bot 缺少權限：{'、'.join(missing_permissions)}。"
         return None
 
-    @staticmethod
-    def _parse_children(channels: object) -> dict[int, tuple[int, int]]:
-        if not isinstance(channels, list):
-            raise ValueError("invalid temp voice child list")
-
-        children: dict[int, tuple[int, int]] = {}
-        owner_pairs: set[tuple[int, int]] = set()
-        for item in channels:
-            if not isinstance(item, dict):
-                raise ValueError("invalid temp voice child record")
-            channel_id = item.get("channel_id")
-            guild_id = item.get("guild_id")
-            owner_id = item.get("owner_id")
-            if not all(
-                type(value) is int and value > 0
-                for value in (channel_id, guild_id, owner_id)
-            ):
-                raise ValueError("invalid temp voice child ids")
-            if channel_id in children:
-                raise ValueError("duplicate temp voice child channel id")
-            owner_pair = (guild_id, owner_id)
-            if owner_pair in owner_pairs:
-                raise ValueError("duplicate temp voice child owner")
-            owner_pairs.add(owner_pair)
-            children[channel_id] = (guild_id, owner_id)
-        return children
-
-    @staticmethod
-    def _parse_parents(parents: object) -> dict[int, int]:
-        if not isinstance(parents, list):
-            raise ValueError("invalid temp voice parent list")
-
-        records: dict[int, int] = {}
-        for item in parents:
-            if not isinstance(item, dict):
-                raise ValueError("invalid temp voice parent record")
-            guild_id = item.get("guild_id")
-            channel_id = item.get("channel_id")
-            if not all(
-                type(value) is int and value > 0
-                for value in (guild_id, channel_id)
-            ):
-                raise ValueError("invalid temp voice parent ids")
-            if guild_id in records:
-                raise ValueError("duplicate temp voice parent guild id")
-            records[guild_id] = channel_id
-        return records
+    _parse_children = staticmethod(parse_children)
+    _parse_parents = staticmethod(parse_parents)
 
     def _load_state(self) -> tuple[dict[int, int], dict[int, tuple[int, int]]]:
-        payload = read_json_state(self._state_path, STATE_VERSION)
-
-        parents = self._parse_parents(payload.get("parents"))
-        children = self._parse_children(payload.get("children"))
-        return parents, children
+        return load_voice_state(self._state_path)
 
     def _persist_state(self) -> None:
-        payload = {
-            "version": STATE_VERSION,
-            "parents": [
-                {
-                    "guild_id": guild_id,
-                    "channel_id": channel_id,
-                }
-                for guild_id, channel_id in sorted(self._parents.items())
-            ],
-            "children": [
-                {
-                    "channel_id": channel_id,
-                    "guild_id": guild_id,
-                    "owner_id": owner_id,
-                }
-                for channel_id, (guild_id, owner_id) in sorted(self._children.items())
-            ],
-        }
-        write_json_atomic(self._state_path, payload)
+        save_voice_state(self._state_path, self._parents, self._children)
 
     def _persist_or_disable(self) -> bool:
         self._state_available = persist_or_disable(
-            self._persist_state, self._state_available,
+            self._persist_state,
+            self._state_available,
             "臨時語音狀態無法保存；為避免建立無法追蹤的頻道，臨時語音功能已停用。",
         )
         return self._state_available
@@ -203,8 +147,10 @@ class TempVoiceManager:
         member: discord.Member,
         before: discord.VoiceState,
         after: discord.VoiceState,
+        *,
+        allow_create: bool = True,
     ) -> None:
-        if member.bot or not self._state_available:
+        if not self._state_available:
             return
 
         async with self._lock:
@@ -213,7 +159,10 @@ class TempVoiceManager:
             after_channel = after.channel
             entry_channel_id = self._parents.get(member.guild.id)
             if (
-                entry_channel_id is not None
+                allow_create
+                and not self._closing
+                and not member.bot
+                and entry_channel_id is not None
                 and _is_voice_channel(after_channel)
                 and after_channel.id == entry_channel_id
             ):
@@ -228,12 +177,10 @@ class TempVoiceManager:
         member: discord.Member,
         entry_channel: discord.VoiceChannel,
     ) -> None:
+        if self._closing or not self._state_available:
+            return
         voice = member.voice
-        if (
-            voice is None
-            or voice.channel is None
-            or voice.channel.id != entry_channel.id
-        ):
+        if voice is None or voice.channel is None or voice.channel.id != entry_channel.id:
             return
 
         guild = member.guild
@@ -241,7 +188,7 @@ class TempVoiceManager:
         if existing_channel is not None:
             try:
                 await member.move_to(existing_channel, reason=AUDIT_REASON)
-            except (discord.Forbidden, discord.HTTPException):
+            except discord.Forbidden, discord.HTTPException:
                 logging.exception("無法把臨時語音建立者移回既有頻道。")
             return
 
@@ -275,7 +222,7 @@ class TempVoiceManager:
                 overwrites=overwrites,
                 reason=AUDIT_REASON,
             )
-        except (discord.Forbidden, discord.HTTPException):
+        except discord.Forbidden, discord.HTTPException:
             logging.exception("建立臨時語音頻道失敗。")
             return
 
@@ -295,7 +242,8 @@ class TempVoiceManager:
 
         voice = member.voice
         if (
-            voice is None
+            self._closing
+            or voice is None
             or voice.channel is None
             or voice.channel.id != entry_channel.id
         ):
@@ -304,7 +252,7 @@ class TempVoiceManager:
 
         try:
             await member.move_to(channel, reason=AUDIT_REASON)
-        except (discord.Forbidden, discord.HTTPException):
+        except discord.Forbidden, discord.HTTPException:
             logging.exception("臨時語音頻道已建立，但無法移動建立者。")
             await self._delete_if_empty(channel)
 
@@ -319,7 +267,7 @@ class TempVoiceManager:
             await channel.delete(reason=AUDIT_REASON)
         except discord.NotFound:
             pass
-        except (discord.Forbidden, discord.HTTPException):
+        except discord.Forbidden, discord.HTTPException:
             logging.exception(error_message)
             return False
         return True
@@ -365,6 +313,8 @@ class TempVoiceManager:
         self,
         guild: discord.Guild,
     ) -> tuple[discord.VoiceChannel | None, bool]:
+        if self._closing or not self._state_available:
+            return None, False
         changed = False
         bound_channel_id = self._parents.get(guild.id)
         if bound_channel_id is not None:
@@ -377,8 +327,12 @@ class TempVoiceManager:
             logging.warning("已綁定的臨時語音入口不存在，將重新尋找或建立入口。")
 
         entry_channel, created = await find_or_create_channel(
-            guild, ENTRY_CHANNEL_NAME, discord.ChannelType.voice,
-            discord.VoiceChannel, guild.create_voice_channel, AUDIT_REASON,
+            guild,
+            ENTRY_CHANNEL_NAME,
+            discord.ChannelType.voice,
+            discord.VoiceChannel,
+            guild.create_voice_channel,
+            AUDIT_REASON,
             label="臨時語音入口頻道",
         )
         if entry_channel is None:
@@ -387,7 +341,8 @@ class TempVoiceManager:
         self._parents[guild.id] = entry_channel.id
         logging.info(
             "已自動建立並綁定臨時語音入口 Channel ID。"
-            if created else "已綁定臨時語音入口 Channel ID。"
+            if created
+            else "已綁定臨時語音入口 Channel ID。"
         )
         return entry_channel, True
 

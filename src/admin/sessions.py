@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 import asyncio
-from dataclasses import dataclass, field
 import logging
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
 from src.state import consume_task_exception
@@ -41,7 +41,9 @@ class PanelSessionRegistry:
         return session
 
     def is_current(self, session: PanelSession) -> bool:
-        return not self._closed and not session.retired and self._current.get(session.key) is session
+        return (
+            not self._closed and not session.retired and self._current.get(session.key) is session
+        )
 
     def track(self, session: PanelSession, task: asyncio.Task) -> None:
         self._live.add(session)
@@ -62,7 +64,11 @@ class PanelSessionRegistry:
         self._collect(session)
 
     def _collect(self, session: PanelSession) -> None:
-        if session.retired and not session.tasks and (session.view is None or session.view.is_finished()):
+        if (
+            session.retired
+            and not session.tasks
+            and (session.view is None or session.view.is_finished())
+        ):
             self._live.discard(session)
 
     def retire(self, session: PanelSession) -> None:
@@ -90,7 +96,9 @@ class PanelSessionRegistry:
             tasks = {task for session in self._live for task in session.tasks}
             if not tasks:
                 break
-            _, pending = await asyncio.wait(tasks, timeout=max(0, deadline - asyncio.get_running_loop().time()))
+            _, pending = await asyncio.wait(
+                tasks, timeout=max(0, deadline - asyncio.get_running_loop().time())
+            )
             if pending:
                 for task in pending:
                     task.cancel()
