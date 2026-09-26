@@ -10,7 +10,6 @@ from pathlib import Path
 import aiohttp
 import discord
 
-from src.brand import BANNER_FILENAME, brand_files
 from src.calendar.models import (
     CALENDAR_TZ,
     CalendarBinding,
@@ -37,7 +36,8 @@ class CalendarManager:
         self,
         *,
         board_view_factory: Callable[
-            [str, Sequence[discord.ScheduledEvent]], discord.ui.LayoutView
+            [str, Sequence[discord.ScheduledEvent]],
+            tuple[discord.ui.LayoutView, list[discord.File]],
         ],
     ) -> None:
         self._state_path = DEFAULT_STATE_PATH
@@ -220,9 +220,9 @@ class CalendarManager:
     def cached_events(guild: discord.Guild) -> list[discord.ScheduledEvent]:
         return sorted(guild.scheduled_events, key=lambda event: event.start_time)
 
-    def _build_board_view(
+    def _build_board(
         self, guild_name: str, events: Sequence[discord.ScheduledEvent],
-    ) -> discord.ui.LayoutView:
+    ) -> tuple[discord.ui.LayoutView, list[discord.File]]:
         return self._board_view_factory(guild_name, events)
 
     async def bind(
@@ -242,12 +242,9 @@ class CalendarManager:
             if not is_text_channel(channel) or channel.guild.id != guild.id:
                 raise CalendarUserError("只能綁定目前伺服器的文字頻道。")
             self._assert_bot_permissions(guild, channel)
-            view = self._build_board_view(guild.name, self.cached_events(guild))
+            view, files = self._build_board(guild.name, self.cached_events(guild))
             try:
-                message = await channel.send(
-                    files=brand_files(BANNER_FILENAME),
-                    view=view,
-                )
+                message = await channel.send(files=files, view=view)
             except (discord.Forbidden, discord.HTTPException) as exc:
                 raise CalendarUserError("Bot 無法在指定頻道建立行事曆看板。") from exc
             if version != self._versions[guild.id] or (is_current is not None and not is_current()):
@@ -324,24 +321,18 @@ class CalendarManager:
             try:
                 self._assert_bot_permissions(guild, channel)
                 events = self.cached_events(guild)
-                view = self._build_board_view(guild.name, events)
+                view, files = self._build_board(guild.name, events)
                 try:
                     message = channel.get_partial_message(binding.message_id)
-                    files = brand_files(BANNER_FILENAME)
-                    kwargs = {
-                        "attachments": files,
-                        "view": view,
-                    }
-                    await message.edit(**kwargs)
+                    await message.edit(attachments=files, view=view)
                     return True
                 except (asyncio.TimeoutError, aiohttp.ClientError):
                     logging.error("Discord 行事曆看板更新失敗。")
                     return False
                 except discord.NotFound:
-                    replacement = await channel.send(
-                        files=brand_files(BANNER_FILENAME),
-                        view=view,
-                    )
+                    # Attachments are consumed by the failed edit; rebuild them.
+                    view, files = self._build_board(guild.name, events)
+                    replacement = await channel.send(files=files, view=view)
                     if version != self._versions[guild.id]:
                         await self._safe_delete_message(channel, replacement.id)
                         return False

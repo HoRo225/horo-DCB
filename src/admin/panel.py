@@ -46,6 +46,13 @@ MODULE_PAGES = (
     ("steam", "Steam 免費遊戲", "通知設定與手動查詢"),
 )
 PAGES = frozenset(page for group in (MAIN_PAGES, AI_PAGES, MODULE_PAGES) for page, *_ in group)
+STATUS_DOTS = {"狀態正常": "🟢", "需要處理": "🟠", "停用": "⚫"}
+
+
+def _footer_note(note: str | None) -> tuple[discord.ui.Item, ...]:
+    if not note:
+        return ()
+    return (discord.ui.TextDisplay(f"-# {discord.utils.escape_markdown(note)}"),)
 
 
 @dataclass(frozen=True, slots=True)
@@ -418,10 +425,12 @@ class AdminPanelView(discord.ui.LayoutView):
     def _close_button(self) -> _PanelButton:
         return self._button("close", "關閉")
 
-    def _header(self, title: str, page: str, section: str | None = None) -> list[discord.ui.Item]:
+    def _header(
+        self, title: str, page: str, section: str | None = None, subtitle: str = "",
+    ) -> list[discord.ui.Item]:
         self.page = page
         self._rate_display_item = None
-        children: list[discord.ui.Item] = [branded_title(title, ""), self._main_select(page)]
+        children: list[discord.ui.Item] = [branded_title(title, subtitle), self._main_select(page)]
         if section == "ai":
             children.append(self._ai_select(page))
         elif section == "modules":
@@ -430,15 +439,14 @@ class AdminPanelView(discord.ui.LayoutView):
         return children
 
     @staticmethod
-    def _detail(title: str, message: str, *, escape: bool = False) -> discord.ui.TextDisplay:
-        return discord.ui.TextDisplay(
-            f"## {title}\n-# {discord.utils.escape_markdown(message) if escape else message}"
-        )
+    def _detail(title: str, message: str) -> discord.ui.TextDisplay:
+        return discord.ui.TextDisplay(f"## {title}\n-# {message}")
 
-    def _actions(self, *buttons: _PanelButton, refresh: bool = False) -> discord.ui.ActionRow:
+    def _actions(self, *buttons: _PanelButton, refresh: bool = True) -> discord.ui.ActionRow:
+        # Page actions first; refresh and close always sit at the end.
         return discord.ui.ActionRow(
-            *([self._button("refresh", "重新整理")] if refresh else []),
             *buttons,
+            *([self._button("refresh", "重新整理")] if refresh else []),
             self._close_button(),
         )
 
@@ -876,7 +884,7 @@ class AdminPanelView(discord.ui.LayoutView):
         detail = state.allowlist_detail
         if detail is None:
             return None
-        return f"## AI 助手\n**需要處理**\n-# {detail}"
+        return f"## 🟠 AI 助手\n**需要處理**\n-# {detail}"
 
     def _voice_state(self, guild: discord.Guild | None = None) -> _VoiceState:
         status = self.temp_voice.get_guild_status(self.guild_id)
@@ -904,14 +912,14 @@ class AdminPanelView(discord.ui.LayoutView):
     def _voice_summary(state: _VoiceState) -> str:
         status = state.status
         if state.label == "停用":
-            return "## 臨時語音\n**依設定停用**\n-# 不會建立、同步或管理語音頻道"
+            return "## ⚫ 臨時語音\n**依設定停用**\n-# 不會建立、同步或管理語音頻道"
         if not status.state_available:
-            return "## 臨時語音\n**需要處理**\n-# 入口無法讀取 · 追蹤暫停"
+            return "## 🟠 臨時語音\n**需要處理**\n-# 入口無法讀取 · 追蹤暫停"
         detail = f"-# {state.entry} · {state.label}"
         if state.problem is not None:
             detail += f" · {state.problem}"
         return (
-            "## 臨時語音\n"
+            f"## {STATUS_DOTS[state.label]} 臨時語音\n"
             f"**{status.tracked_child_count} 個頻道追蹤中**\n"
             f"{detail}"
         )
@@ -958,14 +966,14 @@ class AdminPanelView(discord.ui.LayoutView):
     def _steam_summary(state: _SteamState) -> str:
         status = state.status
         if state.label == "停用":
-            return "## Steam 免費遊戲\n**自動通知依設定停用**\n-# 手動查詢仍可使用"
+            return "## ⚫ Steam 免費遊戲\n**自動通知依設定停用**\n-# 手動查詢仍可使用"
         if not status.state_available:
-            return "## Steam 免費遊戲\n**需要處理**\n-# 通知頻道無法讀取"
+            return "## 🟠 Steam 免費遊戲\n**需要處理**\n-# 通知頻道無法讀取"
         detail = f"-# {state.channel} · 每 {int(status.poll_interval_seconds // 60)} 分鐘檢查 · {state.label}"
         if state.problem is not None:
             detail += f" · {state.problem}"
         return (
-            "## Steam 免費遊戲\n"
+            f"## {STATUS_DOTS[state.label]} Steam 免費遊戲\n"
             f"**{status.active_app_count} 款活動中**\n"
             f"{detail}"
         )
@@ -978,111 +986,62 @@ class AdminPanelView(discord.ui.LayoutView):
         steam_status, steam_problem = steam.status, steam.problem
         ai_allowlist_detail = ai.allowlist_detail
 
-        statuses = [
-            ("AI 助手", ai.label, ai.detail),
-            ("臨時語音", voice.label, voice.detail),
-            ("Steam 免費遊戲", steam.label, steam.detail),
-        ]
         ai_access_enabled = (
             self.codex_access.enabled
             and self.codex_access.guild_id == self.guild_id
         )
 
-        setup_items: list[tuple[str, bool]] = []
-        if ai_access_enabled:
-            setup_items.append(
-                (
-                    "AI 白名單",
-                    self.codex_access.configured and ai_allowlist_detail is None,
-                )
-            )
-        if self.temp_voice_enabled:
-            setup_items.append(
-                (
-                    "臨時語音入口",
-                    voice_status.state_available
-                    and voice_status.parent_channel_id is not None
-                    and voice_problem is None,
-                )
-            )
-        if self.steam_free_games_enabled:
-            setup_items.append(
-                (
-                    "Steam 通知頻道",
-                    steam_status.state_available and steam_status.channel_id is not None,
-                )
-            )
-        missing_setup = [name for name, configured in setup_items if not configured]
-        issues = [item for item in statuses if item[1] == "需要處理"]
-        if issues:
-            status_lines = ["## ⚠ 需要處理"]
-            for name, status, detail in issues:
-                status_lines.extend((f"**{name} · {status}**", f"-# {detail}"))
-            if missing_setup:
-                status_lines.append(f"-# 尚未完成：{' · '.join(missing_setup)}")
-        else:
-            setup_status = "無需設定" if not setup_items else "設定已完成"
-            disabled = [
-                f"{name}：{detail}"
-                for name, status, detail in statuses if status == "停用"
-            ]
-            suffix = f" · {'；'.join(disabled)}" if disabled else ""
-            status_lines = [
-                "## ✓ 狀態正常",
-                f"-# {setup_status}{suffix}",
-            ]
-
-        shortcuts: list[_PanelButton] = []
+        ai_shortcut = voice_shortcut = steam_shortcut = None
         if ai_access_enabled and (
             not self.codex_access.state_available
             or not self.codex_access.channel_ids
             or not self.codex_access.configured
             or ai_allowlist_detail is not None
         ):
-            shortcuts.append(
-                self._button(
-                    "ai_access", "設定 AI 白名單", style=discord.ButtonStyle.primary,
-                )
-            )
+            ai_shortcut = self._button("ai_access", "前往設定")
         elif ai_access_enabled and (
             not self.codex_status.available or not self.codex_status.authenticated
         ):
-            shortcuts.append(
-                self._button(
-                    "ai", "查看 AI 狀態", style=discord.ButtonStyle.primary,
-                )
-            )
+            ai_shortcut = self._button("ai", "查看狀態")
         if self.temp_voice_enabled and (
             not voice_status.state_available
             or voice_status.parent_channel_id is None
             or voice_problem is not None
         ):
-            shortcuts.append(
-                self._button(
-                    "voice", "設定臨時語音", style=discord.ButtonStyle.primary,
-                )
-            )
+            voice_shortcut = self._button("voice", "前往設定")
         if self.steam_free_games_enabled and (
             not steam_status.state_available
             or steam_status.channel_id is None
             or steam_problem is not None
         ):
-            shortcuts.append(
-                self._button(
-                    "steam", "設定 Steam 通知", style=discord.ButtonStyle.primary,
-                )
-            )
+            steam_shortcut = self._button("steam", "前往設定")
 
-        children = self._header("管理控制台", "overview")
-        children.append(discord.ui.TextDisplay("\n".join(status_lines)))
+        authenticated = "已登入" if self.codex_status.authenticated else "未登入"
+        rows = (
+            ("AI 助手", ai.label, ai.detail or f"{self._ai_display()[0]} · {authenticated}", ai_shortcut),
+            (
+                "臨時語音", voice.label,
+                voice.detail or f"{voice.entry} · {voice_status.tracked_child_count} 個頻道追蹤中",
+                voice_shortcut,
+            ),
+            (
+                "Steam 免費遊戲", steam.label,
+                steam.detail or f"{steam.channel} · {steam_status.active_app_count} 款活動中",
+                steam_shortcut,
+            ),
+        )
+        issues = sum(label == "需要處理" for _, label, _, _ in rows)
+        subtitle = f"{len(rows)} 個模組 · " + (f"{issues} 個需要處理" if issues else "狀態正常")
+        children = self._header("管理控制台", "overview", subtitle=subtitle)
+        for name, label, detail, shortcut in rows:
+            text = f"{STATUS_DOTS[label]} **{name}**\n-# {detail}"
+            children.append(
+                discord.ui.Section(text, accessory=shortcut)
+                if shortcut is not None else discord.ui.TextDisplay(text)
+            )
         if self._rate_visible():
             children.append(self._rate_item(compact=True))
-        if shortcuts:
-            children.extend((
-                self._detail("下一步", "選擇下方入口前往設定或檢查頁面。"),
-                discord.ui.ActionRow(*shortcuts),
-            ))
-        children.append(self._actions(refresh=True))
+        children.extend((discord.ui.Separator(), self._actions()))
         self._set_container(*children)
 
     def _render_ai(self, note: str | None = None) -> None:
@@ -1096,7 +1055,7 @@ class AdminPanelView(discord.ui.LayoutView):
                 f"{discord.utils.escape_markdown(self.codex_status.last_error)}"
             ))
         children.append(discord.ui.TextDisplay(
-            f"**{plan} · {authenticated} · "
+            f"{STATUS_DOTS[ai.label]} **{plan} · {authenticated} · "
             f"{ai.label}**"
         ))
         if self._rate_visible():
@@ -1106,9 +1065,7 @@ class AdminPanelView(discord.ui.LayoutView):
             if next_step == "Codex bridge 無法連線":
                 next_step = "請確認 AI 服務正在執行且連線設定正確，再重新整理。"
             children.append(self._detail("下一步", next_step))
-        if note:
-            children.append(self._detail("最近操作", note, escape=True))
-        children.append(self._actions(refresh=True))
+        children.extend((discord.ui.Separator(), *_footer_note(note), self._actions()))
         self._set_container(*children)
 
     def _render_ai_access(self, note: str | None = None) -> None:
@@ -1169,10 +1126,10 @@ class AdminPanelView(discord.ui.LayoutView):
                     role_ids=role_ids,
                 )
             ),
+            discord.ui.Separator(),
+            *_footer_note(note),
             self._actions(),
         ))
-        if note:
-            children.insert(-1, self._detail("最近操作", note, escape=True))
         self._set_container(*children)
 
     def _render_ai_tech(self) -> None:
@@ -1195,7 +1152,8 @@ class AdminPanelView(discord.ui.LayoutView):
                 "## 安全邊界\n**Read-only · Deny-all**\n"
                 "-# Shell、MCP、Apps、Subagents 與全域 Memories 均停用"
             ),
-            self._actions(refresh=True),
+            discord.ui.Separator(),
+            self._actions(),
         ))
         self._set_container(*children)
 
@@ -1210,7 +1168,8 @@ class AdminPanelView(discord.ui.LayoutView):
             (
                 discord.ui.TextDisplay(self._voice_summary(voice)),
                 discord.ui.TextDisplay(self._steam_summary(steam)),
-                self._actions(refresh=True),
+                discord.ui.Separator(),
+                self._actions(),
             )
         )
         self._set_container(*children)
@@ -1221,13 +1180,12 @@ class AdminPanelView(discord.ui.LayoutView):
         children = self._header("臨時語音", "voice", "modules")
         children.append(discord.ui.TextDisplay(
                 "## 目前狀態\n"
-                f"**{status.tracked_child_count} 個臨時語音頻道**\n"
+                f"{STATUS_DOTS[voice.label]} **{status.tracked_child_count} 個臨時語音頻道**\n"
                 f"-# {voice.entry} · {voice.label}"
         ))
         if voice.next_step:
             children.append(self._detail("下一步", voice.next_step))
-        if note:
-            children.append(self._detail("最近操作", note, escape=True))
+        children.extend((discord.ui.Separator(), *_footer_note(note)))
         children.append(
             self._actions(
                 self._button(
@@ -1266,7 +1224,7 @@ class AdminPanelView(discord.ui.LayoutView):
         children = self._header("Steam 限時免費", "steam", "modules")
         children.append(discord.ui.TextDisplay(
                 "## 通知狀態\n"
-                f"**{status.active_app_count} 款活動中**\n"
+                f"{STATUS_DOTS[steam.label]} **{status.active_app_count} 款活動中**\n"
                 f"-# {steam.channel} · {steam.role_status} · 每 {int(status.poll_interval_seconds // 60)} 分鐘檢查 · {steam.label}"
         ))
         children.append(discord.ui.ActionRow(
@@ -1278,8 +1236,6 @@ class AdminPanelView(discord.ui.LayoutView):
 
         if steam.next_step:
             children.append(self._detail("下一步", steam.next_step))
-        if notice:
-            children.append(self._detail("最近操作", notice, escape=True))
 
         if error is not None:
             children.append(
@@ -1328,16 +1284,18 @@ class AdminPanelView(discord.ui.LayoutView):
                         )
                     )
 
-        children.append(
+        children.extend((
+            discord.ui.Separator(),
+            *_footer_note(notice),
             self._actions(
+                self._button("steam_query", "重新查詢", style=discord.ButtonStyle.primary),
                 self._button(
                     "steam_role_clear",
                     "取消身分組通知",
                     disabled=role_controls_disabled or not status.role_ids,
                 ),
-                self._button("steam_query", "重新查詢", style=discord.ButtonStyle.primary),
-            )
-        )
+            ),
+        ))
         self._set_container(*children)
 
     def _render_closed(self) -> None:

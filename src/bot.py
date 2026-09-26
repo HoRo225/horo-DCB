@@ -111,14 +111,16 @@ class HoroBot(discord.Client):
             if not await self._admin_command_allowed(interaction):
                 return
             assert interaction.guild is not None
+            view = self.calendar_controller.admin_view(
+                user_id=interaction.user.id,
+                guild=interaction.guild,
+            )
             await interaction.response.send_message(
                 files=brand_files(CARD_FILENAME),
-                view=self.calendar_controller.admin_view(
-                    user_id=interaction.user.id,
-                    guild=interaction.guild,
-                ),
+                view=view,
                 ephemeral=True,
             )
+            view.last_interaction = interaction
 
     async def _admin_command_allowed(self, interaction: discord.Interaction) -> bool:
         if self._closing:
@@ -327,8 +329,8 @@ def main() -> None:
     steam_free_games = SteamFreeGamesNotifier()
     controller: CalendarController
 
-    def make_board(guild_name: str, events: Any) -> discord.ui.LayoutView:
-        return controller.build_board_view(guild_name, events)
+    def make_board(guild_name: str, events: Any) -> tuple[discord.ui.LayoutView, list[discord.File]]:
+        return controller.build_board(guild_name, events)
 
     calendar = CalendarManager(board_view_factory=make_board)
     controller = CalendarController(calendar)

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import calendar as month_calendar
+from collections.abc import Sequence
 from typing import TYPE_CHECKING
 
 import discord
@@ -43,8 +44,34 @@ CALENDAR_STATE_UNAVAILABLE_NOTICE = (
 )
 
 
-def render_board_text(
-    guild_name: str,
+WEEKDAY_LABELS = "日一二三四五六"
+
+
+def event_lines(event: discord.ScheduledEvent) -> str | None:
+    start = event_local_time(event)
+    if start is None:
+        return None
+    details = [
+        discord.utils.format_dt(start, style="F"),
+        discord.utils.format_dt(start, style="R"),
+        event_location(event),
+    ]
+    if url := event_url(event):
+        details.append(f"[開啟活動]({url})")
+    return f"**{safe_event_name(event)}**\n-# {' · '.join(details)}"
+
+
+def render_board_heading(guild_name: str) -> str:
+    current = calendar_now().astimezone(CALENDAR_TZ)
+    safe_guild = discord.utils.escape_markdown(guild_name)[:100]
+    weekday = WEEKDAY_LABELS[(current.weekday() + 1) % 7]
+    return (
+        f"# 📅 {safe_guild} 行事曆\n"
+        f"-# 今天 {current.month}/{current.day}（{weekday}） · 時間以 UTC+8 解讀"
+    )
+
+
+def render_month_text(
     events: list[discord.ScheduledEvent] | tuple[discord.ScheduledEvent, ...],
 ) -> str:
     current = calendar_now().astimezone(CALENDAR_TZ)
@@ -59,8 +86,7 @@ def render_board_text(
         current.year,
         current.month,
     )
-    weekday_labels = "日一二三四五六"
-    calendar_lines = ["".join(f"{label:^5}" for label in weekday_labels).rstrip()]
+    calendar_lines = ["".join(f"{label:^5}" for label in WEEKDAY_LABELS).rstrip()]
     for week in weeks:
         cells = []
         for day in week:
@@ -71,33 +97,23 @@ def render_board_text(
             else:
                 cells.append(f"{day:>2}{'•' if day in event_days else ' '}  ")
         calendar_lines.append("".join(cells).rstrip())
-    safe_guild = discord.utils.escape_markdown(guild_name)[:100]
-    lines = [
-        f"# 📅 {safe_guild} 行事曆",
+    return "\n".join((
         f"## {current.year} 年 {current.month} 月",
         "```text",
         *calendar_lines,
         "```",
-        f"-# 今天：{current.year}/{current.month}/{current.day}（{weekday_labels[(current.weekday() + 1) % 7]}） · [日期] 代表今天 · • 代表活動",
-        "-# 所有輸入時間均以 UTC+8 解讀",
-        "## 即將到來",
-    ]
+        "-# [日期] 代表今天 · • 代表活動",
+    ))
+
+
+def render_upcoming_text(
+    events: list[discord.ScheduledEvent] | tuple[discord.ScheduledEvent, ...],
+) -> str:
+    lines = ["## 即將到來"]
     upcoming = list(events[:MAX_UPCOMING_SHOWN])
     if not upcoming:
         lines.append("目前沒有即將到來的活動。\n-# 有「管理活動」權限的成員可從下方新增第一個活動。")
-    for event in upcoming:
-        start = event_local_time(event)
-        if start is None:
-            continue
-        lines.append(f"**{safe_event_name(event)}**")
-        lines.append(
-            f"{discord.utils.format_dt(start, style='F')} · "
-            f"{discord.utils.format_dt(start, style='R')}"
-        )
-        lines.append(f"-# {event_location(event)}")
-        url = event_url(event)
-        if url:
-            lines.append(f"[開啟活動]({url})")
+    lines.extend(text for event in upcoming if (text := event_lines(event)) is not None)
     extra = len(events) - len(upcoming)
     if extra > 0:
         lines.append(f"-# 另有 {extra} 個活動，按「瀏覽活動」查看。")
@@ -182,6 +198,11 @@ class _CalendarAdminActionButton(discord.ui.Button):
         await interaction.response.defer()
         if self.action in {"apply", "unbind_confirm"} and operation_version != view.operation_version:
             return
+        if self.action in {"apply", "unbind_confirm"} and not await view.still_admin():
+            view.notice = "⚠️ 你已不是伺服器管理員，操作已取消。"
+            view.unbind_target = None
+            await view.publish(interaction)
+            return
         if self.action == "apply":
             if channel is None:
                 view.notice = "⚠️ 請先選擇文字頻道。"
@@ -237,7 +258,9 @@ class _CalendarAdminActionButton(discord.ui.Button):
 
 class CalendarAdminView(discord.ui.LayoutView):
     def __init__(self, manager: CalendarManager, *, user_id: int, guild: discord.Guild) -> None:
-        super().__init__(timeout=15 * 60)
+        # Close before the latest 15-minute interaction token expires.
+        super().__init__(timeout=14 * 60)
+        self.last_interaction: discord.Interaction | None = None
         self.manager = manager
         self.user_id = user_id
         self.guild = guild
@@ -357,12 +380,41 @@ class CalendarAdminView(discord.ui.LayoutView):
             children.append(discord.ui.ActionRow(*buttons))
         self.add_item(discord.ui.Container(*children, accent_colour=BRAND_COLOUR))
 
+    async def still_admin(self) -> bool:
+        member = self.guild.get_member(self.user_id)
+        if member is None:
+            try:
+                async with asyncio.timeout(3):
+                    member = await self.guild.fetch_member(self.user_id)
+            except (TimeoutError, discord.HTTPException):
+                return False
+        return member.guild_permissions.administrator
+
+    async def on_timeout(self) -> None:
+        interaction = self.last_interaction
+        if interaction is None:
+            return
+        self.clear_items()
+        self.add_item(discord.ui.Container(
+            branded_title("📅 行事曆管理", ""),
+            discord.ui.TextDisplay(
+                "-# 管理面板已關閉；重新輸入 /行事曆 可再開啟。公開看板不受影響。"
+            ),
+            discord.ui.ActionRow(discord.ui.Button(label="已關閉", disabled=True)),
+            accent_colour=BRAND_COLOUR,
+        ))
+        try:
+            await interaction.edit_original_response(view=self)
+        except discord.HTTPException:
+            pass
+
     async def interaction_check(self, interaction: discord.Interaction, /) -> bool:
         if (
             interaction.user.id == self.user_id
             and interaction.guild_id == self.guild_id
             and getattr(interaction.permissions, "administrator", False)
         ):
+            self.last_interaction = interaction
             return True
         await interaction.response.send_message(
             "只有開啟面板的伺服器管理員可以操作這個行事曆面板。",
@@ -394,7 +446,11 @@ class _CalendarBoardButton(discord.ui.Button):
 
 class CalendarBoardView(discord.ui.LayoutView):
     def __init__(
-        self, controller: CalendarController, text: str, *, can_edit: bool = True,
+        self,
+        controller: CalendarController,
+        body: Sequence[discord.ui.Item] = (),
+        *,
+        can_edit: bool = True,
     ) -> None:
         super().__init__(timeout=None)
         self.controller = controller
@@ -403,7 +459,7 @@ class CalendarBoardView(discord.ui.LayoutView):
             children.append(brand_banner)
         children.extend(
             (
-                discord.ui.TextDisplay(text),
+                *body,
                 discord.ui.Separator(),
                 discord.ui.TextDisplay("-# 新增與編輯需要「管理活動」權限。"),
                 discord.ui.ActionRow(
@@ -691,17 +747,14 @@ class _CalendarPageButton(discord.ui.Button):
             view.page += self.direction
             try:
                 view.render()
-                kwargs = {"view": view}
-                if isinstance(view, CalendarBrowseView):
-                    kwargs["content"] = view.page_text()
-                await interaction.edit_original_response(**kwargs)
+                await interaction.edit_original_response(view=view)
             except (Exception, asyncio.CancelledError):
                 view.page = old_page
                 view.render()
                 raise
 
 
-class _CalendarPagedView(discord.ui.View):
+class _CalendarPagedView(discord.ui.LayoutView):
     def __init__(
         self,
         user_id: int,
@@ -720,22 +773,28 @@ class _CalendarPagedView(discord.ui.View):
         self._previous_page_button = _CalendarPageButton(-1, disabled=True)
         self._next_page_button = _CalendarPageButton(1, disabled=False)
 
-    def _add_page_buttons(self) -> None:
-        if self._page_count > 1:
-            self.add_item(self._previous_page_button)
-            self.add_item(self._next_page_button)
-
     async def interaction_check(self, interaction: discord.Interaction, /) -> bool:
         if interaction.user.id == self.user_id and interaction.guild_id == self.guild_id:
             return True
         await interaction.response.send_message("只有原操作使用者可以使用這個選單。", ephemeral=True)
         return False
 
+    def _body(self) -> list[discord.ui.Item]:
+        raise NotImplementedError
+
     def render(self) -> None:
         self.page = min(max(self.page, 0), self._page_count - 1)
+        children = self._body()
         if self._page_count > 1:
             self._previous_page_button.disabled = self.page <= 0
             self._next_page_button.disabled = self.page >= self._page_count - 1
+            children.extend((
+                discord.ui.Separator(),
+                discord.ui.TextDisplay(f"-# 第 {self.page + 1} / {self._page_count} 頁"),
+                discord.ui.ActionRow(self._previous_page_button, self._next_page_button),
+            ))
+        self.clear_items()
+        self.add_item(discord.ui.Container(*children, accent_colour=BRAND_COLOUR))
 
     def _page_events(self) -> tuple[discord.ScheduledEvent, ...]:
         start = self.page * self._page_size
@@ -753,12 +812,9 @@ class CalendarEditPickerView(_CalendarPagedView):
         super().__init__(user_id, guild_id, events, EVENTS_PER_PAGE)
         self.manager = manager
         self._edit_select = _EditSelect(placeholder="選擇活動", options=[])
-        self.add_item(self._edit_select)
-        self._add_page_buttons()
         self.render()
 
-    def render(self) -> None:
-        super().render()
+    def _body(self) -> list[discord.ui.Item]:
         options = []
         for event in self._page_events():
             local = event_local_time(event)
@@ -771,6 +827,10 @@ class CalendarEditPickerView(_CalendarPagedView):
                 )
             )
         self._edit_select.options = options
+        return [
+            discord.ui.TextDisplay("## 編輯活動\n-# 選擇要編輯的 External 活動。"),
+            discord.ui.ActionRow(self._edit_select),
+        ]
 
 
 class CalendarBrowseView(_CalendarPagedView):
@@ -781,20 +841,14 @@ class CalendarBrowseView(_CalendarPagedView):
         events: list[discord.ScheduledEvent],
     ) -> None:
         super().__init__(user_id, guild_id, events, BROWSE_EVENTS_PER_PAGE)
-        self._add_page_buttons()
         self.render()
 
-    def page_text(self) -> str:
+    def _body(self) -> list[discord.ui.Item]:
+        lines = ["## 活動列表"]
+        lines.extend(
+            text for event in self._page_events()
+            if (text := event_lines(event)) is not None
+        )
         if not self.events:
-            return "目前沒有即將到來的活動。"
-        lines = [f"## 活動列表 · 第 {self.page + 1} 頁"]
-        for event in self._page_events():
-            start = event_local_time(event)
-            if start is None:
-                continue
-            line = f"**{safe_event_name(event)}** · {discord.utils.format_dt(start, style='F')}"
-            url = event_url(event)
-            if url:
-                line += f" · [開啟]({url})"
-            lines.append(line)
-        return "\n".join(lines)
+            lines.append("目前沒有即將到來的活動。")
+        return [discord.ui.TextDisplay("\n".join(lines))]
