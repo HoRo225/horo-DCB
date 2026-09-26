@@ -342,9 +342,6 @@ class AdminPanelView(discord.ui.LayoutView):
             )
         )
 
-    def _close_button(self) -> _PanelButton:
-        return self._button("close", "關閉")
-
     def _header(
         self,
         title: str,
@@ -365,11 +362,10 @@ class AdminPanelView(discord.ui.LayoutView):
         return children
 
     def _actions(self, *buttons: _PanelButton, refresh: bool = True) -> discord.ui.ActionRow:
-        # Page actions first; refresh and close always sit at the end.
+        # Page actions first; refresh sits at the end.
         return discord.ui.ActionRow(
             *buttons,
             *([self._button("refresh", "重新整理")] if refresh else []),
-            self._close_button(),
         )
 
     def _rate_item(self, *, compact: bool = False) -> discord.ui.TextDisplay:
@@ -661,14 +657,9 @@ class AdminPanelView(discord.ui.LayoutView):
         self,
         interaction: discord.Interaction,
         work: Callable[[int], Awaitable[Callable[[], None] | None]],
-        *,
-        close: bool = False,
     ) -> None:
         operation = await self._defer_operation(interaction)
         if operation is None:
-            return
-        if close:
-            await self.stop_rate_refresh()
             return
         # Manager guards reject stale starts; accepted mutations finish their cleanup.
         render = await work(operation)
@@ -975,7 +966,6 @@ class AdminPanelView(discord.ui.LayoutView):
             return
         if action not in PAGES | {
             "refresh",
-            "close",
             "voice_sync",
             "steam_role_clear",
             "steam_query",
@@ -995,7 +985,7 @@ class AdminPanelView(discord.ui.LayoutView):
         channel = self.pending_calendar_channel
         target = self.calendar_unbind_target
         revision = self.calendar.get_binding_revision(self.guild_id)
-        if (action in PAGES and action != "calendar") or action == "close":
+        if action in PAGES and action != "calendar":
             self.calendar_unbind_target = None
 
         async def work(operation: int) -> Callable[[], None] | None:
@@ -1005,8 +995,6 @@ class AdminPanelView(discord.ui.LayoutView):
                 )
             if action in PAGES - {"ai"}:
                 return lambda: self._render_page(action)
-            if action == "close":
-                return self._render_closed
             if action == "ai":
                 if not await self._refresh_ai_data(operation):
                     return None
@@ -1081,4 +1069,4 @@ class AdminPanelView(discord.ui.LayoutView):
                 return lambda: presentation.render_steam(self, error="目前無法取得 Steam 資料。")
             return lambda: presentation.render_steam(self, result)
 
-        await self._run_operation(interaction, work, close=action == "close")
+        await self._run_operation(interaction, work)
