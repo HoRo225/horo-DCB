@@ -21,6 +21,10 @@ sudo -n bash "$source_dir/ops/ai-lifecycle-release.sh" prepare "$sha" "$source_d
 
 回歸測試只使用正式容器內的暫存 mapping，不替換 `/app/codex` 或 `/app/data`。`prepare` 在停機前建置 immutable image，分別保存 Bot／Codex 的舊 image ID、回滾標籤、Compose 及固定 bind mount 路徑。它不停止服務。部署目錄與備份保持 `0700`／`0600`。
 
+容器仍在執行但原 image 已被刪除時，必須先由管理者重建並驗證 `horo-dcb:recovered-bot` 或 `horo-dcb:recovered-codex`，才能重新 `prepare`。恢復 image 只包含該服務原有的非敏感 source 與一致的 `requirements.txt`；base image 的依賴必須先核對。不得用 container commit、整體 export 或複製資料、環境、登入檔來重建，也不讓腳本自動挑選 base。
+
+manifest 的 `bot.live.image`／`codex.live.image` 記錄仍在執行容器的原 ID，`bot.image`／`codex.image` 記錄可用的回滾 ID。切換前比對原 ID，回滾使用可用 ID，並另外保存 SHA 專屬回滾標籤。保留候選 SHA、恢復來源與依賴核對紀錄，逐一複核這四個非敏感 ID。失敗的 partial release 另名保留，再以新 SHA 準備，不覆蓋原 manifest 或備份。
+
 ## 切換與驗收
 
 ```bash

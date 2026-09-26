@@ -37,6 +37,16 @@ current_id() {
     [[ $cid =~ ^[0-9a-f]{64}$ ]] || return 1
     docker inspect --format '{{.Image}}' "$cid"
 }
+rollback_image() {
+    local service=$1 live_image=$2 available_image
+    if ! available_image=$(docker image inspect --format '{{.Id}}' "$live_image" 2>/dev/null); then
+        available_image=$(docker image inspect --format '{{.Id}}' "horo-dcb:recovered-$service" 2>/dev/null) \
+            || fail 'Original image missing; prebuilt recovery image required before prepare.'
+        printf 'Using the prebuilt recovery image for %s rollback.\n' "$service" >&2
+    fi
+    [[ $available_image =~ ^sha256:[0-9a-f]{64}$ ]] || fail 'Invalid rollback image ID.'
+    printf '%s\n' "$available_image"
+}
 within() {
     local end=$1
     shift
@@ -92,10 +102,14 @@ migrate() {
     return "$result"
 }
 load_release() {
-    [[ -f $release/prepared && -f $release/bot.image && -f $release/codex.image ]] || fail 'Release was not prepared.'
+    [[ -f $release/prepared && -f $release/bot.image && -f $release/codex.image \
+        && -f $release/bot.live.image && -f $release/codex.live.image ]] || fail 'Release was not prepared.'
     read -r bot_image < "$release/bot.image"
     read -r codex_image < "$release/codex.image"
-    [[ $bot_image =~ ^sha256:[0-9a-f]{64}$ && $codex_image =~ ^sha256:[0-9a-f]{64}$ ]] || fail 'Invalid image manifest.'
+    read -r bot_live_image < "$release/bot.live.image"
+    read -r codex_live_image < "$release/codex.live.image"
+    [[ $bot_image =~ ^sha256:[0-9a-f]{64}$ && $codex_image =~ ^sha256:[0-9a-f]{64}$ \
+        && $bot_live_image =~ ^sha256:[0-9a-f]{64}$ && $codex_live_image =~ ^sha256:[0-9a-f]{64}$ ]] || fail 'Invalid image manifest.'
     docker image inspect "$bot_image" "$codex_image" "$image" >/dev/null
     [[ $(docker image inspect --format '{{.Id}}' "$image") == "$(cat "$release/candidate.image")" ]] || fail 'Candidate image changed.'
 }
@@ -172,9 +186,11 @@ prepare)
     grep -q '/livez' "$source_dir/compose.yaml"
     grep -q 'device: /srv/horo-dcb-data/bot' "$source_dir/compose.yaml"
     grep -q 'device: /srv/horo-dcb-data/codex' "$source_dir/compose.yaml"
-    bot_image=$(current_id bot)
-    codex_image=$(current_id codex)
-    [[ $bot_image =~ ^sha256:[0-9a-f]{64}$ && $codex_image =~ ^sha256:[0-9a-f]{64}$ ]] || fail 'Current images unavailable.'
+    bot_live_image=$(current_id bot)
+    codex_live_image=$(current_id codex)
+    [[ $bot_live_image =~ ^sha256:[0-9a-f]{64}$ && $codex_live_image =~ ^sha256:[0-9a-f]{64}$ ]] || fail 'Current images unavailable.'
+    bot_image=$(rollback_image bot "$bot_live_image")
+    codex_image=$(rollback_image codex "$codex_live_image")
     for service in bot codex; do
         volume=horo-dcb_${service}_data_srv
         [[ $(docker volume inspect --format '{{index .Options "device"}}' "$volume") == "/srv/horo-dcb-data/$service" ]] || fail 'Unexpected data mount.'
@@ -191,6 +207,8 @@ prepare)
     cp -- "$compose" "$release/compose.before.yaml"
     printf '%s\n' "$bot_image" > "$release/bot.image"
     printf '%s\n' "$codex_image" > "$release/codex.image"
+    printf '%s\n' "$bot_live_image" > "$release/bot.live.image"
+    printf '%s\n' "$codex_live_image" > "$release/codex.live.image"
     printf '%s\n' "$compose" '/srv/horo-dcb/.env' '/srv/horo-dcb-data/bot' '/srv/horo-dcb-data/codex' > "$release/paths.txt"
     printf '%s\n' 'horo-dcb_bot_data_srv /app/data /srv/horo-dcb-data/bot' \
         'horo-dcb_codex_data_srv /app/codex /srv/horo-dcb-data/codex' > "$release/mounts.txt"
@@ -204,7 +222,7 @@ prepare)
     ;;
 deploy)
     load_release
-    [[ $(current_id bot) == "$bot_image" && $(current_id codex) == "$codex_image" ]] || fail 'Live images changed after prepare.'
+    [[ $(current_id bot) == "$bot_live_image" && $(current_id codex) == "$codex_live_image" ]] || fail 'Live images changed after prepare.'
     [[ ! -e $release/backups ]] || fail 'Deployment backup already exists; inspect the previous attempt.'
     start=$SECONDS
     changed=1
