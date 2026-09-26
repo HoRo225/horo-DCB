@@ -323,12 +323,19 @@ class CalendarManager:
             logging.info("已解除行事曆看板 Guild ID=%s actor=%s", guild.id, actor_id)
             return True
 
-    async def refresh_guild(self, guild: discord.Guild) -> bool:
+    async def refresh_guild(
+        self,
+        guild: discord.Guild,
+        *,
+        is_current: Callable[[], bool] | None = None,
+    ) -> bool:
         if self._closing or not self._state_available:
             return False
         version = self._versions[guild.id]
         async with self._locks[guild.id]:
             if self._closing:
+                return False
+            if is_current is not None and not is_current():
                 return False
             binding = self._bindings.get(guild.id)
             if binding is None:
