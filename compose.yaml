@@ -12,9 +12,6 @@ services:
     stop_grace_period: 40s
     volumes:
       - bot_data_srv:/app/data
-    depends_on:
-      codex:
-        condition: service_healthy
 
   codex:
     <<: *runtime
@@ -30,7 +27,7 @@ services:
         - CMD
         - python
         - -c
-        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8765/healthz', timeout=5)"
+        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8765/livez', timeout=5)"
       interval: 30s
       timeout: 10s
       retries: 3

@@ -24,7 +24,7 @@ from src.ai.thread_store import ThreadStore
 
 class _HealthAccessLogger(AccessLogger):
     def log(self, request, response, elapsed):
-        if request.path == "/healthz" and response.status == 200:
+        if request.path in ("/livez", "/readyz", "/healthz") and response.status == 200:
             return
         super().log(request, response, elapsed)
 
@@ -72,10 +72,7 @@ def create_app(token: str, service: Any) -> web.Application:
         nonlocal last_ready
         try:
             status = await service.status()
-            ready = (
-                status.get("available") is True
-                and status.get("authenticated") is True
-            )
+            ready = status.get("ready") is True
         except Exception:
             ready = False
         if ready != last_ready:
@@ -85,6 +82,10 @@ def create_app(token: str, service: Any) -> web.Application:
             {"status": "ready" if ready else "not_ready"},
             status=200 if ready else 503,
         )
+
+    async def live(_request: web.Request) -> web.Response:
+        alive = service.live
+        return web.json_response({"status": "live" if alive else "draining"}, status=200 if alive else 503)
 
     async def runtime_status(request: web.Request) -> web.Response:
         if not _authorized(request):
@@ -116,6 +117,8 @@ def create_app(token: str, service: Any) -> web.Application:
                 payload.conversation_key,
                 payload.text,
                 payload.images,
+                budget_ms=payload.budget_ms,
+                parent_channel_id=payload.parent_channel_id,
             )
             body: dict[str, object] = {"reply": reply.text}
             if reply.image_urls:
@@ -135,17 +138,19 @@ def create_app(token: str, service: Any) -> web.Application:
         except Exception:
             return _error("invalid_request")
         try:
-            guild_id, channel_id = validate_archive_payload(payload)
+            scope = validate_archive_payload(payload)
         except CodexBridgeError as exc:
             return _error(exc.code)
         try:
-            await service.archive_scope(guild_id, channel_id)
+            result = await service.archive_scope(scope.guild_id, scope.channel_id, include_children=scope.include_children)
         except Exception:
             logging.error("Codex bridge archive request failed.")
             return _error("unavailable")
-        return web.json_response({})
+        return web.json_response(asdict(result))
 
     app.router.add_get("/healthz", health)
+    app.router.add_get("/readyz", health)
+    app.router.add_get("/livez", live)
     app.router.add_get("/v1/status", runtime_status)
     app.router.add_get("/v1/rate-limits", rate_limits)
     app.router.add_post("/v1/chat", chat)
@@ -189,7 +194,7 @@ def _runtime_app() -> web.Application:
     app = create_app(token, service)
 
     async def lifetime(_app: web.Application):
-        await service.initialize()
+        service.start()
         try:
             yield
         finally:

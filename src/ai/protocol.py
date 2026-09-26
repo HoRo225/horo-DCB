@@ -111,12 +111,25 @@ def normalize_reply_image_urls(value: object) -> tuple[str, ...]:
     return tuple(result)
 
 
-def scope_matches(key: str, guild_id: int, channel_id: int | None = None) -> bool:
+def scope_matches(
+    key: str,
+    guild_id: int,
+    channel_id: int | None = None,
+    *,
+    parent_channel_id: int | None = None,
+    include_children: bool = False,
+) -> bool:
     prefix = f"guild:{guild_id}:"
-    return key.startswith(prefix) and (
-        channel_id is None
-        or key == f"{prefix}thread:{channel_id}"
-        or key.startswith(f"{prefix}channel:{channel_id}:user:")
+    if not key.startswith(prefix):
+        return False
+    if channel_id is None:
+        return True
+    if key.startswith(f"{prefix}channel:{channel_id}:user:"):
+        return True
+    if key == f"{prefix}thread:{channel_id}":
+        return True
+    return include_children and key.startswith(f"{prefix}thread:") and (
+        parent_channel_id is None or parent_channel_id == channel_id
     )
 
 
@@ -134,6 +147,33 @@ class CodexRuntimeStatus:
     last_error: str | None = None
     bot_active_requests: int = 0
     bot_queued_requests: int = 0
+    protocol_version: int = 2
+    ready: bool = False
+    reason: str = "unavailable"
+    status_fetched_at: int | None = None
+    status_stale: bool = True
+
+
+READY_REASONS = frozenset({
+    "ready", "initializing", "auth_required", "status_stale",
+    "state_unavailable", "draining", "unavailable",
+})
+
+
+@dataclass(frozen=True, slots=True)
+class CodexArchiveResult:
+    detached_count: int
+    archived_count: int
+    archive_unconfirmed_count: int
+
+
+def parse_archive_result(raw: object) -> CodexArchiveResult:
+    fields = {"detached_count", "archived_count", "archive_unconfirmed_count"}
+    if not isinstance(raw, dict) or set(raw) != fields or any(
+        type(raw[field]) is not int or raw[field] < 0 for field in fields
+    ):
+        raise ValueError("invalid archive result")
+    return CodexArchiveResult(**raw)
 
 
 EMPTY_CODEX_RUNTIME_STATUS = CodexRuntimeStatus(False, False, None, None, None, None, 0)
@@ -254,20 +294,34 @@ class ChatPayload:
     conversation_key: str
     text: str
     images: tuple[str, ...]
+    budget_ms: int = 120000
+    parent_channel_id: int | None = None
 
 
 def validate_chat_payload(value: object) -> ChatPayload:
-    if not isinstance(value, dict) or set(value) != {
-        "conversation_key",
-        "text",
-        "images",
-    }:
+    required = {"conversation_key", "text", "images"}
+    optional = {"budget_ms", "parent_channel_id"}
+    if not isinstance(value, dict) or not required <= set(value) or set(value) - required - optional:
         raise CodexBridgeError("invalid_request")
 
     key = value["conversation_key"]
     text = value["text"]
     images = value["images"]
+    budget_ms = value.get("budget_ms", 120000)
+    parent_channel_id = value.get("parent_channel_id")
     if not valid_conversation_key(key):
+        raise CodexBridgeError("invalid_request")
+    if type(budget_ms) is not int or not 1 <= budget_ms <= 120000:
+        raise CodexBridgeError("invalid_request")
+    is_thread = isinstance(key, str) and ":thread:" in key
+    if is_thread:
+        if parent_channel_id is not None and (
+            type(parent_channel_id) is not int or parent_channel_id <= 0
+        ):
+            raise CodexBridgeError("invalid_request")
+        if parent_channel_id == int(key.rsplit(":", 1)[1]):
+            raise CodexBridgeError("invalid_request")
+    elif parent_channel_id is not None:
         raise CodexBridgeError("invalid_request")
     if not isinstance(text, str) or len(text) > MAX_PROMPT_CHARACTERS:
         raise CodexBridgeError("invalid_request")
@@ -303,19 +357,27 @@ def validate_chat_payload(value: object) -> ChatPayload:
             raise CodexBridgeError("invalid_request") from None
     if not text.strip() and not images:
         raise CodexBridgeError("invalid_request")
-    return ChatPayload(key, text, tuple(images))
+    return ChatPayload(key, text, tuple(images), budget_ms, parent_channel_id)
 
 
-def validate_archive_payload(value: object) -> tuple[int, int | None]:
-    if not isinstance(value, dict) or set(value) - {"guild_id", "channel_id"}:
+@dataclass(frozen=True, slots=True)
+class ArchivePayload:
+    guild_id: int
+    channel_id: int | None = None
+    include_children: bool = False
+
+
+def validate_archive_payload(value: object) -> ArchivePayload:
+    if not isinstance(value, dict) or set(value) - {"guild_id", "channel_id", "include_children"}:
         raise CodexBridgeError("invalid_request")
     guild_id = value.get("guild_id")
     channel_id = value.get("channel_id")
+    include_children = value.get("include_children", False)
     if type(guild_id) is not int or guild_id <= 0 or (
         channel_id is not None and (type(channel_id) is not int or channel_id <= 0)
-    ):
+    ) or type(include_children) is not bool or (include_children and channel_id is None):
         raise CodexBridgeError("invalid_request")
-    return guild_id, channel_id
+    return ArchivePayload(guild_id, channel_id, include_children)
 
 
 def valid_conversation_key(key: object) -> bool:

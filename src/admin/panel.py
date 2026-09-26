@@ -853,10 +853,20 @@ class AdminPanelView(discord.ui.LayoutView):
             label, detail = "需要處理", "白名單身分組尚未設定"
         elif allowlist_detail is not None:
             label, detail = "需要處理", allowlist_detail
-        elif not self.codex_status.available:
+        elif not self.codex_status.available and (
+            self.codex_status.protocol_version != 2
+            or self.codex_status.reason in {"", "unavailable"}
+        ):
             label, detail = "需要處理", "Codex bridge 無法連線"
-        elif not self.codex_status.authenticated:
-            label, detail = "需要處理", "Codex 尚未登入"
+        elif not self.codex_status.ready:
+            label, detail = "需要處理", {
+                "initializing": "AI 服務初始化中",
+                "auth_required": "Codex 尚未登入",
+                "status_stale": "AI 帳號狀態已過期，請稍後重新整理",
+                "state_unavailable": "AI 對話狀態檔不可用",
+                "draining": "AI 服務正在收尾",
+                "unavailable": "AI 服務暫時不可用",
+            }.get(self.codex_status.reason, "AI 服務暫時不可用")
         else:
             label, detail = "狀態正常", ""
         return _AiState(label, detail, allowlist_detail, stale_counts, permission_detail)
@@ -1091,10 +1101,11 @@ class AdminPanelView(discord.ui.LayoutView):
         ))
         if self._rate_visible():
             children.append(self._rate_item(compact=True))
-        if not self.codex_status.available:
-            children.append(self._detail("下一步", "請確認 AI 服務正在執行且連線設定正確，再重新整理。"))
-        elif not self.codex_status.authenticated:
-            children.append(self._detail("下一步", "請完成 AI 帳號登入，再重新整理。"))
+        if not self.codex_status.available or not self.codex_status.ready:
+            next_step = ai.detail
+            if next_step == "Codex bridge 無法連線":
+                next_step = "請確認 AI 服務正在執行且連線設定正確，再重新整理。"
+            children.append(self._detail("下一步", next_step))
         if note:
             children.append(self._detail("最近操作", note, escape=True))
         children.append(self._actions(refresh=True))
@@ -1482,11 +1493,15 @@ class AdminPanelView(discord.ui.LayoutView):
                 note = "白名單頻道無法保存，設定未變更。"
             elif result == "unchanged":
                 note = f"目前已設定 {count} 個白名單頻道。"
-            elif result == "updated_archive_failed":
-                logging.error("管理控制台封存舊 Codex 對話失敗。")
-                note = f"已更新 {count} 個白名單頻道，但舊對話封存失敗。"
+            elif result == "archive_failed":
+                logging.error("管理控制台停止續接舊 Codex 對話失敗。")
+                note = "無法確認停止續接舊對話，頻道設定未變更。"
+            elif result == "archived_persist_failed":
+                note = "已停止續接舊對話，但頻道設定無法保存。"
+            elif result == "updated_with_warning":
+                note = f"已更新 {count} 個白名單頻道；已停止續接舊對話，部分 SDK 封存未確認。"
             elif previous - selected:
-                note = f"已更新 {count} 個白名單頻道並封存舊對話。"
+                note = f"已更新 {count} 個白名單頻道，已停止續接舊對話。"
             else:
                 note = f"已更新 {count} 個白名單頻道。"
             return lambda: self._render_ai_access(note)
@@ -1527,10 +1542,12 @@ class AdminPanelView(discord.ui.LayoutView):
                 note = f"目前已設定 {len(selected)} 個白名單身分組。"
             elif result == "archive_failed":
                 logging.error("管理控制台切換白名單身分組前封存對話失敗。")
-                note = "舊對話封存失敗，角色設定未變更。"
+                note = "無法確認停止續接舊對話，角色設定未變更。"
             elif result == "archived_persist_failed":
                 logging.error("管理控制台保存 Codex 白名單身分組失敗。")
-                note = "舊對話已封存，但角色設定無法保存。"
+                note = "已停止續接舊對話，但角色設定無法保存。"
+            elif result == "updated_with_warning":
+                note = f"已更新 {len(selected)} 個白名單身分組；已停止續接舊對話，部分 SDK 封存未確認。"
             else:
                 note = f"已更新 {len(selected)} 個白名單身分組。"
             return lambda: self._render_ai_access(note)

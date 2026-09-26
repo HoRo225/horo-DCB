@@ -15,6 +15,7 @@ from src.ai.access_service import AiAccessService
 from src.ai.client import CodexBridgeClient
 from src.ai.media_executor import MediaExecutor
 from src.ai.protocol import EMPTY_CODEX_RUNTIME_STATUS
+from src.discord_utils import is_text_channel
 from src.brand import CARD_FILENAME, brand_files, sync_discord_brand
 from src.calendar.discord import CalendarController
 from src.calendar.manager import CalendarManager
@@ -177,8 +178,17 @@ class HoroBot(discord.Client):
             except Exception:
                 logging.error("%s shutdown failed.", name.capitalize())
 
-        await run_stage("panels", self._admin_panels.close(deadline=deadline))
-        await run_stage("codex", self.codex.close())
+        access_deadline = min(deadline, loop.time() + _SHUTDOWN_STAGE_SECONDS)
+        # Both owners enforce the same absolute limit; retiring callbacks cannot
+        # cancel a mutation that already owns the access lock.
+        results = await asyncio.gather(
+            self._admin_panels.close(deadline=access_deadline),
+            self.access_service.close(deadline=access_deadline),
+            return_exceptions=True,
+        )
+        if any(isinstance(result, BaseException) for result in results):
+            logging.error("Access or panel shutdown failed.")
+        await run_stage("codex", self.codex.close(deadline=deadline))
         await run_stage("media", self.media_executor.close(deadline=deadline))
         await asyncio.gather(
             run_stage("steam", self.steam_free_games.close()),
@@ -255,7 +265,10 @@ class HoroBot(discord.Client):
                 await self.temp_voice.handle_channel_delete(channel)
             except Exception:
                 logging.error("Temp voice channel delete handling failed.")
-        await ai_discord.archive_scope(self.codex, channel.guild.id, channel.id)
+        await ai_discord.archive_scope(
+            self.codex, channel.guild.id, channel.id,
+            include_children=is_text_channel(channel),
+        )
 
     async def on_raw_message_delete(self, payload: discord.RawMessageDeleteEvent) -> None:
         if payload.guild_id is not None:

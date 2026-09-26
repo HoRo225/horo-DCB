@@ -351,6 +351,7 @@ async def handle_message(
         return
 
     queued_at = time.monotonic()
+    accepted_deadline = asyncio.get_running_loop().time() + codex.work_timeout_seconds
     queue_ms = images_ms = sdk_ms = discord_ms = 0.0
     outcome = "unavailable"
     output_started = False
@@ -367,8 +368,9 @@ async def handle_message(
         budget = codex.cleanup_timeout_seconds
         if deadline is not None:
             remaining = deadline - asyncio.get_running_loop().time()
-            if remaining > 0:
-                budget = min(budget, remaining)
+            if remaining <= 0:
+                return
+            budget = min(budget, remaining)
         started = time.monotonic()
         try:
             async with asyncio.timeout(budget):
@@ -383,6 +385,11 @@ async def handle_message(
     try:
         async with codex.accepted_request(
             key, access=access, user_id=message.author.id,
+            parent_channel_id=(
+                message.channel.parent_id
+                if str(getattr(message.channel, "type", "")) in _THREAD_CHANNEL_TYPES else None
+            ),
+            deadline=accepted_deadline,
         ) as job:
             assert job.started_at is not None
             queue_ms = (job.started_at - job.accepted_at) * 1000
@@ -390,7 +397,7 @@ async def handle_message(
             try:
                 async with asyncio.timeout_at(job.deadline):
                     async def can_send() -> bool:
-                        if not job.current:
+                        if not job.current or asyncio.get_running_loop().time() >= job.deadline:
                             return False
                         guild = message.guild
                         author = None
@@ -403,87 +410,89 @@ async def handle_message(
                                 return False
                         if author is None:
                             return False
-                        return job.current and codex_conversation_key_for_message(
+                        return (job.current and asyncio.get_running_loop().time() < job.deadline
+                                and codex_conversation_key_for_message(
                             message, access, author=author,
-                        ) == key
+                        ) == key)
 
-                    if not await can_send():
-                        raise CodexBridgeError("unauthorized")
-                    if len(cleaned_content) > MAX_PROMPT_CHARACTERS:
-                        await message.reply(
-                            "問題最多 4,000 個字元，請縮短後再試。",
-                            mention_author=False,
-                        )
-                        outcome = "invalid_request"
-                        return
-                    if (
-                        mentions_bot and referenced_message is None
-                        and getattr(message, "reference", None) is not None
-                    ):
-                        referenced_message = await get_referenced_message(message)
-                        if referenced_message is None:
-                            await message.reply(
-                                "目前無法讀取被回覆的訊息，請重新回覆或重新上傳內容。",
-                                mention_author=False,
-                            )
-                            outcome = "invalid_request"
-                            return
-
-                    referenced_context = referenced_message if mentions_bot else None
-                    if referenced_context is not None:
-                        image_attachments = select_image_attachments([
-                            *getattr(referenced_context, "attachments", ()),
-                            *attachments,
-                        ])
-                        media_messages = [referenced_context, message]
-                    else:
-                        image_attachments = select_image_attachments(attachments)
-                        if not image_attachments and referenced_message is not None:
-                            image_attachments = select_image_attachments(list(
-                                getattr(referenced_message, "attachments", ())
-                            ))
-                        media_messages = [message]
-
-                    media_sources = select_message_media(media_messages)
-                    if len(image_attachments) + len(media_sources) > MAX_IMAGE_ATTACHMENTS:
-                        raise ImageAttachmentError(f"一次最多處理 {MAX_IMAGE_ATTACHMENTS} 張圖片，請減少圖片後再試。")
-                    media_budget = MediaBudget()
                     async with message.channel.typing():
-                        started = time.monotonic()
-                        try:
-                            media_deadline = min(
-                                job.deadline,
-                                asyncio.get_running_loop().time()
-                                + codex.image_timeout_seconds,
-                            )
-                            async with asyncio.timeout_at(media_deadline):
-                                images = await read_image_attachments(
-                                    image_attachments,
-                                    budget=media_budget,
-                                    executor=media_executor,
-                                    deadline=media_deadline,
+                        async with asyncio.timeout_at(job.work_deadline):
+                            if not await can_send():
+                                raise CodexBridgeError("unauthorized")
+                            if len(cleaned_content) > MAX_PROMPT_CHARACTERS:
+                                await message.reply(
+                                    "問題最多 4,000 個字元，請縮短後再試。",
+                                    mention_author=False,
                                 )
-                                images += await read_message_media(
-                                    media_sources,
-                                    budget=media_budget,
-                                    executor=media_executor,
-                                    deadline=media_deadline,
+                                outcome = "invalid_request"
+                                return
+                            if (
+                                mentions_bot and referenced_message is None
+                                and getattr(message, "reference", None) is not None
+                            ):
+                                referenced_message = await get_referenced_message(message)
+                                if referenced_message is None:
+                                    await message.reply(
+                                        "目前無法讀取被回覆的訊息，請重新回覆或重新上傳內容。",
+                                        mention_author=False,
+                                    )
+                                    outcome = "invalid_request"
+                                    return
+
+                            referenced_context = referenced_message if mentions_bot else None
+                            if referenced_context is not None:
+                                image_attachments = select_image_attachments([
+                                    *getattr(referenced_context, "attachments", ()),
+                                    *attachments,
+                                ])
+                                media_messages = [referenced_context, message]
+                            else:
+                                image_attachments = select_image_attachments(attachments)
+                                if not image_attachments and referenced_message is not None:
+                                    image_attachments = select_image_attachments(list(
+                                        getattr(referenced_message, "attachments", ())
+                                    ))
+                                media_messages = [message]
+
+                            media_sources = select_message_media(media_messages)
+                            if len(image_attachments) + len(media_sources) > MAX_IMAGE_ATTACHMENTS:
+                                raise ImageAttachmentError(f"一次最多處理 {MAX_IMAGE_ATTACHMENTS} 張圖片，請減少圖片後再試。")
+                            media_budget = MediaBudget()
+                            started = time.monotonic()
+                            try:
+                                media_deadline = min(
+                                    job.work_deadline,
+                                    asyncio.get_running_loop().time()
+                                    + codex.image_timeout_seconds,
                                 )
-                        finally:
-                            images_ms = (time.monotonic() - started) * 1000
-                        referenced_text = visible_message_text(referenced_context)
-                        if not cleaned_content and not images and not referenced_text:
-                            await message.reply(
-                                "請輸入問題，或附上圖片、GIF、表情或貼圖。",
-                                mention_author=False,
-                            )
-                            outcome = "invalid_request"
-                            return
-                        prompt = build_codex_prompt(cleaned_content, referenced_context)
-                        if not prompt and images:
-                            prompt = "請說明我提供的內容。"
-                        if not await can_send():
-                            raise CodexBridgeError("unauthorized")
+                                async with asyncio.timeout_at(media_deadline):
+                                    images = await read_image_attachments(
+                                        image_attachments,
+                                        budget=media_budget,
+                                        executor=media_executor,
+                                        deadline=media_deadline,
+                                    )
+                                    images += await read_message_media(
+                                        media_sources,
+                                        budget=media_budget,
+                                        executor=media_executor,
+                                        deadline=media_deadline,
+                                    )
+                            finally:
+                                images_ms = (time.monotonic() - started) * 1000
+                            referenced_text = visible_message_text(referenced_context)
+                            if not cleaned_content and not images and not referenced_text:
+                                await message.reply(
+                                    "請輸入問題，或附上圖片、GIF、表情或貼圖。",
+                                    mention_author=False,
+                                )
+                                outcome = "invalid_request"
+                                return
+                            prompt = build_codex_prompt(cleaned_content, referenced_context)
+                            if not prompt and images:
+                                prompt = "請說明我提供的內容。"
+                            if not await can_send():
+                                raise CodexBridgeError("unauthorized")
                         started = time.monotonic()
                         try:
                             reply = await codex.chat(key, prompt, images, job=job)
@@ -508,7 +517,7 @@ async def handle_message(
     except CodexBridgeError as exc:
         # Rejected admission and expired queues report immediately, without requeueing.
         queue_ms = (time.monotonic() - queued_at) * 1000
-        await send_error(exc)
+        await send_error(exc, deadline=accepted_deadline)
     finally:
         logging.info(
             "AI request result=%s queue_ms=%.1f images_ms=%.1f sdk_ms=%.1f discord_ms=%.1f",
@@ -530,8 +539,13 @@ async def handle_member_update(
 
 async def archive_scope(
     codex: CodexBridgeClient, guild_id: int, channel_id: int | None = None,
+    *, include_children: bool = False,
 ) -> None:
     try:
-        await codex.archive_scope(guild_id, channel_id)
+        result = await codex.archive_scope(guild_id, channel_id, include_children=include_children)
+        logging.info(
+            "Codex scope detached=%d archived=%d unconfirmed=%d",
+            result.detached_count, result.archived_count, result.archive_unconfirmed_count,
+        )
     except Exception:
         logging.error("Codex scope archive failed.")

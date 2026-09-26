@@ -9,8 +9,8 @@ import aiohttp
 from src.ai.access import CodexAccess
 from src.ai.admission import AcceptedJob, Admission
 from src.ai.protocol import (
-    CodexBridgeError, CodexChatReply, CodexRateLimits, CodexRuntimeStatus,
-    SAFE_ERROR_CODES, normalize_reply_image_urls, parse_rate_limits_payload,
+    CodexArchiveResult, CodexBridgeError, CodexChatReply, CodexRateLimits, CodexRuntimeStatus,
+    READY_REASONS, SAFE_ERROR_CODES, normalize_reply_image_urls, parse_archive_result, parse_rate_limits_payload,
 )
 
 
@@ -56,12 +56,13 @@ class CodexBridgeClient:
 
     @asynccontextmanager
     async def accepted_request(self, key: str, *, access: CodexAccess | None = None,
-                               user_id: int | None = None):
+                               user_id: int | None = None, parent_channel_id: int | None = None,
+                               deadline: float | None = None):
         async with self._admission.claim(
             key, queue_timeout_seconds=self.queue_timeout_seconds,
-            access=access, user_id=user_id,
+            access=access, user_id=user_id, parent_channel_id=parent_channel_id,
+            work_timeout_seconds=self.work_timeout_seconds, deadline=deadline,
         ) as job:
-            job.deadline = job.accepted_at + self.work_timeout_seconds
             yield job
 
     async def cancel_member(self, guild_id: int, user_id: int) -> None:
@@ -76,10 +77,10 @@ class CodexBridgeClient:
                 headers={"Authorization": f"Bearer {self.token}"},
             )
 
-    async def close(self) -> None:
+    async def close(self, *, deadline: float | None = None) -> None:
         self._admission.closed = True
         try:
-            await self._admission.cancel()
+            await self._admission.cancel(deadline=deadline)
         finally:
             if self._session is not None and not self._session.closed:
                 await self._session.close()
@@ -123,6 +124,29 @@ class CodexBridgeClient:
     async def get_runtime_status(self) -> CodexRuntimeStatus:
         body = await self._request("GET", "/v1/status", timeout_seconds=3)
         try:
+            version = body.get("protocol_version", 1)
+            if type(version) is not int or version not in (1, 2):
+                raise ValueError("invalid protocol version")
+            if any(type(body[field]) is not bool for field in ("available", "authenticated")):
+                raise ValueError("invalid status flag")
+            if version == 2:
+                if any(type(body[field]) is not int or body[field] < 0 for field in (
+                    "thread_count", "active_requests", "queued_requests",
+                )):
+                    raise ValueError("invalid status counts")
+                if (
+                    type(body["ready"]) is not bool
+                    or type(body["status_stale"]) is not bool
+                    or body["reason"] not in READY_REASONS
+                    or body["ready"] != (body["reason"] == "ready")
+                    or (body["ready"] and (
+                        not body["available"] or not body["authenticated"] or body["status_stale"]
+                    ))
+                    or (body["status_fetched_at"] is not None and (
+                        type(body["status_fetched_at"]) is not int or body["status_fetched_at"] <= 0
+                    ))
+                ):
+                    raise ValueError("invalid readiness status")
             return CodexRuntimeStatus(
                 available=body["available"] is True,
                 authenticated=body["authenticated"] is True,
@@ -150,10 +174,18 @@ class CodexBridgeClient:
                     if isinstance(body.get("last_error"), str)
                     and body["last_error"] in SAFE_ERROR_CODES else None
                 ),
+                protocol_version=version,
+                ready=body["ready"] if version == 2 else body["available"] and body["authenticated"],
+                reason=body["reason"] if version == 2 else (
+                    "ready" if body["available"] and body["authenticated"] else
+                    "auth_required" if body["available"] else "unavailable"
+                ),
+                status_fetched_at=body["status_fetched_at"] if version == 2 else None,
+                status_stale=body["status_stale"] if version == 2 else False,
                 bot_active_requests=len(self._admission.active_keys),
                 bot_queued_requests=len(self._admission.waiting),
             )
-        except (KeyError, TypeError):
+        except (KeyError, TypeError, ValueError):
             raise CodexBridgeError("unavailable") from None
 
     async def get_rate_limits(self) -> CodexRateLimits:
@@ -186,8 +218,10 @@ class CodexBridgeClient:
             raise CodexBridgeError("unavailable")
         if not job.current:
             raise CodexBridgeError("unauthorized")
-        remaining = job.deadline - asyncio.get_running_loop().time()
-        if remaining <= 0:
+        now = asyncio.get_running_loop().time()
+        budget_ms = min(120000, int((job.work_deadline - now) * 1000))
+        http_remaining = job.http_deadline - now
+        if budget_ms < 1 or http_remaining <= 0:
             raise CodexBridgeError("timeout")
         body = await self._request(
             "POST",
@@ -196,8 +230,10 @@ class CodexBridgeClient:
                 "conversation_key": key,
                 "text": text,
                 "images": list(images),
+                "budget_ms": budget_ms,
+                "parent_channel_id": job.parent_channel_id,
             },
-            timeout_seconds=min(self.timeout_seconds, remaining),
+            timeout_seconds=min(budget_ms / 1000 + self.cleanup_timeout_seconds, http_remaining),
         )
         reply = body.get("reply")
         if not isinstance(reply, str) or not reply:
@@ -211,9 +247,27 @@ class CodexBridgeClient:
         self,
         guild_id: int,
         channel_id: int | None = None,
-    ) -> None:
-        await self._admission.cancel(guild_id=guild_id, channel_id=channel_id)
+        *,
+        include_children: bool = False,
+    ) -> CodexArchiveResult:
+        loop = asyncio.get_running_loop()
+        cancel_deadline = loop.time() + self.cleanup_timeout_seconds
+        await self._admission.cancel(
+            guild_id=guild_id, channel_id=channel_id,
+            include_children=include_children, deadline=cancel_deadline,
+        )
         payload: dict[str, object] = {"guild_id": guild_id}
         if channel_id is not None:
             payload["channel_id"] = channel_id
-        await self._request("POST", "/v1/archive", payload=payload)
+        if include_children:
+            payload["include_children"] = True
+        body = await self._request(
+            "POST", "/v1/archive", payload=payload, timeout_seconds=12,
+        )
+        try:
+            result = parse_archive_result(body)
+            if result.archived_count + result.archive_unconfirmed_count > result.detached_count:
+                raise ValueError("invalid archive counts")
+            return result
+        except ValueError:
+            raise CodexBridgeError("unavailable") from None
