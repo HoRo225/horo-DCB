@@ -5,6 +5,17 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 WORKDIR /app
 
+ARG SOURCE_SHA=unknown
+ARG SDK_VERSION=unknown
+ARG CLI_VERSION=unknown
+ARG CODE_FINGERPRINT=unknown
+LABEL org.opencontainers.image.source="https://github.com/horo225/horo-DCB" \
+    org.opencontainers.image.revision=$SOURCE_SHA \
+    io.horo-dcb.sdk=$SDK_VERSION \
+    io.horo-dcb.cli=$CLI_VERSION \
+    io.horo-dcb.protocol="3" \
+    io.horo-dcb.fingerprint=$CODE_FINGERPRINT
+
 RUN apt-get update \
     && apt-get install -y --no-install-recommends fonts-noto-cjk \
     && rm -rf /var/lib/apt/lists/*

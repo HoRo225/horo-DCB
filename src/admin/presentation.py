@@ -244,7 +244,7 @@ def ai_state(view: AdminPanelView) -> _AiState:
     elif allowlist_detail is not None:
         label, detail = "需要處理", allowlist_detail
     elif not view.codex_status.available and (
-        view.codex_status.protocol_version != 2 or view.codex_status.reason in {"", "unavailable"}
+        view.codex_status.protocol_version != 3 or view.codex_status.reason in {"", "unavailable"}
     ):
         label, detail = "需要處理", "Codex bridge 無法連線"
     elif not view.codex_status.ready:
@@ -517,6 +517,70 @@ def render_ai_access(view: AdminPanelView, note: str | None = None) -> None:
             discord.ui.Separator(),
             *_footer_note(note),
             view._actions(),
+        )
+    )
+    view._set_container(*children)
+
+
+def render_ai_models(view: AdminPanelView) -> None:
+    children = view._header("AI 模型設定", "ai_models", "ai")
+    children.append(discord.ui.TextDisplay("-# 全 Bot 共用；儲存後只影響後續接納的請求。"))
+    if not view.codex_client.model_settings.available:
+        children.append(
+            discord.ui.TextDisplay("⚠ 模型設定檔無法讀取；以下為預設草稿，請確認並明確儲存以修復。")
+        )
+    last_page = max(0, (len(view.model_catalog) - 1) // 24)
+    for side, label in (("primary", "主模型"), ("fallback", "備援模型")):
+        choice = getattr(view.model_draft, side) if view.model_draft is not None else None
+        info = next(
+            (item for item in view.model_catalog if choice and item.model == choice.model), None
+        )
+        value = discord.utils.escape_markdown(choice.model) if choice is not None else "停用"
+        effort = choice.effort if choice and choice.effort else "模型預設"
+        warning = (
+            " · ⚠ 模型已失效"
+            if choice is not None and info is None and view.model_catalog_available
+            else ""
+        )
+        page = view.model_pages[side]
+        page_text = f"\n-# 模型選單第 {page + 1}／{last_page + 1} 頁" if last_page else ""
+        children.extend(
+            (
+                discord.ui.TextDisplay(f"## {label}\n**{value}** · {effort}{warning}{page_text}"),
+                discord.ui.ActionRow(view._model_setting_select(f"{side}_model")),
+                discord.ui.ActionRow(view._model_setting_select(f"{side}_effort")),
+            )
+        )
+    children.extend((discord.ui.Separator(), *_footer_note(view.model_notice)))
+    if last_page:
+        children.append(
+            discord.ui.ActionRow(
+                view._button(
+                    "model_primary_prev", "主模型上一頁", disabled=view.model_pages["primary"] == 0
+                ),
+                view._button(
+                    "model_primary_next",
+                    "主模型下一頁",
+                    disabled=view.model_pages["primary"] >= last_page,
+                ),
+                view._button(
+                    "model_fallback_prev", "備援上一頁", disabled=view.model_pages["fallback"] == 0
+                ),
+                view._button(
+                    "model_fallback_next",
+                    "備援下一頁",
+                    disabled=view.model_pages["fallback"] >= last_page,
+                ),
+            )
+        )
+    children.append(
+        view._actions(
+            view._button(
+                "model_save",
+                "儲存設定",
+                style=discord.ButtonStyle.primary,
+                disabled=not view.model_catalog_available,
+            )
         )
     )
     view._set_container(*children)

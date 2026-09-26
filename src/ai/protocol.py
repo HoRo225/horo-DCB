@@ -6,6 +6,7 @@ import re
 from dataclasses import dataclass
 from urllib.parse import urlsplit
 
+from src.ai.model_settings import ModelSettings, parse_model_settings
 from src.ai.rate_limits import RATE_LIMIT_ERRORS as RATE_LIMIT_ERRORS
 from src.ai.rate_limits import CodexRateLimits as CodexRateLimits
 from src.ai.rate_limits import CodexRateWindow as CodexRateWindow
@@ -19,6 +20,10 @@ MAX_PROMPT_CHARACTERS = 4000
 MAX_IMAGE_BYTES = 8 * 1024 * 1024
 MAX_IMAGE_TOTAL_BYTES = 16 * 1024 * 1024
 MAX_REPLY_IMAGES = 10
+PROTOCOL_VERSION = 3
+MAX_STREAM_FRAME_BYTES = 1024 * 1024
+MAX_PROGRESS_SUMMARY_CHARACTERS = 2000
+PROGRESS_STAGES = frozenset({"queued", "preparing", "generating", "searching", "fallback"})
 MEDIA_KINDS = frozenset({"image", "video", "lottie"})
 MEDIA_HEADER_LIMIT = 1024
 MEDIA_CHUNK_BYTES = 64 * 1024
@@ -52,6 +57,8 @@ ERROR_HTTP_STATUS = {
     "unavailable": 503,
     "model_capacity": 503,
     "usage_limit_or_unavailable": 429,
+    "model_configuration_invalid": 503,
+    "unsupported_input": 400,
 }
 SAFE_ERROR_CODES = frozenset(ERROR_HTTP_STATUS)
 
@@ -155,7 +162,7 @@ class CodexRuntimeStatus:
     last_error: str | None = None
     bot_active_requests: int = 0
     bot_queued_requests: int = 0
-    protocol_version: int = 2
+    protocol_version: int = PROTOCOL_VERSION
     ready: bool = False
     reason: str = "unavailable"
     status_fetched_at: int | None = None
@@ -212,12 +219,13 @@ class ChatPayload:
     conversation_key: str
     text: str
     images: tuple[str, ...]
+    models: ModelSettings
     budget_ms: int = 120000
     parent_channel_id: int | None = None
 
 
 def validate_chat_payload(value: object) -> ChatPayload:
-    required = {"conversation_key", "text", "images"}
+    required = {"conversation_key", "text", "images", "models"}
     optional = {"budget_ms", "parent_channel_id"}
     if (
         not isinstance(value, dict)
@@ -229,6 +237,10 @@ def validate_chat_payload(value: object) -> ChatPayload:
     key = value["conversation_key"]
     text = value["text"]
     images = value["images"]
+    try:
+        models = parse_model_settings(value["models"])
+    except ValueError, TypeError:
+        raise CodexBridgeError("invalid_request") from None
     budget_ms = value.get("budget_ms", 120000)
     parent_channel_id = value.get("parent_channel_id")
     if not valid_conversation_key(key):
@@ -279,7 +291,7 @@ def validate_chat_payload(value: object) -> ChatPayload:
             raise CodexBridgeError("invalid_request") from None
     if not text.strip() and not images:
         raise CodexBridgeError("invalid_request")
-    return ChatPayload(key, text, tuple(images), budget_ms, parent_channel_id)
+    return ChatPayload(key, text, tuple(images), models, budget_ms, parent_channel_id)
 
 
 @dataclass(frozen=True, slots=True)

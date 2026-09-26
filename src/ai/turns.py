@@ -1,12 +1,23 @@
 from __future__ import annotations
 
 import re
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
 
 from openai_codex import RetryLimitExceededError, ServerBusyError
+from openai_codex.generated.v2_all import (
+    ErrorNotification,
+    ReasoningSummaryPartAddedNotification,
+    ReasoningSummaryTextDeltaNotification,
+    ReasoningThreadItem,
+)
 
-from src.ai.protocol import CodexBridgeError, normalize_reply_image_urls
+from src.ai.protocol import (
+    MAX_PROGRESS_SUMMARY_CHARACTERS,
+    CodexBridgeError,
+    normalize_reply_image_urls,
+)
 
 _IMAGE_RESULT_REF = re.compile(r"^turn[0-9]+image[0-9]+$")
 _MARKDOWN_IMAGE_URL = re.compile(r"!\[[^\]]*\]\((https://[^\s)]+)\)")
@@ -67,7 +78,25 @@ class TurnResult:
     items: list[Any] = field(default_factory=list)
 
 
-def normalize_error(exc: Exception) -> CodexBridgeError:
+def normalize_error(exc: object) -> CodexBridgeError:
+    if isinstance(exc, CodexBridgeError):
+        return exc
+    info = getattr(exc, "codex_error_info", None)
+    data = getattr(exc, "data", None)
+    if info is None and isinstance(data, dict):
+        info = data.get("codexErrorInfo", data.get("codex_error_info", data.get("errorInfo")))
+    if hasattr(info, "model_dump"):
+        info = info.model_dump(mode="json")
+    # Structured turn/RPC errors take precedence over human-readable messages.
+    if info is not None:
+        name = str(getattr(info, "value", info)).replace("_", "").casefold()
+        if "serveroverloaded" in name:
+            return CodexBridgeError("model_capacity")
+        if any(marker in name for marker in ("usagelimitexceeded", "ratelimitexceeded")):
+            return CodexBridgeError("usage_limit_or_unavailable")
+        if "unauthorized" in name:
+            return CodexBridgeError("auth_required")
+        return CodexBridgeError("unavailable")
     details = f"{exc} {getattr(exc, 'data', '')}".casefold()
     if any(
         marker in details
@@ -82,7 +111,7 @@ def normalize_error(exc: Exception) -> CodexBridgeError:
         )
     ):
         return CodexBridgeError("auth_required")
-    if isinstance(exc, (ServerBusyError, RetryLimitExceededError)) or any(
+    if (isinstance(exc, ServerBusyError) and not isinstance(exc, RetryLimitExceededError)) or any(
         marker in details
         for marker in (
             "at capacity",
@@ -127,8 +156,20 @@ def record_item(result: TurnResult, item: Any, *, completed: bool) -> None:
         result.items.append(item)
 
 
-async def collect_turn(handle: Any) -> TurnResult:
+async def collect_turn(
+    handle: Any,
+    on_progress: Callable[[dict[str, str]], None] | None = None,
+) -> TurnResult:
     result = TurnResult()
+    summary = ""
+
+    def progress(stage: str, text: str | None = None) -> None:
+        nonlocal summary
+        if text is not None:
+            summary = text[-MAX_PROGRESS_SUMMARY_CHARACTERS:]
+        if on_progress is not None:
+            on_progress({"stage": stage, "summary": summary})
+
     stream = handle.stream()
     try:
         async for event in stream:
@@ -157,8 +198,27 @@ async def collect_turn(handle: Any) -> TurnResult:
             if method == "item/agentMessage/delta":
                 if payload.delta:
                     result.output_seen = True
+            elif method == "error" and isinstance(payload, ErrorNotification):
+                # A retry notification is not a terminal result and is not assistant output.
+                result.error = payload.error
+            elif method == "item/reasoning/summaryTextDelta" and isinstance(
+                payload, ReasoningSummaryTextDeltaNotification
+            ):
+                progress("generating", summary + payload.delta)
+            elif method == "item/reasoning/summaryPartAdded" and isinstance(
+                payload, ReasoningSummaryPartAddedNotification
+            ):
+                if summary:
+                    progress("generating", summary + "\n")
             elif method in ("item/started", "item/completed"):
                 record_item(result, payload.item, completed=method == "item/completed")
+                item = getattr(payload.item, "root", payload.item)
+                if isinstance(item, ReasoningThreadItem) and method == "item/completed":
+                    progress("generating", "\n".join(item.summary or ()))
+                elif getattr(item, "type", None) == "webSearch":
+                    progress("searching" if method == "item/started" else "generating")
+                elif getattr(item, "type", None) == "agentMessage":
+                    progress("generating")
             elif method not in (
                 "turn/started",
                 "item/reasoning/textDelta",

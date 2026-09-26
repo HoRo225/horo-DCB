@@ -5,13 +5,19 @@ import logging
 import os
 import re
 import time
+from collections.abc import Callable
+from pathlib import Path
 from typing import Any
 
 import openai_codex
 from openai_codex import ApprovalMode, ImageInput, Sandbox, TextInput, TransportClosedError
+from openai_codex.generated.v2_all import ReasoningEffort, ReasoningSummary
 
 from src.ai.admission import Admission
+from src.ai.model_settings import ModelSettings, parse_model_catalog
+from src.ai.models import read_models, resolve_choice
 from src.ai.protocol import (
+    PROTOCOL_VERSION,
     CodexArchiveResult,
     CodexBridgeError,
     CodexChatReply,
@@ -37,9 +43,15 @@ RATE_WAIT_SECONDS = 2.0
 STATUS_CACHE_SECONDS = 60.0
 STATUS_REFRESH_SECONDS = 30.0
 RPC_TIMEOUT_SECONDS = 30.0
+MODEL_CACHE_SECONDS = 60.0
 PRIMARY_MODEL = "gpt-5.6-luna"
 CAPACITY_FALLBACK_MODEL = "gpt-6-luna"
 CODEX_WORKSPACE = "/app/codex-workspace"
+MAINTENANCE_PATH = Path("/run/horo-dcb-update/maintenance")
+DEVELOPER_INSTRUCTIONS = (
+    "預設以繁體中文（台灣用語）回答。使用者明確要求其他語言或翻譯時，依其要求處理。"
+    "程式碼、命令、路徑、識別名稱及必要引文保留原樣。"
+)
 _TurnResult = TurnResult
 
 
@@ -64,6 +76,9 @@ class CodexService:
         self.last_error: str | None = None
         self._status_task: asyncio.Task[dict[str, object]] | None = None
         self._rate_task: asyncio.Task[CodexRateLimits] | None = None
+        self._model_task: asyncio.Task[dict[str, object]] | None = None
+        self._model_cache: dict[str, object] | None = None
+        self._model_read_at = 0.0
         self._rate_cache = CodexRateLimits()
         self._rate_next_read_at = 0.0
         self._initialized = False
@@ -156,6 +171,7 @@ class CodexService:
             "approval_mode": ApprovalMode.deny_all,
             "cwd": self.workspace,
             "sandbox": Sandbox.read_only,
+            "developer_instructions": DEVELOPER_INSTRUCTIONS,
         }
 
     _normalize_error = staticmethod(normalize_error)
@@ -221,7 +237,7 @@ class CodexService:
             "active_requests": len(self._admission.active_keys),
             "queued_requests": len(self._admission.waiting),
             "last_error": self.last_error,
-            "protocol_version": 2,
+            "protocol_version": PROTOCOL_VERSION,
             "ready": reason == "ready",
             "reason": reason,
             "status_fetched_at": self._status_fetched_at,
@@ -266,6 +282,34 @@ class CodexService:
 
     async def status(self) -> dict[str, object]:
         return self._status_snapshot()
+
+    async def _read_models(self) -> dict[str, object]:
+        try:
+            result = await read_models(self.codex)
+            parse_model_catalog(result)
+        except asyncio.CancelledError:
+            raise
+        except TransportClosedError:
+            await self._abort(asyncio.get_running_loop().time() + SDK_SHUTDOWN_TIMEOUT_SECONDS)
+            raise CodexBridgeError("unavailable") from None
+        except Exception:
+            raise CodexBridgeError("unavailable") from None
+        self._model_cache = result
+        self._model_read_at = asyncio.get_running_loop().time()
+        return result
+
+    async def models(self) -> dict[str, object]:
+        if self._admission.closed or not self._initialized:
+            raise CodexBridgeError("unavailable")
+        if (
+            self._model_cache is not None
+            and asyncio.get_running_loop().time() - self._model_read_at < MODEL_CACHE_SECONDS
+        ):
+            return self._model_cache
+        if self._model_task is None or self._model_task.done():
+            self._model_task = self._rpc(self._read_models(), watched=True)
+        async with asyncio.timeout(RPC_TIMEOUT_SECONDS):
+            return await asyncio.shield(self._model_task)
 
     async def _read_rate_limits(self) -> CodexRateLimits:
         try:
@@ -326,6 +370,8 @@ class CodexService:
         text: str,
         images: tuple[str, ...],
         *,
+        models: ModelSettings,
+        on_progress: Callable[[dict[str, str]], None] | None = None,
         budget_ms: int = 120000,
         parent_channel_id: int | None = None,
     ) -> CodexChatReply:
@@ -340,6 +386,8 @@ class CodexService:
             parent_channel_id if parent_channel_id is not None else self.store.get_parent(key)
         )
         try:
+            if MAINTENANCE_PATH.exists():
+                raise CodexBridgeError("busy")
             if not self.store.available:
                 raise CodexBridgeError("unavailable")
             if self._scope_blocked(key, effective_parent):
@@ -361,18 +409,39 @@ class CodexService:
                                 self.store.bind_parent(key, parent_channel_id)
                             except ValueError:
                                 raise CodexBridgeError("invalid_request") from None
-                        for model in (PRIMARY_MODEL, CAPACITY_FALLBACK_MODEL):
+                        catalog = parse_model_catalog(await self.models())
+                        primary = resolve_choice(models.primary, catalog, images=bool(images))
+                        fallback = (
+                            resolve_choice(models.fallback, catalog, images=bool(images))
+                            if models.fallback is not None
+                            else None
+                        )
+                        if fallback is not None and fallback.model == primary.model:
+                            fallback = None
+                        choices = (primary,) if fallback is None else (primary, fallback)
+                        for attempt, choice in enumerate(choices):
+                            if MAINTENANCE_PATH.exists():
+                                raise CodexBridgeError("busy")
+                            if on_progress is not None:
+                                on_progress(
+                                    {
+                                        "stage": "fallback" if attempt else "generating",
+                                        "summary": "",
+                                    }
+                                )
                             if not self.store.available:
                                 raise CodexBridgeError("unavailable")
                             handle = collector = None
                             turn_submitted = False
                             thread_id = self.store.get(key)
                             options = self._thread_options()
-                            options["model"] = model
+                            options["model"] = choice.model
                             rpc = self._rpc(
                                 self.codex.thread_start(**options, service_name="horo-dcb")
                                 if thread_id is None
-                                else self.codex.thread_resume(thread_id, **options)
+                                else self.codex.thread_resume(
+                                    thread_id, include_turns=False, **options
+                                )
                             )
                             thread = await asyncio.shield(rpc)
                             rpc = None
@@ -388,12 +457,15 @@ class CodexService:
                             turn_submitted = True
                             rpc = self._rpc(
                                 thread.turn(
-                                    [TextInput(text), *(ImageInput(image) for image in images)]
+                                    [TextInput(text), *(ImageInput(image) for image in images)],
+                                    model=choice.model,
+                                    effort=ReasoningEffort(choice.effort),
+                                    summary=ReasoningSummary.model_validate("auto"),
                                 )
                             )
                             handle = await asyncio.shield(rpc)
                             # Public stream closes its subscription and wakes waiters on exit.
-                            collector = self._own(collect_turn(handle))
+                            collector = self._own(collect_turn(handle, on_progress))
                             if (
                                 self._scope_blocked(key, effective_parent)
                                 or asyncio.current_task().cancelling()
@@ -408,12 +480,14 @@ class CodexService:
                             if not self.store.available:
                                 raise CodexBridgeError("unavailable")
                             if result.failed:
-                                error = self._normalize_error(RuntimeError(str(result.error)))
+                                error = self._normalize_error(result.error)
                                 if (
-                                    model == PRIMARY_MODEL
+                                    attempt == 0
+                                    and fallback is not None
                                     and error.code == "model_capacity"
                                     and not result.output_seen
                                     and not result.unknown
+                                    and deadline - loop.time() > self.interrupt_timeout_seconds
                                 ):
                                     continue
                                 raise error

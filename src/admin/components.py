@@ -62,6 +62,19 @@ class _PanelSelect(discord.ui.Select["AdminPanelView"]):
             await view.handle_action(interaction, action)
 
 
+class _ModelSettingSelect(discord.ui.Select["AdminPanelView"]):
+    def __init__(self, field: str, **kwargs) -> None:
+        super().__init__(**kwargs)
+        self.field = field
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        from src.admin.panel import AdminPanelView
+
+        view = self.view
+        if isinstance(view, AdminPanelView) and self.values:
+            await view.handle_model_select(interaction, self.field, self.values[0])
+
+
 class _CodexChannelSelect(discord.ui.ChannelSelect):
     def __init__(self, *, disabled: bool, channel_ids: frozenset[int]) -> None:
         super().__init__(
