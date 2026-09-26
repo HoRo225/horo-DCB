@@ -11,7 +11,12 @@ from typing import Any
 
 import openai_codex
 from openai_codex import ApprovalMode, ImageInput, Sandbox, TextInput, TransportClosedError
-from openai_codex.generated.v2_all import ReasoningEffort, ReasoningSummary
+from openai_codex.generated.v2_all import (
+    ReasoningEffort,
+    ReasoningSummary,
+    ThreadInjectItemsParams,
+    ThreadInjectItemsResponse,
+)
 
 from src.ai.admission import Admission
 from src.ai.model_settings import ModelSettings, parse_model_catalog
@@ -49,7 +54,8 @@ CAPACITY_FALLBACK_MODEL = "gpt-6-luna"
 CODEX_WORKSPACE = "/app/codex-workspace"
 MAINTENANCE_PATH = Path("/run/horo-dcb-update/maintenance")
 DEVELOPER_INSTRUCTIONS = (
-    "預設以繁體中文（台灣用語）回答。使用者明確要求其他語言或翻譯時，依其要求處理。"
+    "預設以繁體中文（台灣用語）回答，即使問題、引文或先前回覆使用其他語言。"
+    "只有使用者明確指定其他輸出語言或翻譯目標時才改用該語言。"
     "程式碼、命令、路徑、識別名稱及必要引文保留原樣。"
 )
 _TurnResult = TurnResult
@@ -444,7 +450,6 @@ class CodexService:
                                 )
                             )
                             thread = await asyncio.shield(rpc)
-                            rpc = None
                             if not self.store.available:
                                 raise CodexBridgeError("unavailable")
                             if (
@@ -452,6 +457,42 @@ class CodexService:
                                 or asyncio.current_task().cancelling()
                             ):
                                 raise asyncio.CancelledError
+                            if thread_id is not None:
+                                # ponytail: one developer item per resume; replace with SDK
+                                # turn-scoped developer context when it becomes available.
+                                params = ThreadInjectItemsParams(
+                                    thread_id=thread.id,
+                                    items=[
+                                        {
+                                            "type": "message",
+                                            "role": "developer",
+                                            "content": [
+                                                {
+                                                    "type": "input_text",
+                                                    "text": DEVELOPER_INSTRUCTIONS,
+                                                }
+                                            ],
+                                        }
+                                    ],
+                                )
+                                rpc = self._rpc(
+                                    self.codex._client.request(
+                                        "thread/inject_items",
+                                        params.model_dump(
+                                            mode="json", by_alias=True, exclude_none=True
+                                        ),
+                                        response_model=ThreadInjectItemsResponse,
+                                    )
+                                )
+                                await asyncio.shield(rpc)
+                            if not self.store.available:
+                                raise CodexBridgeError("unavailable")
+                            if (
+                                self._scope_blocked(key, effective_parent)
+                                or asyncio.current_task().cancelling()
+                            ):
+                                raise asyncio.CancelledError
+                            rpc = None
                             if thread_id is None:
                                 self.store.set(key, thread.id, parent_channel_id=effective_parent)
                             turn_submitted = True
