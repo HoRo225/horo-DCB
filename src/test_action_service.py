@@ -172,7 +172,9 @@ class ActionServiceTest(unittest.IsolatedAsyncioTestCase):
                 await parent
             release.set()
             await asyncio.gather(*self.service._tasks)
-        self.assertEqual(self.service.records.get_request(1000).status, "done")
+        request = self.service.records.get_request(1000)
+        self.assertEqual(request.status, "interrupted")
+        self.assertTrue(self.service.records.get(f"{request.request_id}:0:public").result["ok"])
         self.channel.send.assert_awaited_once()
 
     async def test_cancelled_parent_permanently_stops_remaining_steps_despite_role_regrant(self):
