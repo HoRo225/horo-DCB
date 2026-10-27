@@ -22,8 +22,6 @@ from src.tasks import track, wait_until, cancel_all
 
 CHANNEL_NAME_PREFIX = "▍"
 CHANNEL_NAME_SUFFIX = " 的語音-🔊"
-PARTY_NAME_SUFFIX = "-🎮"
-PARTY_IDLE_SECONDS = 10 * 60
 CHANNEL_NAME_LIMIT = 100
 AUDIT_REASON = "horo-DCB temporary voice channel"
 
@@ -44,11 +42,11 @@ class TempVoiceStatus:
     room_count: int
 
 
-def build_temp_voice_name(display_name: str, suffix: str = CHANNEL_NAME_SUFFIX) -> str:
+def build_temp_voice_name(display_name: str) -> str:
     collapsed = " ".join(display_name.split())
     cleaned = "".join(character for character in collapsed if character.isprintable()) or "使用者"
-    available = CHANNEL_NAME_LIMIT - len(CHANNEL_NAME_PREFIX) - len(suffix)
-    return f"{CHANNEL_NAME_PREFIX}{cleaned[:available]}{suffix}"
+    available = CHANNEL_NAME_LIMIT - len(CHANNEL_NAME_PREFIX) - len(CHANNEL_NAME_SUFFIX)
+    return f"{CHANNEL_NAME_PREFIX}{cleaned[:available]}{CHANNEL_NAME_SUFFIX}"
 
 
 class TempVoiceManager:
@@ -58,7 +56,6 @@ class TempVoiceManager:
         self._closing = False
         self._closed = False
         self._tasks: set[asyncio.Task] = set()
-        self._timers: set[asyncio.Task] = set()
         self.operations = OperationStore(db)
         self._get_guild = get_guild
 
@@ -124,7 +121,6 @@ class TempVoiceManager:
 
     def stop_new_work(self) -> None:
         self._closing = True
-        cancel_all(self._timers)
 
     def status(self) -> TempVoiceStatus:
         (room_count,) = self._db.execute("SELECT COUNT(*) FROM voice_rooms").fetchone()
@@ -352,44 +348,6 @@ class TempVoiceManager:
                                      allowed_mentions=discord.AllowedMentions.none())
         except (discord.HTTPException, TimeoutError, aiohttp.ClientError):
             logging.exception("Temp voice creation notice could not be sent.")
-
-    async def open_party(self, guild: discord.Guild, name: str, key: int) -> discord.VoiceChannel | None:
-        if self._closing:
-            return None
-        return await self._own(self._open_party(guild, name, key))
-
-    async def _open_party(self, guild, name, key):
-        async with self._lock:
-            if self._closing or not self.enabled:
-                return None
-            guild = self._current_guild(guild)
-            entry_id = setting(self._db, "voice.entry_channel_id")
-            entry_channel = guild.get_channel(entry_id) if guild is not None and entry_id is not None else None
-            if not is_voice_channel(entry_channel) or self._bot_problem(guild, entry_channel) is not None:
-                return None
-            if (existing := await self._existing_owner_channel(guild, key)) is not None:
-                return existing
-            if self._db.execute("SELECT 1 FROM voice_rooms WHERE owner_id = ?", (key,)).fetchone():
-                return None
-            category = entry_channel.category
-            overwrites = category.overwrites.copy() if category is not None else {}
-            channel = await self._create_room(guild, entry_channel, key, build_temp_voice_name(name, PARTY_NAME_SUFFIX), overwrites)
-            if isinstance(channel, str) or channel is None:
-                return None
-            if not self._closing:
-                track(self._timers, asyncio.create_task(self._expire_party(guild, channel.id)), log=True)
-            return channel
-
-    async def _expire_party(self, guild, channel_id: int) -> None:
-        await asyncio.sleep(PARTY_IDLE_SECONDS)
-        await self._own(self._delete_idle_party(guild, channel_id))
-
-    async def _delete_idle_party(self, guild, channel_id):
-        async with self._lock:
-            guild = None if self._closed else self._current_guild(guild)
-            channel = guild.get_channel(channel_id) if guild is not None else None
-            if is_voice_channel(channel) and self._is_room(channel_id):
-                await self._delete_if_empty(channel)
 
     @staticmethod
     def _overwrite_values(overwrites) -> list[dict[str, object]]:

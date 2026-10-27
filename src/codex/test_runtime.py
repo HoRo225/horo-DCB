@@ -356,7 +356,7 @@ class RuntimeAbortTests(unittest.IsolatedAsyncioTestCase):
                 codex, started, gate = self._gated_start()
                 service = self._service(codex)
                 request = (service.chat(KEY, "問題", (), models=SETTINGS) if mode == "chat"
-                           else service.isolated(KEY, "看揪團", mode=mode, context={}, models=SETTINGS))
+                           else service.isolated(KEY, "開 21 點", mode=mode, context={}, models=SETTINGS))
                 task = asyncio.create_task(request)
                 await started.wait()
                 task.cancel()

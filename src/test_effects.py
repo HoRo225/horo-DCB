@@ -257,15 +257,13 @@ class EffectsTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.db.execute("SELECT COUNT(*) FROM voice_rooms").fetchone(), (0,))
 
     async def test_message_confirmation_never_adopts_unsupported_created_resources(self):
-        for kind in ("game_table_open", "lfg_create"):
-            with self.subTest(kind=kind):
-                effect = self.effect(kind, kind=kind)
-                self.assertIn("人工清理", await self.resolve(effect.effect_id, "confirmed", message_id=501))
-                self.assertEqual(self.records.get_effect(effect.effect_id).status, "unknown")
+        effect = self.effect(kind="game_table_open")
+        self.assertIn("人工清理", await self.resolve(effect.effect_id, "confirmed", message_id=501))
+        self.assertEqual(self.records.get_effect(effect.effect_id).status, "unknown")
         self.channel.fetch_message.assert_not_awaited()
 
     async def test_existing_message_edit_uses_original_id_and_edit_time(self):
-        effect = self.effect(kind="lfg_edit", payload={"card": {"message_id": 501}})
+        effect = self.effect(kind="game_table_edit", payload={"message_id": 501})
         self.assertIn("原本要更新", await self.resolve(effect.effect_id, "confirmed", message_id=502))
         self.channel.fetch_message.assert_not_awaited()
         old = datetime.fromtimestamp(effect.created_at - 86400, timezone.utc)
@@ -287,7 +285,7 @@ class EffectsTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(setting(self.db, "games.hub_message"), [CHANNEL, 999])
 
     async def test_page_button_constants_match_what_the_service_accepts(self):
-        self.bot.lfg_operations = self.bot.actions = SimpleNamespace(retry_effect=AsyncMock(return_value=True))
+        self.bot.actions = SimpleNamespace(retry_effect=AsyncMock(return_value=True))
         with (patch.object(self.bot.steam_free_games, "retry_effect", AsyncMock(return_value=True)),
               patch.object(self.bot.temp_voice, "retry_effect", AsyncMock(return_value=None))):
             for kind in KINDS:

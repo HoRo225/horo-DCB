@@ -251,6 +251,13 @@ DELETE FROM settings WHERE key IN ('birthday.channel_id', 'quests.board_message'
 UPDATE discord_effects SET status = 'skipped', error = 'feature_removed', updated_at = unixepoch()
 WHERE kind IN ('birthday.announce', 'lottery.announce') AND status IN ('pending', 'unknown', 'failed');
 """,
+    """
+-- 揪團已移除：卡片表不再需要，未完成的揪團送出項目與操作紀錄改為略過，之後照常清理。
+DROP TABLE lfg_cards;
+UPDATE discord_effects SET status = 'skipped', error = 'feature_removed', updated_at = unixepoch()
+WHERE kind IN ('lfg_create', 'lfg_edit', 'lfg_depart') AND status IN ('pending', 'unknown', 'failed');
+UPDATE operations SET status = 'skipped' WHERE kind IN ('lfg_create', 'lfg_action') AND status = 'running';
+""",
 ]
 
 

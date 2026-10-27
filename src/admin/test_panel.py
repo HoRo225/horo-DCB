@@ -289,7 +289,7 @@ class AdminPanelTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_overview_counts_pending_effects_and_opens_them(self) -> None:
         with transaction(self.db):
-            self.bot.effects.operations.create_effect("e1", "lfg_edit", 700, {})
+            self.bot.effects.operations.create_effect("e1", "action.receipt", 700, {})
         shown = self.screen(await self.open_panel())
         self.assertIn("有 1 項送出結果待核對", shown)
         pending = self.button("待處理項目（1）")
@@ -660,7 +660,7 @@ class AdminPanelTest(unittest.IsolatedAsyncioTestCase):
         operations = self.bot.effects.operations
         with transaction(self.db):
             for effect_id in ("first", "second"):
-                operations.create_effect(effect_id, "lfg_edit", 700, {})
+                operations.create_effect(effect_id, "action.receipt", 700, {})
         await self.open_panel()
         await self.click(self.button("待處理項目（2）"))
         picker = next(item for item in self.view.walk_children() if isinstance(item, discord.ui.Select))
@@ -694,7 +694,7 @@ class AdminPanelTest(unittest.IsolatedAsyncioTestCase):
             self.assertTrue(still_current())
             return False
 
-        with patch.object(self.bot.lfg_operations, "retry_effect", side_effect=retry) as retried:
+        with patch.object(self.bot.actions, "retry_effect", side_effect=retry) as retried:
             await self.click(self.button("已查核未送達，重送"))
             retried.assert_not_awaited()
             shown = self.screen(await self.click(self.button("確定要重送？無法復原")))
@@ -705,7 +705,7 @@ class AdminPanelTest(unittest.IsolatedAsyncioTestCase):
         operations = self.bot.effects.operations
         with transaction(self.db):
             for effect_id, kind in (("delete", "voice.delete"), ("open", "game_table_open"),
-                                    ("failed", "lfg_edit"), ("sent", "lfg_edit")):
+                                    ("failed", "action.receipt"), ("sent", "action.receipt")):
                 operations.create_effect(effect_id, kind, 700, {})
             operations.update_effect("failed", "failed")
         await self.open_panel()

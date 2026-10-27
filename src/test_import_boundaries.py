@@ -91,15 +91,15 @@ class ImportBoundaryTests(unittest.TestCase):
             self.assertNotIn(module, modules)
 
     def test_shared_layers_load_no_features(self) -> None:
-        features = ("games", "lfg", "voice", "steam", "ai", "admin")
+        features = ("games", "voice", "steam", "ai", "admin")
         for shared in ("state", "clock", "tasks", "brand", "discord_utils", "config", "cards"):
             modules = loaded_modules(f"src.{shared}")
             with self.subTest(shared):
                 self.assertEqual({m for m in modules if m.startswith("src.") and m.split(".")[1] in features}, set())
 
     def test_feature_cogs_do_not_load_other_features(self) -> None:
-        features = {"games", "lfg", "voice", "steam", "ai", "admin"}
-        allowed = {"games": {"ai"}, "lfg": {"ai"}, "steam": {"ai"}}
+        features = {"games", "voice", "steam", "ai", "admin"}
+        allowed = {"games": {"ai"}, "steam": {"ai"}}
         for feature in features - {"admin"}:
             modules = loaded_modules(f"src.{feature}.cog")
             with self.subTest(feature):
@@ -107,7 +107,7 @@ class ImportBoundaryTests(unittest.TestCase):
                 self.assertLessEqual(loaded, {feature, *allowed.get(feature, ())})
 
     def test_domain_rules_and_stores_load_no_discord_or_ai_runtime(self) -> None:
-        for module in ("games.store", "games.blackjack", "games.slots", "lfg.store"):
+        for module in ("games.store", "games.blackjack", "games.slots"):
             with self.subTest(module=module):
                 loaded = loaded_modules(f"src.{module}")
                 self.assertTrue({"discord", "openai_codex", "pydantic"}.isdisjoint(loaded))

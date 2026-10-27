@@ -13,8 +13,8 @@ class PrivateResultsTest(unittest.IsolatedAsyncioTestCase):
                                       channel=SimpleNamespace(id=10))
         self.authorize = AsyncMock(return_value=None)
         self.render = AsyncMock(return_value={"view": notice_view("私人團名 9876", "info"), "attachments": []})
-        self.registry = PrivateResults(self.authorize, self.render, {"lfg_list": "揪團清單", "steam_query": "Steam 免費遊戲"})
-        self.token = self.registry.issue(self.source, "lfg_list")
+        self.registry = PrivateResults(self.authorize, self.render, {"help": "功能說明", "steam_query": "Steam 免費遊戲"})
+        self.token = self.registry.issue(self.source, "help")
         self.registry.bind_message(self.token, 3000)
 
     def click(self, user_id=1, guild_id=5, channel_id=10, message_id=3000):
@@ -41,11 +41,11 @@ class PrivateResultsTest(unittest.IsolatedAsyncioTestCase):
         self.render.assert_not_awaited()
 
     async def test_unbound_expired_and_restart_token_cannot_read(self):
-        unbound = self.registry.issue(self.source, "lfg_list")
+        unbound = self.registry.issue(self.source, "help")
         await self.registry.show(unbound, self.click())
         self.render.assert_not_awaited()
         with patch("src.ai.private_results.time.monotonic", return_value=0):
-            expired = self.registry.issue(self.source, "lfg_list")
+            expired = self.registry.issue(self.source, "help")
             self.registry.bind_message(expired, 3000)
         with patch("src.ai.private_results.time.monotonic", return_value=31 * 60):
             await self.registry.show(expired, late := self.click())
@@ -67,7 +67,7 @@ class PrivateResultsTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_late_render_cannot_display_after_expiry(self):
         with patch("src.ai.private_results.time.monotonic", return_value=0) as clock:
-            token = self.registry.issue(self.source, "lfg_list")
+            token = self.registry.issue(self.source, "help")
             self.registry.bind_message(token, 3000)
             async def slow_render(*args):
                 clock.return_value = TTL_SECONDS + 1
@@ -80,13 +80,13 @@ class PrivateResultsTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_registry_is_bounded_and_cannot_rebind_to_copied_message(self):
         for _ in range(20):
-            self.registry.issue(self.source, "lfg_list")
+            self.registry.issue(self.source, "help")
         self.assertEqual(len(self.registry._items), 10)
         for user_id in range(2, 250):
             self.source.author.id = user_id
-            self.registry.issue(self.source, "lfg_list")
+            self.registry.issue(self.source, "help")
         self.assertEqual(len(self.registry._items), 200)
-        token = self.registry.issue(self.source, "lfg_list")
+        token = self.registry.issue(self.source, "help")
         self.registry.bind_message(token, 3000)
         with self.assertRaises(ValueError):
             self.registry.bind_message(token, 3001)
@@ -95,14 +95,14 @@ class PrivateResultsTest(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(self.registry.can_bind(self.token))
         self.assertFalse(self.registry.can_bind("unknown"))
         with patch("src.ai.private_results.time.monotonic", return_value=0) as clock:
-            fresh = self.registry.issue(self.source, "lfg_list")
+            fresh = self.registry.issue(self.source, "help")
             self.assertTrue(self.registry.can_bind(fresh))
             clock.return_value = TTL_SECONDS
             self.assertFalse(self.registry.can_bind(fresh))
 
     async def test_result_opens_for_thirty_minutes(self):
         with patch("src.ai.private_results.time.monotonic", return_value=0) as clock:
-            live, stale = self.registry.issue(self.source, "lfg_list"), self.registry.issue(self.source, "lfg_list")
+            live, stale = self.registry.issue(self.source, "help"), self.registry.issue(self.source, "help")
             for token in (live, stale):
                 self.registry.bind_message(token, 3000)
             clock.return_value = 29 * 60
@@ -114,17 +114,17 @@ class PrivateResultsTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(text(late.response.send_message.await_args.kwargs["view"]), f"{ICONS['deadline']} 私人結果已過期，請再 @樂奈 問一次。")
 
     def test_buttons_are_named_by_kind_and_one_per_distinct_result(self):
-        again = self.registry.issue(self.source, "lfg_list")
+        again = self.registry.issue(self.source, "help")
         queries = [self.registry.issue(self.source, "steam_query", {"page": page}) for page in (2, 2, 3)]
         buttons = self.registry.make_buttons([self.token, again, *queries, "gone"])
-        self.assertEqual([button.item.label for button in buttons], ["查看揪團清單", "查看Steam 免費遊戲", "查看Steam 免費遊戲", "查看私人結果"])
+        self.assertEqual([button.item.label for button in buttons], ["查看功能說明", "查看Steam 免費遊戲", "查看Steam 免費遊戲", "查看私人結果"])
         self.assertEqual([button.item.custom_id for button in buttons],
                          [f"horo:private:{token}" for token in (self.token, queries[0], queries[2], "gone")])
 
     async def test_eviction_during_render_revokes_the_in_flight_result(self):
         async def render_and_evict(entry, interaction):
             for _ in range(10):
-                self.registry.issue(self.source, "lfg_list")
+                self.registry.issue(self.source, "help")
             return {"view": notice_view("私人團名 9876", "info")}
         self.render.side_effect = render_and_evict
         clicked = self.click()

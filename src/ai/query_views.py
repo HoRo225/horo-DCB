@@ -13,8 +13,5 @@ def info_card(*items: discord.ui.Item) -> discord.ui.LayoutView:
 
 def help_view(games_channel_id: int | None) -> discord.ui.LayoutView:
     games = f"<#{games_channel_id}>" if games_channel_id else "遊戲頻道"
-    lines = (
-        f"{ICONS['lfg']} 揪團：發起、加入、出發、取消、看清單",
-        f"{ICONS['games']} 21 點、拉霸要到 {games} 玩",
-    )
-    return info_card(card_title(f"{ICONS['ai']} 樂奈能幫你做的事", "直接 @樂奈 用說的就行"), discord.ui.TextDisplay("\n".join(lines)))
+    return info_card(card_title(f"{ICONS['ai']} 樂奈能幫你做的事", "直接 @樂奈 用說的就行"),
+                     discord.ui.TextDisplay(f"{ICONS['games']} 21 點、拉霸要到 {games} 玩"))

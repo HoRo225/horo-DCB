@@ -9,14 +9,12 @@ from src.ai.cog import AiCog
 from src.ai.private_results import PrivateResultButton
 from src.bot import HoroBot
 from src.games.views import GamePickSelect, RulesButton, lobby_view
-from src.lfg.store import LfgCard
-from src.lfg.views import LfgButton, card_view
 from src.steam.cog import SteamCog
 from src.steam.models import SteamOffer
 from src.steam.views import SteamClaim, build_offer_view
 
 G, BOT = 100, 999
-COGS = ["GamesCog", "LfgCog", "VoiceCog", "AdminCog", "AiCog", "SteamCog"]
+COGS = ["GamesCog", "VoiceCog", "AdminCog", "AiCog", "SteamCog"]
 
 COMMANDS = {
     "新話題": {
@@ -33,21 +31,6 @@ COMMANDS = {
         "nsfw": False,
         "dm_permission": False,
         "default_member_permissions": 8,
-        "contexts": [0],
-        "integration_types": None,
-    },
-    "揪團": {
-        "name": "揪團",
-        "description": "發起揪團，人滿或出發時通知全員",
-        "type": 1,
-        "options": [
-            {"type": 3, "name": "遊戲", "description": "要玩什麼", "required": True, "min_length": 1, "max_length": 50},
-            {"type": 4, "name": "人數", "description": "含自己共幾人", "required": True, "min_value": 2, "max_value": 10},
-            {"type": 3, "name": "備註", "description": "時間、模式等補充", "required": False, "min_length": 1, "max_length": 100},
-        ],
-        "nsfw": False,
-        "dm_permission": False,
-        "default_member_permissions": None,
         "contexts": [0],
         "integration_types": None,
     },
@@ -85,7 +68,7 @@ class HoroBotTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("on_interaction", self.bot.extra_events)
         self.assertEqual(
             set(self.bot._connection._view_store._dynamic_items.values()),
-            {GamePickSelect, RulesButton, LfgButton, PrivateResultButton, SteamClaim},
+            {GamePickSelect, RulesButton, PrivateResultButton, SteamClaim},
         )
 
     async def test_hub_custom_ids_reach_registered_handlers(self) -> None:
@@ -94,11 +77,10 @@ class HoroBotTests(unittest.IsolatedAsyncioTestCase):
         views = [
             lobby_view(),
             build_offer_view(SteamOffer(730, "G", "", "", (), None)),
-            card_view(LfgCard(1, 1, 1, "G", 2, None, [1], 0)),
         ]
         ids = {custom_id for view in views for item in view.walk_children()
                if (custom_id := getattr(item, "custom_id", None))}
-        self.assertLessEqual({"horo:game:pick", "horo:lfg:join", "horo:lfg:leave", "horo:lfg:go", "horo:lfg:cancel"}, ids)
+        self.assertIn("horo:game:pick", ids)
         for custom_id in ids | {"horo:game:rules:blackjack", "horo:steam:claim:730"}:
             with self.subTest(custom_id):
                 self.assertTrue(custom_id.startswith("horo:"))
@@ -121,7 +103,7 @@ class HoroBotTests(unittest.IsolatedAsyncioTestCase):
             for field, value in vars(cog).items()
             if isinstance(value, set) and all(isinstance(task, asyncio.Task) for task in value)
         }
-        self.assertLessEqual({("AiCog", "_requests"), ("LfgCog", "_expiring")}, probes.keys())
+        self.assertLessEqual({("AiCog", "_requests"), ("GamesCog", "_redrawing")}, probes.keys())
         self.bot._shutdown_failstop = MagicMock(side_effect=testing.Fatal)
         await self.bot.close()
         for key, probe in probes.items():
@@ -237,37 +219,26 @@ class HoroShutdownTests(unittest.IsolatedAsyncioTestCase):
         order = []
         self.db.execute("CREATE TABLE shutdown_check (owner TEXT)")
 
-        async def accepted(name, *_args, **_kwargs):
-            order.append(name)
-            if len(order) == 2:
-                entered.set()
+        async def game_action(*_args, **_kwargs):
+            order.append("game")
+            entered.set()
             await gate.wait()
-            self.db.execute("INSERT INTO shutdown_check VALUES (?)", (name,))
-
-        async def game_action(*args, **kwargs):
-            return await accepted("game", *args, **kwargs)
-
-        async def lfg_create(*args, **kwargs):
-            return await accepted("lfg", *args, **kwargs)
+            self.db.execute("INSERT INTO shutdown_check VALUES (?)", ("game",))
 
         with (
             patch.object(self.bot.game_operations, "_execute", side_effect=game_action),
-            patch.object(self.bot.lfg_operations, "_create", side_effect=lfg_create),
             patch("discord.Client.close", step(order, "discord")),
         ):
             game = asyncio.create_task(self.bot.game_operations.execute(None, "deal"))
-            lfg = asyncio.create_task(self.bot.lfg_operations.create(None, "game", 2, operation_id="shutdown"))
             async with asyncio.timeout(2):
                 await entered.wait()
             self.assertIn(game, self.bot.game_operations.pending_tasks())
-            self.assertIn(lfg, self.bot.lfg_operations.pending_tasks())
             asyncio.get_running_loop().call_soon(gate.set)
             await self.bot.close()
-            await asyncio.gather(game, lfg)
+            await game
         self.assertEqual(order[-1], "discord")
-        self.assertEqual(self.db.execute("SELECT owner FROM shutdown_check ORDER BY owner").fetchall(), [("game",), ("lfg",)])
+        self.assertEqual(self.db.execute("SELECT owner FROM shutdown_check").fetchall(), [("game",)])
         self.assertEqual(self.bot.game_operations.pending_tasks(), set())
-        self.assertEqual(self.bot.lfg_operations.pending_tasks(), set())
         self.assertTrue(self.bot._db_safe_to_close)
 
     async def test_reentrant_close_and_caller_cancellation_share_one_owner(self) -> None:

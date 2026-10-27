@@ -545,9 +545,9 @@ class AskOnceTests(unittest.IsolatedAsyncioTestCase):
 
     def test_gameplay_summary_lists_only_remaining_features(self) -> None:
         summary = _instructions().split("玩法摘要", 1)[1].split("\n\n", 1)[0]
-        for text in ("21 點", "拉霸", "不下注", "叫牌、停牌", "揪團", "期限兩小時", "臨時語音", "Steam", "說「說明」會出功能卡"):
+        for text in ("21 點", "拉霸", "不下注", "叫牌、停牌", "臨時語音", "Steam", "說「說明」會出功能卡"):
             self.assertIn(text, summary)
-        for text in ("點數來源", "上班", "抽卡", "商店", "樂透", "賽馬", "生日", "語音同樂", "金庫", "任務"):
+        for text in ("點數來源", "上班", "抽卡", "商店", "樂透", "賽馬", "生日", "語音同樂", "金庫", "任務", "揪團"):
             self.assertNotIn(text, summary)
 
 

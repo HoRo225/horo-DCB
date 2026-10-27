@@ -19,7 +19,7 @@ from src.state import open_db, set_setting
 from src.testing import text
 
 GUILD, CHANNEL_A, CHANNEL_B, USER, ROLE, BOT = 700, 701, 702, 710, 720, 799
-PLAN = IntentDecision("plan", (Action("lfg_list", {}),))
+PLAN = IntentDecision("plan", (Action("steam_query", {}),))
 
 
 class FakeGuild:
@@ -36,7 +36,7 @@ class FakeGuild:
 
 
 class FakeMessage:
-    def __init__(self, message_id=800, *, content="<@799> 看揪團", channel_id=CHANNEL_A):
+    def __init__(self, message_id=800, *, content="<@799> 查 Steam", channel_id=CHANNEL_A):
         self.id, self.content, self.webhook_id = message_id, content, None
         self.author = SimpleNamespace(id=USER, bot=False, display_name="成員", roles=[SimpleNamespace(id=ROLE)])
         self.guild = FakeGuild()
@@ -113,7 +113,7 @@ class FakeActions:
         live.channels.setdefault(message.channel.id, message.channel)
         live.members.setdefault(message.author.id, message.author)
         return {"actor_id": message.author.id, "guild_id": message.guild.id, "channel_id": message.channel.id,
-                "allowed_actions": ["lfg_list", "hit"], "game": copy.deepcopy(self.game)}
+                "allowed_actions": ["steam_query", "hit"], "game": copy.deepcopy(self.game)}
 
     async def _execute(self, message, decision, *, game_snapshot, deadline):
         self.seen_game.append(copy.deepcopy(game_snapshot))
@@ -164,7 +164,7 @@ class FrontendIntentTest(unittest.IsolatedAsyncioTestCase):
                 with patch("src.ai.discord._read_media", AsyncMock()) as media:
                     await self.handle(message)
                 args = self.codex.intent.await_args.args
-                self.assertEqual(args[1], "看揪團")
+                self.assertEqual(args[1], "查 Steam")
                 serialized = json.dumps(args[2], ensure_ascii=False)
                 self.assertNotIn(quote.content, serialized)
                 self.assertNotIn("cdn.discordapp", serialized)
@@ -272,12 +272,12 @@ class FrontendIntentTest(unittest.IsolatedAsyncioTestCase):
         self.codex.chat.assert_not_awaited()
         self.assertIsNone(self.actions.records.get_request(message.id))
         self.assertIn("<#99>", text(message.channel.send.await_args.kwargs["view"]))
-        self.codex.intent.return_value = IntentDecision("plan", (Action("lfg_list", {}), Action("help", {})))
+        self.codex.intent.return_value = IntentDecision("plan", (Action("steam_query", {}), Action("help", {})))
         await handle_message(FakeMessage(801), bot_user_id=BOT, codex=self.codex, access=self.access, actions=self.actions, bot=bot)
         self.actions.execute_plan.assert_awaited_once()
 
     async def test_results_without_a_receipt_reply_in_receipt_style_without_private_buttons(self):
-        results = [{"ok": True, "code": "done", "text": "已查詢揪團清單。", "private_ref": "UNBOUND"},
+        results = [{"ok": True, "code": "done", "text": "已查詢Steam 免費遊戲。", "private_ref": "UNBOUND"},
                    {"ok": False, "code": "forbidden", "text": "此操作僅限伺服器管理員使用。"}]
         self.codex.intent.return_value = PLAN
         self.actions.execute_plan = AsyncMock(return_value=results)
@@ -291,8 +291,8 @@ class FrontendIntentTest(unittest.IsolatedAsyncioTestCase):
                 if display:
                     self.assertIs(sent.kwargs["view"], self.actions._receipt_view.return_value)
                 else:
-                    self.assertEqual(sent.args[0], "已查詢揪團清單。\n此操作僅限伺服器管理員使用。")
-        self.actions._receipt_view.assert_called_once_with([{"ok": True, "code": "done", "text": "已查詢揪團清單。"}, results[1]])
+                    self.assertEqual(sent.args[0], "已查詢Steam 免費遊戲。\n此操作僅限伺服器管理員使用。")
+        self.actions._receipt_view.assert_called_once_with([{"ok": True, "code": "done", "text": "已查詢Steam 免費遊戲。"}, results[1]])
         self.codex.summarize.assert_not_awaited()
 
     async def test_summary_receives_only_public_results_and_only_edits_existing_receipt(self):

@@ -12,18 +12,16 @@ from src.codex.protocol import CodexBridgeError
 from src.brand import ICONS
 from src.games.operations import GameOperations
 from src.games.store import GameStore
-from src.lfg.store import LfgStore
-from src.lfg.operations import LfgOperations
 from src.state import transaction
 from src.testing import memory_db, text
 
-QUERY = Action("lfg_list", {})
+QUERY = Action("help", {})
 ADMIN_ONLY = "此操作僅限伺服器管理員使用。"
 
 
 class StaticActionProblemTest(unittest.TestCase):
     def test_boundaries_and_explicit_scope(self):
-        explicit = {"channels": {10}, "roles": {20}, "resources": {30}}
+        explicit = {"channels": {10}, "roles": {20}}
         role_problem = "請在本則訊息明確提及設定的頻道或身分組，未執行任何操作。"
         cases = (
             ("channel outside scope", Action("games_channel", {"channel_id": 11}),
@@ -37,10 +35,6 @@ class StaticActionProblemTest(unittest.TestCase):
             ("games role in scope", Action("games_roles", {"ids": [20]}), None),
             ("Steam role outside scope", Action("steam_roles", {"ids": [21]}), role_problem),
             ("Steam role in scope", Action("steam_roles", {"ids": [20]}), None),
-            ("LFG resource outside scope", Action("lfg_join", {"message_id": 31}),
-             "請回覆原揪團訊息或提供明確的揪團訊息 ID，未執行任何操作。"),
-            ("LFG resource in scope", Action("lfg_join", {"message_id": 30}), None),
-            ("LFG prior action", Action("lfg_join", {"from_action": 0}), None),
             ("game action", Action("deal", {}), None),
             ("pending item outside message", Action("pending_resolution", {"effect_id": "voice.delete:1", "resolution": "skip"}),
              "請在本則訊息貼上要處理的項目 ID，未執行任何操作。"),
@@ -72,14 +66,13 @@ class ActionServiceTest(unittest.IsolatedAsyncioTestCase):
         access.enabled = True
         access.set_allowlist(5, frozenset({10}), roles=False)
         access.set_allowlist(5, frozenset({7}), roles=True)
-        self.bot = SimpleNamespace(games=GameStore(self.db), lfg=LfgStore(self.db), ai_settings=access,
+        self.bot = SimpleNamespace(games=GameStore(self.db), ai_settings=access,
                                    unavailable_reason=lambda guild_id: None if guild_id == 5 else "伺服器不符",
                                    get_partial_messageable=lambda channel_id: SimpleNamespace(get_partial_message=lambda message_id: self.receipt))
         self.bot.get_guild = lambda guild_id: self.guild if guild_id == 5 else None
         self.bot.get_channel = lambda channel_id: self.channel if channel_id == 10 else None
         self.bot.games.set_channel(10)
         self.bot.game_operations = GameOperations(self.bot)
-        self.bot.lfg_operations = LfgOperations(self.bot)
         self.service = ActionService(self.bot, self.db)
 
     async def execute(self, *actions, **kwargs):
@@ -98,18 +91,17 @@ class ActionServiceTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_failure_stops_later_action_and_preserves_prior_commit(self):
         self.actor.guild_permissions.administrator = True
-        self.source.content = "加入 30"
-        ended = {"ok": False, "code": "ended", "text": "這個揪團已經結束了。"}
-        plan = (Action("ai_display", {"enabled": False}), Action("lfg_join", {"message_id": 30}),
+        self.source.content = "重送 missing"
+        self.bot.effects = SimpleNamespace(resolve=AsyncMock(return_value="這個項目已完成或不存在。"))
+        plan = (Action("ai_display", {"enabled": False}), Action("pending_resolution", {"effect_id": "missing", "resolution": "retry"}),
                 Action("ai_display", {"enabled": True}))
-        with patch.object(self.service.lfg, "execute", AsyncMock(return_value=ended)) as join:
-            result = await self.execute(*plan)
-            self.assertEqual([row["ok"] for row in result], [True, False, False])
-            self.assertEqual(result[2]["code"], "not_executed")
-            self.assertFalse(self.bot.ai_settings.text_display)
-            replay = await self.execute(*plan)
+        result = await self.execute(*plan)
+        self.assertEqual([row["ok"] for row in result], [True, False, False])
+        self.assertEqual(result[2]["code"], "not_executed")
+        self.assertFalse(self.bot.ai_settings.text_display)
+        replay = await self.execute(*plan)
         self.assertEqual(result, replay)
-        join.assert_awaited_once()
+        self.bot.effects.resolve.assert_awaited_once()
         self.assertFalse(self.bot.ai_settings.text_display)
 
     async def test_member_plan_with_an_admin_step_is_rejected_before_any_commit(self):
@@ -187,7 +179,7 @@ class ActionServiceTest(unittest.IsolatedAsyncioTestCase):
                 admitted.set()
                 await release.wait()
             return await execute(source, action, *args)
-        decision = IntentDecision("plan", (QUERY, Action("help", {})))
+        decision = IntentDecision("plan", (QUERY, QUERY))
         with patch.object(self.service, "_execute", side_effect=slow):
             parent = asyncio.create_task(self.service.execute_plan(self.source, decision))
             await admitted.wait()
@@ -198,7 +190,7 @@ class ActionServiceTest(unittest.IsolatedAsyncioTestCase):
             self.actor.roles = [SimpleNamespace(id=7)]
             release.set()
             results, = await asyncio.gather(*self.service._tasks)
-        self.assertEqual(entered, ["lfg_list"])
+        self.assertEqual(entered, ["help"])
         self.assertEqual([row["ok"] for row in results], [True, False])
         self.assertEqual(self.service.records.get_request(1000).status, "interrupted")
         replay = await self.service.execute_plan(self.source, decision)
@@ -216,7 +208,7 @@ class ActionServiceTest(unittest.IsolatedAsyncioTestCase):
                 await release.wait()
             return self.actor
         self.guild.fetch_member.side_effect = fresh
-        parent = asyncio.create_task(self.execute(QUERY, Action("help", {})))
+        parent = asyncio.create_task(self.execute(QUERY, QUERY))
         await checking.wait()
         self.actor.roles = []
         parent.cancel()
@@ -278,13 +270,13 @@ class ActionServiceTest(unittest.IsolatedAsyncioTestCase):
     async def test_snapshot_lists_only_what_a_member_may_ask_for(self):
         snapshot = self.service.snapshot(self.source)
         self.assertNotIn("members", snapshot)
-        self.assertIn("lfg_list", snapshot["allowed_actions"])
+        self.assertIn("help", snapshot["allowed_actions"])
         self.assertNotIn("ai_display", snapshot["allowed_actions"])
 
     async def test_tables_stay_in_the_game_channel(self):
         self.bot.games.set_channel(11)
         allowed = self.service.snapshot(self.source)["allowed_actions"]
-        self.assertIn("lfg_list", allowed)
+        self.assertIn("help", allowed)
         self.assertTrue({"open_table", "deal"}.isdisjoint(allowed))
         [result] = await self.execute(Action("open_table", {"game": "slots"}),
                                       game_snapshot={"state_token": None, "busy": False})
@@ -292,7 +284,7 @@ class ActionServiceTest(unittest.IsolatedAsyncioTestCase):
         self.bot.games.set_channel(10)
         self.bot.games.set_roles([99])
         allowed = self.service.snapshot(self.source)["allowed_actions"]
-        self.assertIn("lfg_list", allowed)
+        self.assertIn("help", allowed)
         self.assertTrue(allowed and GAME_ACTIONS.isdisjoint(allowed))
 
     async def test_message_received_during_busy_table_cannot_play_later(self):
@@ -473,7 +465,7 @@ class ActionServiceTest(unittest.IsolatedAsyncioTestCase):
         execute = self.service._execute
         async def first_then_delete(source, action, *args):
             result = await execute(source, action, *args)
-            if action.name == "lfg_list":
+            if action.name == "help":
                 roles.clear()
             return result
         with patch.object(self.service, "_execute", side_effect=first_then_delete):
@@ -484,12 +476,12 @@ class ActionServiceTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_fixed_receipt_cannot_be_replaced_by_mutated_caller_results(self):
         results = await self.execute(QUERY)
-        results[0]["text"] = "洩漏私人團名 9876"
+        results[0]["text"] = "洩漏私人內容 9876"
         await self.service.update_receipt(self.source, "完成")
         view = self.receipt.edit.await_args.kwargs["view"]
         body = text(view)
         self.assertNotIn("9876", body)
-        self.assertIn(f"{ICONS['ok']} **完成**　已查詢揪團清單。", body)
+        self.assertIn(f"{ICONS['ok']} **完成**　已查詢功能說明。", body)
         self.assertEqual(view.children[0].children[0].content, f"## {ICONS['ai']} 操作結果\n-# 按鈕 30 分鐘內有效，只有你打得開")
         self.assertEqual(view.children[0].children[-1].content, "> **樂奈**　完成")
 
@@ -497,31 +489,13 @@ class ActionServiceTest(unittest.IsolatedAsyncioTestCase):
         self.actor.guild_permissions.administrator = True
         results = await self.execute(Action("ai_display", {"enabled": False}), QUERY, Action("steam_query", {}), QUERY)
         self.assertEqual([row["text"] for row in results],
-                         ["管理操作已完成。", "已查詢揪團清單。", "已查詢Steam 免費遊戲。", "已查詢揪團清單。"])
+                         ["管理操作已完成。", "已查詢功能說明。", "已查詢Steam 免費遊戲。", "已查詢功能說明。"])
         view = self.channel.send.await_args.kwargs["view"]
         self.assertTrue(view.children[0].children[0].content.endswith("\n-# 按鈕 30 分鐘內有效，只有你打得開"))
         buttons = [button.item for button in view.children[-1].children]
-        self.assertEqual([button.label for button in buttons], ["查看揪團清單", "查看Steam 免費遊戲"])
+        self.assertEqual([button.label for button in buttons], ["查看功能說明", "查看Steam 免費遊戲"])
         self.assertEqual([button.custom_id for button in buttons],
                          [f"horo:private:{results[index]['private_ref']}" for index in (1, 2)])
-
-    async def test_receipt_links_each_lfg_card_once_but_not_game_tables(self):
-        card = "https://discord.com/channels/5/10/55"
-        created = {"ok": True, "code": "done", "text": "已建立揪團「Apex」（1 / 4 人）。", "resource_id": "55", "message_url": card}
-        table = {"ok": True, "code": "done", "text": "賭桌已開啟。", "resource_id": "66", "message_url": "https://discord.com/channels/5/10/66"}
-        with (patch.object(self.service.lfg, "create", AsyncMock(return_value=created)),
-              patch.object(self.service.lfg, "execute", AsyncMock(return_value=dict(created, text="已加入「Apex」（2 / 4 人）。"))),
-              patch.object(self.service.games, "execute", AsyncMock(return_value=table))):
-            results = await self.execute(Action("lfg_create", {"game": "Apex", "size": 4}), Action("lfg_join", {"from_action": 0}))
-            self.assertEqual([row.get("lfg") for row in results], [True, True])
-            view = self.channel.send.await_args.kwargs["view"]
-            self.assertEqual(view.children[0].children[0].content, f"## {ICONS['ai']} 操作結果")
-            [link] = view.children[-1].children
-            self.assertEqual((link.label, link.url, str(link.emoji)), ("前往揪團", card, ICONS["lfg"]))
-            self.source.id += 1
-            [result] = await self.execute(Action("open_table", {"game": "slots"}), game_snapshot={"state_token": None, "busy": False})
-        self.assertNotIn("lfg", result)
-        self.assertEqual(len(self.channel.send.await_args.kwargs["view"].children), 1)
 
     async def test_pending_retry_never_replays_the_original_command(self):
         self.actor.guild_permissions.administrator = True
@@ -560,23 +534,6 @@ class ActionServiceTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.service.records.get(f"{request.request_id}:0").status, "failed")
         await self.execute(Action("pending_resolution", {"effect_id": "missing", "resolution": "retry"}))
         self.bot.effects.resolve.assert_awaited_once()
-
-    async def test_lfg_private_render_filters_target_revoked_during_thread_check(self):
-        from src.lfg.store import LfgCard
-        self.bot.lfg._add(LfgCard(99, 11, 1, "私人團名", 2, None, [1], 2**31))
-        target = MagicMock(spec=discord.Thread, id=11)
-        visible = True
-        target.is_private.return_value = True
-        target.permissions_for.side_effect = lambda actor: discord.Permissions(view_channel=visible)
-        async def joined(user_id):
-            nonlocal visible
-            visible = False
-            return SimpleNamespace(id=user_id)
-        target.fetch_member = AsyncMock(side_effect=joined)
-        self.guild.get_channel_or_thread.side_effect = lambda channel_id: target if channel_id == 11 else self.channel
-        entry = SimpleNamespace(kind="lfg_list", params={}, user_id=1, guild_id=5)
-        rendered = await self.service._render_private(entry, self.source)
-        self.assertNotIn("私人團名", text(rendered["view"]))
 
     async def test_steam_query_tells_failure_from_no_offers(self):
         from src.steam.models import SteamFetchResult, SteamOffer

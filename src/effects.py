@@ -12,11 +12,11 @@ from src.operations import OperationStore
 from src.state import transaction
 
 MESSAGE_CONFIRMATIONS = frozenset({
-    "steam.announce", "lfg_depart", "lfg_edit", "action.receipt", "game_table_edit", "game_hub_publish",
+    "steam.announce", "action.receipt", "game_table_edit", "game_hub_publish",
 })
 CONFIRMABLE = MESSAGE_CONFIRMATIONS | {"voice.create"}
 RETRYABLE = frozenset({
-    "steam.announce", "lfg_depart", "lfg_edit", "action.receipt", "voice.delete",
+    "steam.announce", "action.receipt", "voice.delete",
 })
 
 
@@ -90,11 +90,7 @@ class EffectService:
         channel = guild.get_channel_or_thread(effect.channel_id)
         if channel is None:
             return "原頻道已不存在。"
-        target_id = (
-            effect.payload.get("card", {}).get("message_id") if effect.kind == "lfg_edit"
-            else effect.payload.get("message_id") if effect.kind == "game_table_edit" else None
-        )
-        if effect.kind in {"lfg_edit", "game_table_edit"} and target_id != message_id:
+        if effect.kind == "game_table_edit" and effect.payload.get("message_id") != message_id:
             return "訊息 ID 與原本要更新的訊息不同。"
         try:
             async with asyncio.timeout(5):
@@ -109,7 +105,7 @@ class EffectService:
             return "這個項目已完成或不再等待確認。"
         if guild.get_channel_or_thread(effect.channel_id) is None:
             return "原頻道已不存在。"
-        event_time = getattr(message, "edited_at", None) if effect.kind in {"lfg_edit", "game_table_edit"} else message.created_at
+        event_time = getattr(message, "edited_at", None) if effect.kind == "game_table_edit" else message.created_at
         if (message.id != message_id or message.author.id != self.bot.user.id or message.channel.id != effect.channel_id
             or event_time is None or event_time.timestamp() < effect.created_at - 5):
             return "訊息作者、原頻道或時間與此項目不符。"
@@ -145,9 +141,7 @@ class EffectService:
                 effect_id, guild, allow_unknown=True, still_current=lambda: current_guild() is guild,
             )
         authorized = lambda: current_guild() is not None
-        if effect.kind == "lfg_depart" or effect.kind == "lfg_edit":
-            success = await self.bot.lfg_operations.retry_effect(effect_id, allow_unknown=True, still_current=authorized)
-        elif effect.kind == "action.receipt":
+        if effect.kind == "action.receipt":
             success = await self.bot.actions.retry_effect(effect_id, allow_unknown=True, still_current=authorized)
         else:
             success = await self.bot.steam_free_games.retry_effect(effect_id, allow_unknown=True, still_current=authorized)

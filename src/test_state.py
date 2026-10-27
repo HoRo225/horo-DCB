@@ -13,7 +13,6 @@ from src.codex.model_settings import (
     ModelChoice,
     ModelSettings,
 )
-from src.lfg.store import LfgCard, LfgStore
 from src.state import (
     MIGRATIONS,
     SETTING_DEFAULTS,
@@ -175,7 +174,7 @@ class MigrationTest(unittest.TestCase):
         self.assertEqual(db.execute("PRAGMA user_version").fetchone(), (len(MIGRATIONS),))
         tables = {name for (name,) in db.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
         self.assertEqual(tables, {
-            "settings", "voice_rooms", "steam_posted", "lfg_cards",
+            "settings", "voice_rooms", "steam_posted",
             "requests", "operations", "discord_effects", "game_tables",
         })
 
@@ -183,13 +182,13 @@ class MigrationTest(unittest.TestCase):
         raw = self._raw()
         raw.executescript(MIGRATIONS[0] + "INSERT INTO balances (user_id, points) VALUES (7, 500);"
                           "INSERT INTO escrow (user_id, amount, channel_id, message_id, game) VALUES (7, 100, 10, 20, 'slots');"
-                          "INSERT INTO lfg_cards VALUES (100, 10, 7, 'Apex', 3, NULL, '[7]', 999);")
+                          "INSERT INTO voice_rooms VALUES (50, 7);")
         raw.close()
         db = open_db(self.path)
         self.addCleanup(db.close)
         self.assertEqual(db.execute("PRAGMA user_version").fetchone(), (len(MIGRATIONS),))
         self.assertEqual(db.execute("SELECT * FROM game_tables").fetchall(), [(7, "slots", 10, 20)])
-        self.assertEqual(LfgStore(db).get(100), LfgCard(100, 10, 7, "Apex", 3, None, [7], 999))
+        self.assertEqual(db.execute("SELECT * FROM voice_rooms").fetchall(), [(50, 7)])
         db.close()
         db = open_db(self.path)
         self.addCleanup(db.close)
@@ -211,7 +210,8 @@ INSERT INTO discord_effects (effect_id, kind, status, payload) VALUES
 """)
         lfg = raw.execute("SELECT * FROM lfg_cards").fetchall()
         raw.close()
-        db = open_db(self.path)
+        with patch("src.state.MIGRATIONS", MIGRATIONS[:11]):
+            db = open_db(self.path)
         self.addCleanup(db.close)
         self.assertEqual(db.execute("PRAGMA user_version").fetchone(), (11,))
         self.assertEqual(db.execute("SELECT * FROM game_tables").fetchall(), [(7, "blackjack", 10, 20)])
@@ -224,6 +224,35 @@ INSERT INTO discord_effects (effect_id, kind, status, payload) VALUES
         self.assertEqual(db.execute("SELECT key FROM settings").fetchall(), [("games.channel_id",)])
         self.assertEqual(dict(db.execute("SELECT effect_id, status FROM discord_effects")),
                          {"b": "skipped", "l": "skipped", "u": "skipped", "d": "done", "s": "pending"})
+
+    def test_v11_to_v12_drops_lfg_and_skips_its_unfinished_records(self) -> None:
+        raw = self._raw()
+        raw.executescript("\n".join(MIGRATIONS[:11]) + """PRAGMA user_version = 11;
+INSERT INTO lfg_cards VALUES (100, 10, 7, 'Apex', 3, NULL, '[7]', 999, '加油');
+INSERT INTO voice_rooms VALUES (50, 100);
+INSERT INTO game_tables VALUES (7, 'slots', 10, 20);
+INSERT INTO settings VALUES ('games.channel_id', '10');
+INSERT INTO discord_effects (effect_id, kind, status, payload) VALUES
+    ('c', 'lfg_create', 'unknown', '{}'), ('e', 'lfg_edit', 'pending', '{}'), ('p', 'lfg_depart', 'failed', '{}'),
+    ('d', 'lfg_depart', 'done', '{}'), ('s', 'steam.announce', 'pending', '{}');
+INSERT INTO operations (operation_id, kind, inputs, status, result) VALUES
+    ('oc', 'lfg_create', '{}', 'running', '{}'), ('oa', 'lfg_action', '{}', 'done', '{}'),
+    ('og', 'game_action', '{}', 'running', '{}');
+""")
+        raw.close()
+        db = open_db(self.path)
+        self.addCleanup(db.close)
+        self.assertEqual(db.execute("PRAGMA user_version").fetchone(), (12,))
+        self.assertIsNone(db.execute("SELECT 1 FROM sqlite_master WHERE name = 'lfg_cards'").fetchone())
+        self.assertEqual(db.execute("SELECT * FROM voice_rooms").fetchall(), [(50, 100)])
+        self.assertEqual(db.execute("SELECT * FROM game_tables").fetchall(), [(7, "slots", 10, 20)])
+        self.assertEqual(db.execute("SELECT key, value FROM settings").fetchall(), [("games.channel_id", "10")])
+        self.assertEqual(dict(db.execute("SELECT effect_id, status FROM discord_effects")),
+                         {"c": "skipped", "e": "skipped", "p": "skipped", "d": "done", "s": "pending"})
+        self.assertEqual(dict(db.execute("SELECT effect_id, error FROM discord_effects WHERE status = 'skipped'")),
+                         dict.fromkeys("cep", "feature_removed"))
+        self.assertEqual(dict(db.execute("SELECT operation_id, status FROM operations")),
+                         {"oc": "skipped", "oa": "done", "og": "running"})
 
     def test_failed_migration_rolls_back(self) -> None:
         broken = [MIGRATIONS[0], "CREATE TABLE leftover (a INTEGER); INSERT INTO missing VALUES (1);"]

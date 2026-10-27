@@ -7,20 +7,16 @@ from src.codex.model_settings import parse_model_settings
 
 MAX_ACTIONS = 4
 GAME_ACTIONS = frozenset({"open_table", "deal", "again", "hit", "stand", "leave_table"})
-RESOURCE_ACTIONS = frozenset({"lfg_create"})
 GAMES = ("blackjack", "slots")
 
 ACTION_PARAMETERS: dict[str, dict[str, tuple[str, bool]]] = {
     name: {} for name in (
-        "deal", "again", "hit", "stand", "leave_table", "lfg_list",
+        "deal", "again", "hit", "stand", "leave_table",
         "voice_sync", "admin_status", "publish_hub", "steam_query", "help",
     )
 }
 ACTION_PARAMETERS.update({
     "open_table": {"game": ("game", True)},
-    "lfg_create": {"game": ("text", True), "size": ("positive", True), "note": ("text", False)},
-    **{name: {"message_id": ("id", False), "from_action": ("index", False)}
-       for name in ("lfg_join", "lfg_leave", "lfg_depart", "lfg_cancel")},
     **{name: {"enabled": ("bool", True)}
        for name in ("ai_enabled", "ai_display", "voice_enabled", "steam_enabled")},
     **{name: {"ids": ("ids", True)}
@@ -53,10 +49,8 @@ class IntentDecision:
 
 
 def _valid_parameter(kind: str, value: object) -> bool:
-    if kind in {"id", "positive"}:
+    if kind == "id":
         return type(value) is int and 0 < value <= 2**63 - 1
-    if kind == "index":
-        return type(value) is int and 0 <= value < MAX_ACTIONS
     if kind == "bool":
         return type(value) is bool
     if kind == "ids":
@@ -92,10 +86,6 @@ def parse_action(raw: object) -> Action:
         raise ValueError("invalid action parameters")
     if any(not _valid_parameter(spec[key][0], value) for key, value in params.items()):
         raise ValueError("invalid action parameter type")
-    if name == "lfg_create" and (not 2 <= params["size"] <= 10 or len(params["game"]) > 50 or len(params.get("note", "")) > 100):
-        raise ValueError("invalid party parameters")
-    if name.startswith("lfg_") and name not in {"lfg_create", "lfg_list"} and len(params) != 1:
-        raise ValueError("exactly one resource reference required")
     return Action(name, params)
 
 
@@ -111,10 +101,6 @@ def parse_intent_decision(raw: object) -> IntentDecision:
         parsed = tuple(parse_action(action) for action in actions)
         if sum(action.name in GAME_ACTIONS for action in parsed) > 1:
             raise ValueError("one game action per message")
-        for index, action in enumerate(parsed):
-            reference = action.params.get("from_action")
-            if reference is not None and (reference >= index or parsed[reference].name not in RESOURCE_ACTIONS):
-                raise ValueError("invalid prior resource reference")
         return IntentDecision(kind, parsed)
     if actions:
         raise ValueError(f"{kind} intent with actions")

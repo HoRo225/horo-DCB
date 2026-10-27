@@ -118,7 +118,6 @@ def intent_schema() -> dict[str, object]:
     choices = []
     primitive = {
         "id": {"type": "integer", "minimum": 1},
-        "positive": {"type": "integer", "minimum": 1}, "index": {"type": "integer", "minimum": 0, "maximum": MAX_ACTIONS - 1},
         "bool": {"type": "boolean"}, "text": {"type": "string"},
         "ids": {"type": "array", "items": {"type": "integer", "minimum": 1}, "maxItems": 25},
         "game": {"type": "string", "enum": list(GAMES)},

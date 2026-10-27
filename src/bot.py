@@ -23,9 +23,6 @@ from src.discord_utils import member_role_ids
 from src.games.cog import GamesCog
 from src.games.operations import GameOperations
 from src.games.store import GameStore
-from src.lfg.cog import LfgCog
-from src.lfg.operations import LfgOperations
-from src.lfg.store import LfgStore
 from src.state import DB_PATH, hold_lock, open_db
 from src.steam.cog import SteamCog
 from src.steam.notifier import SteamFreeGamesNotifier
@@ -67,9 +64,7 @@ class HoroBot(commands.Bot):
         self.temp_voice = TempVoiceManager(db, get_guild=self.get_guild)
         self.steam_free_games = SteamFreeGamesNotifier(db, guild_id)
         self.games = GameStore(db)
-        self.lfg = LfgStore(db)
         self.game_operations = GameOperations(self)
-        self.lfg_operations = LfgOperations(self)
         self.admin_panels = PanelSessionRegistry()
         self.effects = EffectService(self, db)
         self.actions = ActionService(self, db)
@@ -81,7 +76,7 @@ class HoroBot(commands.Bot):
     async def add_cogs(self) -> None:
         guild = discord.Object(id=self.guild_id)
         self.add_dynamic_items(PrivateResultButton)
-        for cog in (GamesCog, LfgCog, VoiceCog, AdminCog, AiCog, SteamCog):
+        for cog in (GamesCog, VoiceCog, AdminCog, AiCog, SteamCog):
             await self.add_cog(cog(self), guild=guild)
 
     def _member_roles(self, user_id: int) -> frozenset[int] | None:
@@ -122,7 +117,7 @@ class HoroBot(commands.Bot):
             self._shutdown_owners()
             scheduled = {self._watchdog, getattr(self.steam_free_games, "_task", None)}
             for cog in self._shutdown_cogs:
-                for field in ("_tasks", "_redrawing", "_expiring", "_requests"):
+                for field in ("_tasks", "_redrawing", "_requests"):
                     scheduled.update(getattr(cog, field, ()))
             tasks.cancel_all(task for task in scheduled if isinstance(task, asyncio.Task))
             self._close_task = asyncio.create_task(self._shutdown())
@@ -146,10 +141,9 @@ class HoroBot(commands.Bot):
                              (getattr(self, "effects", None), "_tasks")):
             found.update(getattr(owner, field, ()))
         found.update(self.game_operations.pending_tasks())
-        found.update(self.lfg_operations.pending_tasks())
         found.update(self.admin_panels.pending_tasks())
         for cog in self._shutdown_cogs:
-            for field in ("_tasks", "_redrawing", "_expiring", "_requests"):
+            for field in ("_tasks", "_redrawing", "_requests"):
                 found.update(getattr(cog, field, ()))
         found.update((self._watchdog, getattr(self.steam_free_games, "_task", None)))
         self._shutdown_seen.update(task for task in found if isinstance(task, asyncio.Task))

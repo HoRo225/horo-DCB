@@ -1,7 +1,7 @@
 import itertools
 import asyncio
 import unittest
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import discord
 
@@ -9,7 +9,7 @@ from src.brand import WARN_COLOUR
 from src.state import open_db, set_setting, transaction
 from src.testing import text
 from src.voice.cog import VoiceCog
-from src.voice.manager import AUDIT_REASON, PARTY_NAME_SUFFIX, TempVoiceManager, build_temp_voice_name
+from src.voice.manager import AUDIT_REASON, TempVoiceManager, build_temp_voice_name
 
 G, ENTRY = 100, 10
 
@@ -578,51 +578,6 @@ class TempVoiceManagerTest(unittest.IsolatedAsyncioTestCase):
         alice.move_to.assert_not_awaited()
         self.created()[0].delete.assert_awaited_once()
         self.assertEqual(self.rooms(), 0)
-
-    async def test_open_party_creates_one_room_keyed_by_card(self) -> None:
-        category = MagicMock(id=7, overwrites={MagicMock(spec=discord.Role, id=8): discord.PermissionOverwrite(connect=True)})
-        self.entry.category = category
-        room = await self.manager.open_party(self.guild, "Apex", 555)
-        args, kwargs = self.guild.create_voice_channel.await_args
-        self.assertEqual(args, (build_temp_voice_name("Apex", PARTY_NAME_SUFFIX),))
-        self.assertEqual(args[0], "▍Apex-🎮")
-        self.assertIs(kwargs["category"], category)
-        self.assertEqual(kwargs["overwrites"], category.overwrites)
-        self.assertEqual(self.manager._db.execute("SELECT channel_id, owner_id FROM voice_rooms").fetchall(), [(room.id, 555)])
-        self.assertIs(await self.manager.open_party(self.guild, "Apex", 555), room)
-        self.guild.create_voice_channel.assert_awaited_once()
-        self.manager.stop_new_work()
-
-    async def test_open_party_needs_feature_and_usable_entry(self) -> None:
-        self.manager.set_enabled(False)
-        self.assertIsNone(await self.manager.open_party(self.guild, "Apex", 555))
-        self.manager.set_enabled(True)
-        self.guild.me = MagicMock()
-        self.entry.permissions_for.side_effect = lambda target: discord.Permissions.none() if target is self.guild.me else discord.Permissions.all()
-        self.assertIsNone(await self.manager.open_party(self.guild, "Apex", 555))
-        set_setting(self.manager._db, "voice.entry_channel_id", None)
-        self.assertIsNone(await self.manager.open_party(self.guild, "Apex", 555))
-        self.guild.create_voice_channel.assert_not_awaited()
-
-    async def test_party_room_nobody_entered_is_deleted_after_idle_window(self) -> None:
-        self.guild.create_voice_channel.side_effect = lambda name, **kwargs: self.create_voice(
-            name, **kwargs, voice_states={1: MagicMock()} if "LoL" in name else {})
-        with patch("src.voice.manager.PARTY_IDLE_SECONDS", 0):
-            empty = await self.manager.open_party(self.guild, "Apex", 555)
-            used = await self.manager.open_party(self.guild, "LoL", 556)
-            await asyncio.gather(*self.manager._timers)
-        empty.delete.assert_awaited_once_with(reason=AUDIT_REASON)
-        used.delete.assert_not_awaited()
-        self.assertEqual(self.rooms(), 1)
-
-    async def test_shutdown_cancels_party_timers_without_waiting(self) -> None:
-        await self.manager.open_party(self.guild, "Apex", 555)
-        (timer,) = self.manager._timers
-        loop = asyncio.get_running_loop()
-        started = loop.time()
-        await self.manager.close(deadline=started + 5)
-        self.assertLess(loop.time() - started, 1)
-        self.assertTrue(timer.cancelled())
 
     async def test_creation_failure_is_explained_in_entry_chat(self) -> None:
         alice = self.member(1)

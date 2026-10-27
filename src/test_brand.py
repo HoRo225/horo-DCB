@@ -36,9 +36,9 @@ class ToneTests(unittest.TestCase):
                 self.assertEqual(accent(notice_view("x", tone, colour=GOLD_COLOUR)), expected)
 
     def test_expiry_is_grey_with_a_clock(self):
-        view = notice_view("揪團已過期，請重新發起。", "deadline")
+        view = notice_view("操作已過期，請重新開啟。", "deadline")
         self.assertEqual(accent(view), NEUTRAL_COLOUR)
-        self.assertEqual(view.children[0].children[0].content, f"{ICONS['deadline']} 揪團已過期，請重新發起。")
+        self.assertEqual(view.children[0].children[0].content, f"{ICONS['deadline']} 操作已過期，請重新開啟。")
 
     def test_defaults_to_warn_and_brand(self):
         self.assertEqual(accent(notice_view("x")), WARN_COLOUR)

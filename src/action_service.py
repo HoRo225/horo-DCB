@@ -26,8 +26,8 @@ ADMIN_ACTIONS = frozenset({"admin_status", "voice_sync", "publish_hub",
     "steam_query", "ai_enabled", "ai_display", "voice_enabled", "steam_enabled", "ai_channels", "ai_roles",
     "games_roles", "steam_roles", "games_channel", "voice_entry", "steam_channel",
     "ai_models", "pending_resolution"})
-QUERY_LABELS = {"admin_status": "管理狀態", "steam_query": "Steam 免費遊戲", "lfg_list": "揪團清單", "help": "功能說明"}
-SAFE_KEYS = frozenset({"ok", "code", "text", "resource_id", "message_url", "private_ref", "lfg"})
+QUERY_LABELS = {"admin_status": "管理狀態", "steam_query": "Steam 免費遊戲", "help": "功能說明"}
+SAFE_KEYS = frozenset({"ok", "code", "text", "resource_id", "message_url", "private_ref"})
 
 
 def _static_action_problem(action, explicit, content="") -> str | None:
@@ -38,8 +38,6 @@ def _static_action_problem(action, explicit, content="") -> str | None:
         target = "channels" if action.name == "ai_channels" else "roles"
         if any(identifier not in explicit[target] for identifier in params["ids"]):
             return "請在本則訊息明確提及設定的頻道或身分組，未執行任何操作。"
-    if action.name.startswith("lfg_") and params.get("message_id") not in {None, *explicit["resources"]}:
-        return "請回覆原揪團訊息或提供明確的揪團訊息 ID，未執行任何操作。"
     if action.name == "pending_resolution" and params["effect_id"] not in content:
         return "請在本則訊息貼上要處理的項目 ID，未執行任何操作。"
     return None
@@ -49,7 +47,7 @@ class ActionService:
     def __init__(self, bot, db) -> None:
         self.bot, self.db = bot, db
         self.records = OperationStore(db)
-        self.games, self.lfg = bot.game_operations, bot.lfg_operations
+        self.games = bot.game_operations
         self.private_results = PrivateResults(self._authorize_private, self._render_private, QUERY_LABELS)
         self._tasks: set[asyncio.Task] = set()
         self._running: dict[int, asyncio.Task] = {}
@@ -80,7 +78,7 @@ class ActionService:
         live = SimpleNamespace(
             original_source=original, client=self.bot, user=actor, author=actor, id=original.id,
             guild=guild, guild_id=guild.id, channel=channel, channel_id=channel.id,
-            content=getattr(original, "content", ""), reference=getattr(original, "reference", None),
+            content=getattr(original, "content", ""),
             mentions=getattr(original, "mentions", ()), channel_mentions=getattr(original, "channel_mentions", ()),
             role_mentions=getattr(original, "role_mentions", ()),
         )
@@ -121,7 +119,7 @@ class ActionService:
     def _explicit_targets(self, source):
         content = getattr(source, "content", "")
         literals = {int(value) for value in re.findall(r"(?<!\d)[1-9]\d{0,18}(?!\d)", content)}
-        chosen = {"channels": {source.channel.id}, "roles": set(), "resources": set(literals)}
+        chosen = {"channels": {source.channel.id}, "roles": set()}
         for category, mention_attr in (("channels", "channel_mentions"), ("roles", "role_mentions")):
             chosen[category].update(item.id for item in getattr(source, mention_attr, ()))
             candidates = {"channels": source.guild.channels, "roles": source.guild.roles}[category]
@@ -133,9 +131,6 @@ class ActionService:
                 if isinstance(name, str) and 2 <= len(name) <= 100 and name in content:
                     by_name.setdefault(name, set()).add(item.id)
             chosen[category].update(next(iter(ids)) for ids in by_name.values() if len(ids) == 1)
-        reference = getattr(source, "reference", None)
-        if reference is not None and reference.channel_id == source.channel.id and isinstance(reference.message_id, int):
-            chosen["resources"].add(reference.message_id)
         return chosen
 
     def snapshot(self, source) -> dict:
@@ -143,7 +138,7 @@ class ActionService:
             source = self._live_source(source)
         except ValueError:
             return {"allowed_actions": [], "game": {"state_token": None, "busy": True},
-                    "channels": [], "roles": [], "resource_ids": []}
+                    "channels": [], "roles": []}
         actor, guild = self._actor(source), source.guild
         member = guild.get_member(actor.id) or actor
         admin = bool(member.guild_permissions.administrator)
@@ -156,8 +151,7 @@ class ActionService:
                 "channels": [{"id": item.id, "name": item.name} for item in guild.channels
                              if item.id in explicit["channels"] and item.permissions_for(member).view_channel][:25],
                 "roles": [{"id": item.id, "name": item.name} for item in guild.roles
-                          if item.id in explicit["roles"] and not item.is_default()][:25],
-                "resource_ids": sorted(explicit["resources"])}
+                          if item.id in explicit["roles"] and not item.is_default()][:25]}
 
     async def execute_plan(self, source, decision, *, game_snapshot=None, deadline=None) -> list[dict]:
         if self._closed:
@@ -316,7 +310,7 @@ class ActionService:
                     elif problem := self._step_target_problem(live_source, action):
                         result = self._failure("target", problem)
                     else:
-                        result = self._safe(await self._execute(live_source, action, operation_id, game_snapshot, results, deadline))
+                        result = self._safe(await self._execute(live_source, action, operation_id, game_snapshot, deadline))
                 with transaction(self.db):
                     self.records.complete(f"{operation_id}:public", "action.public", action.to_payload(), result)
             except asyncio.CancelledError:
@@ -351,7 +345,7 @@ class ActionService:
             self.records.complete(operation_id, "action.query", action.to_payload(), result)
         return result
 
-    async def _execute(self, source, action, operation_id, game_snapshot, results, deadline=None):
+    async def _execute(self, source, action, operation_id, game_snapshot, deadline=None):
         name, params = action.name, action.params
         still_current = lambda: self._still_current(source, admin=name in ADMIN_ACTIONS) and (
             deadline is None or asyncio.get_running_loop().time() < deadline
@@ -360,21 +354,6 @@ class ActionService:
             return await self.games.execute(source, name, game=params.get("game"),
                                             expected_token=game_snapshot.get("state_token"), operation_id=operation_id,
                                             still_current=still_current)
-        if name.startswith("lfg_") and name != "lfg_list":
-            if name == "lfg_create":
-                result = await self.lfg.create(source, params["game"], params["size"], params.get("note"), operation_id,
-                                               still_current=still_current)
-            else:
-                message_id = params.get("message_id")
-                if "from_action" in params:
-                    created = results[params["from_action"]]
-                    if not created.get("ok") or "resource_id" not in created:
-                        return self._failure("reference", "前一項揪團尚未成功建立。")
-                    message_id = int(created["resource_id"])
-                result = await self.lfg.execute(source, {"lfg_join": "join", "lfg_leave": "leave",
-                                                         "lfg_depart": "go", "lfg_cancel": "cancel"}[name],
-                                                message_id, operation_id, still_current=still_current)
-            return {**result, "lfg": True} if "message_url" in result else result
         if name in QUERY_LABELS:
             return self._record_query(operation_id, action, self._private(source, name, params, text=f"已查詢{QUERY_LABELS[name]}。"))
         return await self._settings(source, action, operation_id, still_current)
@@ -472,8 +451,6 @@ class ActionService:
             items.append(discord.ui.TextDisplay(rana_says(explanation[:1500])))
         view = discord.ui.LayoutView(timeout=None)
         view.add_item(discord.ui.Container(*items, accent_colour=tone_colour("ok" if all(item.get("ok") for item in results) else "warn")))
-        buttons += [discord.ui.Button(label="前往揪團", emoji=ICONS["lfg"], url=url)
-                    for url in dict.fromkeys(item["message_url"] for item in results if item.get("lfg"))]
         if buttons:
             view.add_item(discord.ui.ActionRow(*buttons))
         return view
@@ -606,8 +583,6 @@ class ActionService:
             view.add_item(discord.ui.Container(card_title(f"{ICONS['steam']} Steam 免費遊戲"), *body,
                                                accent_colour=WARN_COLOUR if failed else BRAND_COLOUR))
             return {"view": view, "attachments": []}
-        if entry.kind == "lfg_list":
-            return {"view": await self.lfg.list_view(entry.guild_id, entry.user_id), "attachments": []}
         status = self.bot.steam_free_games.status()
         voice = self.bot.temp_voice.status()
         return {"view": info_card(card_title(f"{ICONS['status']} 系統狀態"), discord.ui.TextDisplay(

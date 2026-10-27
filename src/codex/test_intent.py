@@ -25,7 +25,7 @@ SETTINGS = ModelSettings(ModelChoice("primary"), ModelChoice("fallback"))
 CATALOG = {"models": [{"model": name, "display_name": name, "default_effort": effort,
                        "supported_efforts": ["low", "medium"], "input_modalities": ["text"]}
                       for name, effort in (("primary", "medium"), ("fallback", "low"))], "fetched_at": 1}
-PLAN = IntentDecision("plan", (Action("lfg_list", {}),))
+PLAN = IntentDecision("plan", (Action("help", {}),))
 
 
 class IntentContractTests(unittest.TestCase):
@@ -35,29 +35,26 @@ class IntentContractTests(unittest.TestCase):
             {"name": "sql", "params": {}},
             {"name": "deal", "params": {"bet": 100}},
             {"name": "hit", "params": {"hand": 2}},
-            {"name": "lfg_list", "params": {"actor_id": None}},
+            {"name": "help", "params": {"actor_id": None}},
             {"name": "open_table", "params": {"game": "roulette"}},
-            {"name": "lfg_create", "params": {"game": "測試", "size": 11}},
+            {"name": "games_channel", "params": {"channel_id": 0}},
         ):
             with self.subTest(raw=raw), self.assertRaises(ValueError):
                 parse_action(raw)
         for actions in (
-            [Action("lfg_list", {}).to_payload()] * 5,
+            [Action("help", {}).to_payload()] * 5,
             [Action("deal", {}).to_payload(), Action("hit", {}).to_payload()],
-            [Action("lfg_join", {"from_action": 0}).to_payload()],
         ):
             with self.subTest(actions=actions), self.assertRaises(ValueError):
                 parse_intent_decision({"kind": "plan", "actions": actions, "question": ""})
-        mixed = IntentDecision("plan", (Action("lfg_list", {}), Action("hit", {})))
+        mixed = IntentDecision("plan", (Action("help", {}), Action("hit", {})))
         self.assertEqual(parse_intent_decision(mixed.to_payload()), mixed)
-        dependent = IntentDecision("plan", (Action("lfg_create", {"game": "測試", "size": 3}), Action("lfg_cancel", {"from_action": 0})))
-        self.assertEqual(parse_intent_decision(dependent.to_payload()), dependent)
 
     def test_duplicate_json_and_nonempty_chat_rejected(self) -> None:
         with self.assertRaises(ValueError):
             parse_intent_json('{"kind":"chat","kind":"plan","actions":[],"question":""}')
         with self.assertRaises(ValueError):
-            parse_intent_decision({"kind": "chat", "actions": [Action("lfg_list", {}).to_payload()], "question": ""})
+            parse_intent_decision({"kind": "chat", "actions": [Action("help", {}).to_payload()], "question": ""})
         self.assertEqual(parse_intent_decision({"kind": "chat", "actions": [], "question": "嗨，我是樂奈"}), IntentDecision("chat"))
         with self.assertRaises(ValueError):
             parse_intent_decision({"kind": "clarification", "actions": [], "question": " "})
@@ -80,7 +77,8 @@ class IntentContractTests(unittest.TestCase):
         schema = json.dumps(sdk.intent_schema())
         for name in ("work", "profile", "set_job", "set_birthday", "wallet_history", "gacha_book", "gacha_draw",
                      "quests", "lottery", "birthdays", "buy_tickets", "shop_buy", "admin_points", "house",
-                     "clear_birthday", "birthday_channel", "double", "split", "surrender", "insure", "decline"):
+                     "clear_birthday", "birthday_channel", "double", "split", "surrender", "insure", "decline",
+                     "lfg_create", "lfg_join", "lfg_leave", "lfg_depart", "lfg_cancel", "lfg_list"):
             with self.subTest(name):
                 with self.assertRaises(ValueError):
                     parse_action({"name": name, "params": {}})
@@ -94,9 +92,9 @@ class IntentContractTests(unittest.TestCase):
             '{"kind":"chat","actions":{},"question":""}',
             '{"kind":"chat","actions":[]}',
             '{"kind":"chat","actions":[],"question":"","extra":null}',
-            '{"kind":"plan","actions":[{"name":"lfg_create","params":{"game":"x","size":3.0}}],"question":""}',
-            '{"kind":"plan","actions":[{"name":"lfg_create","params":{"game":"x","size":true}}],"question":""}',
-            '{"kind":"plan","actions":[{"name":"lfg_create","params":{"game":"x","size":3,"size":4}}],"question":""}',
+            '{"kind":"plan","actions":[{"name":"games_channel","params":{"channel_id":3.0}}],"question":""}',
+            '{"kind":"plan","actions":[{"name":"games_channel","params":{"channel_id":true}}],"question":""}',
+            '{"kind":"plan","actions":[{"name":"games_channel","params":{"channel_id":3,"channel_id":4}}],"question":""}',
         ):
             with self.subTest(text=text), self.assertRaises(ValueError):
                 parse_intent_json(text)
@@ -166,7 +164,7 @@ class IntentContractTests(unittest.TestCase):
         guard.end(ticket)
 
     def test_planner_payload_cannot_receive_media_history(self) -> None:
-        base = {"conversation_key": KEY, "text": "看揪團", "images": [], "models": SETTINGS.to_payload(), "mode": "intent", "context": {}}
+        base = {"conversation_key": KEY, "text": "說明", "images": [], "models": SETTINGS.to_payload(), "mode": "intent", "context": {}}
         self.assertEqual(validate_chat_payload(base).mode, "intent")
         for context in ({"history": []}, {"images": []}, {"references": []}):
             with self.assertRaises(CodexBridgeError):
@@ -232,13 +230,13 @@ class IsolatedRuntimeTests(unittest.IsolatedAsyncioTestCase):
         codex = _IsolatedCodex()
         service = self.service(codex)
         service.store.set(KEY, "shared-history")
-        self.assertEqual(await service.isolated(KEY, "看揪團", mode="intent", context={"actions": ["lfg_list"]}, models=SETTINGS), PLAN)
+        self.assertEqual(await service.isolated(KEY, "說明", mode="intent", context={"actions": ["help"]}, models=SETTINGS), PLAN)
         self.assertEqual(service.store.get(KEY), "shared-history")
         self.assertFalse(codex.resume)
         self.assertTrue(codex.starts[0]["ephemeral"])
         self.assertEqual(codex.starts[0]["config"], sdk.feature_config(isolated=True))
         submitted = json.loads(codex.inputs[0][0].text)
-        self.assertEqual(submitted, {"direct_text": "看揪團", "context": {"actions": ["lfg_list"]}})
+        self.assertEqual(submitted, {"direct_text": "說明", "context": {"actions": ["help"]}})
         self.assertIn("output_schema", codex.turn_options[0])
         self.assertEqual(codex.turn_options[0]["effort"].value, "medium")
         reply = await service.chat(KEY, "討論", (), models=SETTINGS)
@@ -253,7 +251,7 @@ class IsolatedRuntimeTests(unittest.IsolatedAsyncioTestCase):
                 service = self.service(codex)
                 progress = []
                 with self.assertRaises(CodexBridgeError):
-                    await service.isolated(KEY, "看揪團", mode="intent", context={}, models=SETTINGS, on_progress=progress.append)
+                    await service.isolated(KEY, "說明", mode="intent", context={}, models=SETTINGS, on_progress=progress.append)
                 self.assertEqual(len(codex.inputs), 1)
                 self.assertFalse(service._callback_guard._tickets)
                 self.assertFalse(any(item["summary"] for item in progress))
@@ -265,14 +263,14 @@ class IsolatedRuntimeTests(unittest.IsolatedAsyncioTestCase):
         codex._client = SimpleNamespace()
         service = self.service(codex)
         with self.assertLogs(level="ERROR"), self.assertRaises(CodexBridgeError):
-            await service.isolated(KEY, "看揪團", mode="intent", context={}, models=SETTINGS)
+            await service.isolated(KEY, "說明", mode="intent", context={}, models=SETTINGS)
         reply = await service.chat(KEY, "你好", (), models=SETTINGS)
         self.assertEqual(reply.text, codex.reply)
 
     async def test_logs_request_id_mode_result_and_duration(self) -> None:
         service = self.service(_IsolatedCodex())
         with self.assertLogs(level="INFO") as logs:
-            await service.isolated(KEY, "看揪團", mode="intent", context={}, models=SETTINGS, request_id="0123abcd")
+            await service.isolated(KEY, "說明", mode="intent", context={}, models=SETTINGS, request_id="0123abcd")
         self.assertRegex(logs.output[-1], r"Codex request id=0123abcd mode=intent result=success sdk_ms=\d+\.\d$")
         service._draining = True
         with self.assertLogs(level="INFO") as logs, self.assertRaises(CodexBridgeError):
@@ -293,13 +291,13 @@ class IsolatedRuntimeTests(unittest.IsolatedAsyncioTestCase):
         codex = _IsolatedCodex(reply='{"kind":"plan","actions":[],"question":""}')
         service = self.service(codex)
         with self.assertRaises(CodexBridgeError):
-            await service.isolated(KEY, "看揪團", mode="intent", context={}, models=SETTINGS)
+            await service.isolated(KEY, "說明", mode="intent", context={}, models=SETTINGS)
         self.assertEqual(codex._client.request.call_args.args, ("thread/unsubscribe", {"threadId": "thread-1"}))
 
     async def test_each_fallback_attempt_releases_its_own_ephemeral_subscription(self) -> None:
         codex = _IsolatedCodex(errors=[SimpleNamespace(codex_error_info="serverOverloaded"), None])
         service = self.service(codex)
-        self.assertEqual(await service.isolated(KEY, "看揪團", mode="intent", context={}, models=SETTINGS), PLAN)
+        self.assertEqual(await service.isolated(KEY, "說明", mode="intent", context={}, models=SETTINGS), PLAN)
         self.assertEqual([call.args[1] for call in codex._client.request.await_args_list],
                          [{"threadId": "thread-1"}, {"threadId": "thread-2"}])
 
@@ -326,7 +324,7 @@ class IsolatedRuntimeTests(unittest.IsolatedAsyncioTestCase):
             SimpleNamespace(thread_id="thread-1", id="turn-1", stream=stream, interrupt=interrupt))))
         codex._client.request.side_effect = unsubscribe
         service = self.service(codex)
-        task = asyncio.create_task(service.isolated(KEY, "看揪團", mode="intent", context={}, models=SETTINGS))
+        task = asyncio.create_task(service.isolated(KEY, "說明", mode="intent", context={}, models=SETTINGS))
         await ready.wait()
         task.cancel()
         with self.assertRaises(asyncio.CancelledError):
@@ -397,7 +395,7 @@ class IntentBridgeTests(unittest.IsolatedAsyncioTestCase):
         console = ModelSettings(ModelChoice("primary", "low"), ModelChoice("fallback", "low"))
         deadline = asyncio.get_running_loop().time() + 20
         async with client.accepted_request(KEY, deadline=deadline, still_current=lambda: True) as job:
-            await client.intent(KEY, "看揪團", {}, job=job, models=console)
+            await client.intent(KEY, "說明", {}, job=job, models=console)
             self.assertEqual(service.isolated.call_args.kwargs["models"],
                              ModelSettings(ModelChoice("primary", "medium"), ModelChoice("fallback", "medium")))
             await client.chat(KEY, "聊天", (), job=job, models=console)
@@ -429,7 +427,7 @@ class IntentBridgeTests(unittest.IsolatedAsyncioTestCase):
         self.addAsyncCleanup(client.close)
         deadline = asyncio.get_running_loop().time() + 20
         async with client.accepted_request(KEY, deadline=deadline, still_current=lambda: True) as job:
-            decision = await client.intent(KEY, "看揪團", {}, job=job, models=SETTINGS, request_id="0123abcd")
+            decision = await client.intent(KEY, "說明", {}, job=job, models=SETTINGS, request_id="0123abcd")
             self.assertEqual(decision, PLAN)
             kwargs = service.isolated.call_args.kwargs
             self.assertEqual(kwargs["mode"], "intent")
@@ -437,4 +435,4 @@ class IntentBridgeTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(kwargs["request_id"], "0123abcd")
             service.isolated.return_value = CodexChatReply(json.dumps(PLAN.to_payload()))
             with self.assertRaises(CodexBridgeError):
-                await client.intent(KEY, "看揪團", {}, job=job, models=SETTINGS)
+                await client.intent(KEY, "說明", {}, job=job, models=SETTINGS)

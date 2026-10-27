@@ -22,8 +22,6 @@ from src.games import slots
 from src.games.blackjack import RANKS, SUITS, Card, Round
 from src.games.tables import TABLES, BlackjackTableView, SlotTableView
 from src.games.views import lobby_view
-from src.lfg.store import LfgCard
-from src.lfg.views import DEPARTED, card_view, departure_sub, departure_view, list_view
 from src.state import set_setting, transaction
 from src.steam.models import SteamFetchResult, SteamOffer
 from src.steam.views import build_offer_view
@@ -187,20 +185,9 @@ class LayoutBudgetTest(unittest.IsolatedAsyncioTestCase):
             roles = [MagicMock(mention=f"<@&{10**18 + n}>") for n in range(25)]
             offer = SteamOffer(1, name, "NT$1,000,000", "說" * 5000, ("開發商",) * 10, image, ends_at=2**31)
             fits("steam offer", build_offer_view(offer, roles))
-            members = [10**18 + n for n in range(10)]
-            party = LfgCard(10**18, 1, members[0], "遊" * 50, 10, "註" * 100, members, 2**31)
-            fits("lfg card", card_view(party, avatar=image))
-            cheered = LfgCard(10**18, 1, members[0], "遊" * 50, 10, "註" * 100, members, 2**31, "嘴" * 60)
-            fits("lfg card with cheer", card_view(cheered, avatar=image))
-            fits("lfg card departed", card_view(party, DEPARTED, image))
-            for drawn in (True, False):
-                fits(f"lfg departure image={drawn}", departure_view(party, departure_sub(party),
-                                                                   f"https://discord.com/channels/{10**18}/{10**18}", drawn))
-            snowflake = 10**19 - 1
-            fits("lfg list", list_view([LfgCard(snowflake, snowflake, members[0], "*" * 50, 10, None, members, 2**31)] * 20, snowflake))
             fits("ai help", help_view(10**18))
             receipt = [{"ok": n % 2 == 0, "text": "果" * 200, "private_ref": f"ref{n}"} for n in range(3)] + [
-                {"ok": True, "text": "果" * 200, "message_url": "https://discord.com/channels/1/2/3", "lfg": True}]
+                {"ok": True, "text": "果" * 200}]
             for said in ("", "說" * 1500):
                 fits(f"ai receipt explained={bool(said)}", bot.actions._receipt_view(receipt, said))
             fits("notice", notice_view("註" * 2000, title="標" * 100))
