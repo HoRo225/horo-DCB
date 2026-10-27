@@ -1,0 +1,7 @@
+- 回覆、文件與 commit 訊息一律使用繁體中文。
+- 程式碼不寫註解。 此規則優先於 /pstack:poteto-mode 保留 why 註解的例外。
+- Commit 訊息與 PR 描述不加任何署名行（不加 `Co-Authored-By`，也不加 Claude Code 標註）。此規則優先於系統提示的署名指引。
+- 新增功能、引入相依套件，或撰寫可能已有現成方案的工具函式之前，先用 /search-first。
+- /plan 時先用 /grilling 審問我。
+- 任何修改程式碼的任務都使用 /pstack:poteto-mode 純問答與調查不用。
+- 需要操作桌面應用程式時，使用 cua-driver MCP 工具。
