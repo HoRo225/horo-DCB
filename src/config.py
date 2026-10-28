@@ -6,10 +6,9 @@ from pathlib import Path
 from typing import TypeGuard
 
 DATA_DIR = Path("/app/data")
-CODEX_HOME = Path("/app/codex")
-CODEX_WORKSPACE = "/app/codex-workspace"
-CODEX_BRIDGE_PORT = 8765
-CODEX_BRIDGE_URL = f"http://codex:{CODEX_BRIDGE_PORT}"
+CODEX_URL = "ws://codex:8765"
+CODEX_TOKEN_FILE = Path("/run/secrets/codex_ws_token")
+CODEX_WORKSPACE = "/workspace"
 
 
 def is_positive_int(value: object) -> TypeGuard[int]:
@@ -30,23 +29,26 @@ def guild_id_env() -> int:
     return int(raw)
 
 
-def bridge_token_env() -> str:
-    token = required_env("CODEX_BRIDGE_TOKEN")
-    if len(token) != 64 or any(character not in "0123456789abcdef" for character in token):
-        raise RuntimeError("CODEX_BRIDGE_TOKEN must be 64 lowercase hexadecimal characters")
+def codex_token(path: Path = CODEX_TOKEN_FILE) -> str:
+    try:
+        token = path.read_text(encoding="utf-8").strip()
+    except OSError:
+        raise RuntimeError(f"Missing Codex WebSocket token file: {path}") from None
+    if not token:
+        raise RuntimeError(f"Codex WebSocket token file is empty: {path}")
     return token
 
 
 @dataclass(frozen=True, slots=True)
 class AppConfig:
     discord_token: str = field(repr=False)
-    codex_bridge_token: str = field(repr=False)
+    codex_token: str = field(repr=False)
     guild_id: int
 
     @classmethod
     def from_env(cls) -> AppConfig:
         return cls(
             discord_token=required_env("DISCORD_TOKEN"),
-            codex_bridge_token=bridge_token_env(),
+            codex_token=codex_token(),
             guild_id=guild_id_env(),
         )
