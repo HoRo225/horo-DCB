@@ -1,7 +1,7 @@
 import unittest
 from datetime import datetime, timedelta, timezone
 
-from src.clock import next_taipei_timestamp
+from src.core.domain.clock import next_taipei_timestamp
 from src.games.blackjack import Round, total
 from src.games.store import GameStore
 from src.state import open_db, transaction

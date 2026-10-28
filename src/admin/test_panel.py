@@ -15,7 +15,7 @@ from src.codex.rate_limits import CodexRateLimits, CodexRateWindow
 from src.codex.service import DeviceLogin
 from src.admin.cog import AdminCog
 from src.bot import HoroBot
-from src.brand import BRAND_COLOUR, ICONS, NEUTRAL_COLOUR, WARN_COLOUR
+from src.core.adapters.discord.brand import BRAND_COLOUR, ICONS, NEUTRAL_COLOUR, WARN_COLOUR
 from src.state import open_db, set_setting, transaction
 from src.steam.models import SteamFetchResult, SteamOffer
 from src.testing import text

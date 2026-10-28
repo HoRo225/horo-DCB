@@ -11,7 +11,7 @@ from src.ai.output import CARD_CLEANUPS, AiProgress, build_ai_progress_view, sen
 from src.codex.protocol import truncate_progress_summary
 from src.codex.rpc import Notification, ThreadEvents
 from src.codex.turns import collect_turn
-from src.brand import BRAND_COLOUR
+from src.core.adapters.discord.brand import BRAND_COLOUR
 
 
 def _progress_content(stage: str, summary: str = "", name: str = "賢狼") -> str:

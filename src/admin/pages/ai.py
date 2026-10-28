@@ -23,8 +23,8 @@ from src.ai.formatting import codex_error_text
 from src.codex.protocol import CodexError, CodexRuntimeStatus
 from src.codex.rate_limits import CodexRateLimits
 from src.codex.service import CodexService, DeviceLogin
-from src.brand import BRAND_COLOUR, ICONS, bar
-from src.discord_utils import (
+from src.core.adapters.discord.brand import BRAND_COLOUR, ICONS, bar
+from src.core.adapters.discord.channels import (
     VIEW_AND_SEND,
     is_text_channel,
     member_role_ids,

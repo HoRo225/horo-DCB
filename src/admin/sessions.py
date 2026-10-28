@@ -6,7 +6,7 @@ from dataclasses import dataclass, field
 from collections.abc import Coroutine
 from typing import TYPE_CHECKING, Any
 
-from src.tasks import cancel_all, consume_task_exception, wait_until, track
+from src.core.app.supervisor import cancel_all, consume_task_exception, wait_until, track
 
 if TYPE_CHECKING:
     from src.admin.panel import AdminPanelView

@@ -4,7 +4,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import aiohttp
 import discord
 
-from src.brand import (
+from src.core.adapters.discord.brand import (
     APP_EMOJIS,
     BRAND_COLOUR,
     ERROR_COLOUR,

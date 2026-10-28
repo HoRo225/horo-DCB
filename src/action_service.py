@@ -15,12 +15,13 @@ from src.codex.model_settings import parse_model_settings, resolve_model_setting
 from src.codex.protocol import CodexError
 from src.ai.private_results import TTL_SECONDS, PrivateResults
 from src.ai.query_views import help_view, info_card
-from src.brand import BRAND_COLOUR, ICONS, WARN_COLOUR, card_title, rana_says, tone_colour
-from src.discord_utils import fetch_current_member, member_role_ids, play_problem, text_channel_problem, is_voice_channel, is_text_channel
+from src.core.adapters.discord.brand import BRAND_COLOUR, ICONS, WARN_COLOUR, card_title, rana_says, tone_colour
+from src.core.adapters.discord.channels import fetch_current_member, member_role_ids, text_channel_problem, is_voice_channel, is_text_channel
+from src.games.access import play_problem
 from src.games.hub import bind_channel
 from src.operations import OperationStore, json_value
 from src.state import transaction
-from src.tasks import cancel_all, track, wait_until
+from src.core.app.supervisor import cancel_all, track, wait_until
 
 ADMIN_ACTIONS = frozenset({"admin_status", "voice_sync", "publish_hub",
     "steam_query", "ai_enabled", "ai_display", "voice_enabled", "steam_enabled", "ai_channels", "ai_roles",

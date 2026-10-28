@@ -8,11 +8,11 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import discord
 from discord.components import _component_factory
 
-from src.brand import BRAND_COLOUR, ERROR_COLOUR, GOLD_COLOUR, ICONS, NEUTRAL_COLOUR, PENDING_CHECK
+from src.core.adapters.discord.brand import BRAND_COLOUR, ERROR_COLOUR, GOLD_COLOUR, ICONS, NEUTRAL_COLOUR, PENDING_CHECK
 from src.games import hub, rana, tables, views
 from src.games.cog import GamesCog
 from src.games.store import GameStore
-from src.discord_utils import play_problem
+from src.games.access import play_problem
 from src.games.operations import GameOperations
 from src.games.tables import LIVE_TABLES, BlackjackTableView, SlotTableView
 from src.games.table_runtime import dispatch_table, open_table, restore_tables
@@ -63,7 +63,7 @@ class BlackjackTableTest(unittest.IsolatedAsyncioTestCase):
         self.store = new_store(self)
         seat(self.store, 1, "blackjack")
         self.table = BlackjackTableView(self.store, 1)
-        patcher = patch("src.discord_utils.play_problem", return_value=None)
+        patcher = patch("src.games.access.play_problem", return_value=None)
         patcher.start()
         self.addCleanup(patcher.stop)
         quiet_rana(self)
@@ -84,7 +84,7 @@ class BlackjackTableTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_dealer_and_player_show_avatars(self) -> None:
         self.table.avatar = AVATAR
-        with patch.dict("src.brand._brand_urls", card="https://cdn.example.com/bot.png"):
+        with patch.dict("src.core.adapters.discord.brand._brand_urls", card="https://cdn.example.com/bot.png"):
             await self.deal("8", "9", "8", "7")
         self.assertEqual(thumbnails(self.table), ["https://cdn.example.com/bot.png", AVATAR])
 
@@ -151,7 +151,7 @@ class SlotTableTest(unittest.IsolatedAsyncioTestCase):
         self.store = new_store(self)
         seat(self.store, 1, "slots")
         self.table = SlotTableView(self.store, 1)
-        patcher = patch("src.discord_utils.play_problem", return_value=None)
+        patcher = patch("src.games.access.play_problem", return_value=None)
         self.play_problem = patcher.start()
         self.addCleanup(patcher.stop)
         self.ask = quiet_rana(self)
@@ -299,7 +299,7 @@ class DispatchTableTest(unittest.IsolatedAsyncioTestCase):
         self.table = SlotTableView(self.store, 1)
         self.table.play = MagicMock(return_value=(3, ["x"], ["y"]))
         for patcher in (
-            patch("src.discord_utils.play_problem", return_value=None),
+            patch("src.games.access.play_problem", return_value=None),
             patch.dict("src.games.tables.LIVE_TABLES", {20: self.table}, clear=True),
         ):
             patcher.start()
@@ -400,7 +400,7 @@ class DispatchTableTest(unittest.IsolatedAsyncioTestCase):
 class OpenTableTest(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self) -> None:
         for patcher in (
-            patch("src.discord_utils.play_problem", return_value=None),
+            patch("src.games.access.play_problem", return_value=None),
             patch.dict("src.games.tables.LIVE_TABLES", clear=True),
         ):
             patcher.start()
@@ -533,7 +533,7 @@ class RestoreTablesTest(unittest.IsolatedAsyncioTestCase):
         clicked.client.games = store
         clicked.client.game_operations = GameOperations(clicked.client)
         clicked.channel.send.return_value = MagicMock(id=21)
-        with patch("src.discord_utils.play_problem", return_value=None):
+        with patch("src.games.access.play_problem", return_value=None):
             await open_table(clicked, "slots")
         new = LIVE_TABLES[21]
         await asyncio.gather(*(table.redraw() for table in tables))
@@ -722,7 +722,7 @@ class GamePickTest(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self) -> None:
         self.store = new_store(self)
         for patcher in (
-            patch("src.discord_utils.play_problem", return_value=None),
+            patch("src.games.access.play_problem", return_value=None),
             patch.dict("src.games.tables.LIVE_TABLES", clear=True),
         ):
             patcher.start()
@@ -792,7 +792,7 @@ class GamePickTest(unittest.IsolatedAsyncioTestCase):
         self.store.set_hub(20, 50)
         picked = self.picked()
         picked.client.guild_id = 5
-        with patch("src.discord_utils.play_problem", return_value="請到 <#20> 使用遊戲大廳。"):
+        with patch("src.games.access.play_problem", return_value="請到 <#20> 使用遊戲大廳。"):
             picked = await self.pick("slots", picked)
         notice = picked.response.send_message.await_args.kwargs["view"]
         self.assertIn("請到 <#20> 使用遊戲大廳。", screen(notice))
@@ -814,7 +814,7 @@ class IdleTableTest(unittest.IsolatedAsyncioTestCase):
         self.store = new_store(self)
         self.operations = GameOperations(SimpleNamespace(games=self.store))
         for patcher in (
-            patch("src.discord_utils.play_problem", return_value=None),
+            patch("src.games.access.play_problem", return_value=None),
             patch.dict("src.games.tables.LIVE_TABLES", clear=True),
         ):
             patcher.start()

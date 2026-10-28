@@ -5,7 +5,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import discord
 
-from src.brand import WARN_COLOUR
+from src.core.adapters.discord.brand import WARN_COLOUR
 from src.state import open_db, set_setting, transaction
 from src.testing import text
 from src.voice.cog import VoiceCog

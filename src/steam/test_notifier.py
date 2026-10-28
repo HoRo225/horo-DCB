@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import discord
 
-from src.brand import BRAND_COLOUR, ICONS
+from src.core.adapters.discord.brand import BRAND_COLOUR, ICONS
 from src.admin.pages.steam import steam_state
 from src.state import open_db, set_setting, transaction
 from src.testing import text

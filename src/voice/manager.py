@@ -10,15 +10,15 @@ from dataclasses import dataclass
 import discord
 import aiohttp
 
-from src.brand import notice_view
-from src.discord_utils import (
+from src.core.adapters.discord.brand import notice_view
+from src.core.adapters.discord.channels import (
     is_voice_channel,
     missing_channel_permissions,
 )
 from src.state import set_setting, setting, transaction
 from src.operations import OperationStore, json_value
 from src.settings_ops import save_settings
-from src.tasks import track, wait_until, cancel_all
+from src.core.app.supervisor import track, wait_until, cancel_all
 
 CHANNEL_NAME_PREFIX = "▍"
 CHANNEL_NAME_SUFFIX = " 的語音-🔊"

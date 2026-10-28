@@ -9,7 +9,7 @@ from src.admin.pages.common import IDLE_TIMEOUT_SECONDS, status_text
 from src.admin.pages.games import games_state
 from src.admin.pages.steam import steam_state
 from src.admin.pages.voice import voice_state
-from src.brand import ICONS, bar
+from src.core.adapters.discord.brand import ICONS, bar
 
 if TYPE_CHECKING:
     from src.admin.panel import AdminPanelView

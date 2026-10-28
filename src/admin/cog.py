@@ -8,8 +8,8 @@ from discord import app_commands
 from discord.ext import commands
 
 from src.admin.panel import AdminPanelView
-from src.brand import send_notice
-from src.tasks import SHUTDOWN_STAGE_SECONDS, shutdown_deadline, stage
+from src.core.adapters.discord.brand import send_notice
+from src.core.app.supervisor import SHUTDOWN_STAGE_SECONDS, shutdown_deadline, stage
 
 if TYPE_CHECKING:
     from src.bot import HoroBot

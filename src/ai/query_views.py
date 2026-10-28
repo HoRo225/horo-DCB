@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import discord
 
-from src.brand import BRAND_COLOUR, ICONS, card_title
+from src.core.adapters.discord.brand import BRAND_COLOUR, ICONS, card_title
 
 
 def info_card(*items: discord.ui.Item) -> discord.ui.LayoutView:

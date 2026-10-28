@@ -1,5 +1,5 @@
 from __future__ import annotations
-from src.discord_utils import interaction_operation_id
+from src.core.adapters.discord.channels import interaction_operation_id
 
 import logging
 from collections.abc import Callable
@@ -16,7 +16,7 @@ from src.admin.pages.common import (
     live_guild,
     no_guild_note,
 )
-from src.brand import ICONS
+from src.core.adapters.discord.brand import ICONS
 from src.voice.manager import TempVoiceStatus
 
 if TYPE_CHECKING:

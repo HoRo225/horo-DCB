@@ -27,8 +27,8 @@ from src.codex.protocol import (
 from src.codex.rate_limits import CodexRateLimits, normalize_rate_limits
 from src.codex.rpc import AppServerClient, ConnectionLost, Notification, Phase, RpcError, ThreadEvents
 from src.codex.turns import TurnResult, collect_turn, extract_reply_image_urls, normalize_error
-from src.config import CODEX_WORKSPACE
-from src.tasks import cancel_all, shutdown_deadline, track
+from src.core.app.config import CODEX_WORKSPACE
+from src.core.app.supervisor import cancel_all, shutdown_deadline, track
 
 CLIENT_VERSION = "1.0.0"
 SERVICE_NAME = "horo-dcb"

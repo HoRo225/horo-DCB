@@ -3,7 +3,7 @@ import time
 import unittest
 from unittest.mock import patch
 
-from src import watchdog
+from src.core.adapters.discord import watchdog
 
 
 class FakeClient:

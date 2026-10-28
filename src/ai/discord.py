@@ -40,8 +40,8 @@ from src.codex.protocol import (
     conversation_key,
 )
 from src.ai.query_views import help_view
-from src.brand import ICONS
-from src.discord_utils import member_role_ids
+from src.core.adapters.discord.brand import ICONS
+from src.core.adapters.discord.channels import member_role_ids
 
 IMAGE_TIMEOUT_SECONDS = 30.0
 RESTARTED_NOTICE = "已開始新的對話（先前的無法接續）"

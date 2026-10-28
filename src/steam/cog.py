@@ -5,7 +5,7 @@ from typing import TYPE_CHECKING
 from discord.ext import commands
 
 from src.steam.views import SteamClaim
-from src.tasks import stage
+from src.core.app.supervisor import stage
 
 if TYPE_CHECKING:
     from src.bot import HoroBot

@@ -17,7 +17,7 @@ from src.admin.pages.overview import render_overview
 from src.admin.pages.steam import render_steam
 from src.admin.pages.voice import render_voice
 from src.admin.sessions import PanelSession
-from src.brand import (
+from src.core.adapters.discord.brand import (
     BRAND_COLOUR,
     ICONS,
     NEUTRAL_COLOUR,

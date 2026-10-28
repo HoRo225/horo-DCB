@@ -11,10 +11,10 @@ from discord import app_commands
 from src.ai import discord as ai_discord
 from src.ai.output import CARD_CLEANUPS
 from src.codex.protocol import CodexError
-from src.discord_utils import is_text_channel, member_role_ids
-from src.brand import send_notice
+from src.core.adapters.discord.channels import is_text_channel, member_role_ids
+from src.core.adapters.discord.brand import send_notice
 from src.codex.protocol import conversation_key
-from src.tasks import SHUTDOWN_STAGE_SECONDS, stage, wait_until, shutdown_deadline
+from src.core.app.supervisor import SHUTDOWN_STAGE_SECONDS, stage, wait_until, shutdown_deadline
 
 if TYPE_CHECKING:
     from src.bot import HoroBot

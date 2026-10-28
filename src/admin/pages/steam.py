@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 import discord
-from src.discord_utils import interaction_operation_id
+from src.core.adapters.discord.channels import interaction_operation_id
 
 from src.admin.pages.common import (
     status_text,
@@ -20,7 +20,7 @@ from src.admin.pages.common import (
     role_select,
     spacer,
 )
-from src.brand import BRAND_COLOUR, ICONS
+from src.core.adapters.discord.brand import BRAND_COLOUR, ICONS
 from src.steam.models import SteamConfigurationError, SteamFetchResult, SteamStatus
 from src.steam.views import offer_summary
 

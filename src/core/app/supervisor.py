@@ -7,7 +7,7 @@ from collections.abc import Awaitable, Callable, Coroutine, Iterable
 from typing import Any
 from contextvars import ContextVar
 
-from src.clock import next_taipei_timestamp
+from src.core.domain.clock import next_taipei_timestamp
 
 SHUTDOWN_STAGE_SECONDS = 5.0
 SHUTDOWN_SECONDS = 25.0

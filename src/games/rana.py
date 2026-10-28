@@ -5,7 +5,7 @@ from collections.abc import Coroutine
 from typing import Any
 
 from src.ai.background import ask_once, clean_reply, persona_prompt
-from src.tasks import track
+from src.core.app.supervisor import track
 
 REMARK_SECONDS = 45
 LINE_EFFORT = "low"

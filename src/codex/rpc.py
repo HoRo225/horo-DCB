@@ -13,7 +13,7 @@ from typing import Any
 
 import aiohttp
 
-from src.tasks import track
+from src.core.app.supervisor import track
 
 MAX_MESSAGE_BYTES = 64 * 1024 * 1024
 HEARTBEAT_SECONDS = 20.0

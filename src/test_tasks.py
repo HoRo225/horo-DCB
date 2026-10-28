@@ -4,9 +4,9 @@ from datetime import datetime
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from src import clock
-from src.clock import TAIPEI
-from src.tasks import daily, track, stage, shutdown_deadline, _stage_tasks
+from src.core.domain import clock
+from src.core.domain.clock import TAIPEI
+from src.core.app.supervisor import daily, track, stage, shutdown_deadline, _stage_tasks
 
 
 class DailyTests(unittest.IsolatedAsyncioTestCase):
@@ -31,9 +31,9 @@ class DailyTests(unittest.IsolatedAsyncioTestCase):
             return clock.next_taipei_timestamp(datetime.fromtimestamp(now[0], TAIPEI), hour)
 
         with (
-            patch("src.tasks.time", SimpleNamespace(time=lambda: now[0])),
-            patch("src.tasks.next_taipei_timestamp", side_effect=next_due),
-            patch("src.tasks.asyncio.sleep", sleep),
+            patch("src.core.app.supervisor.time", SimpleNamespace(time=lambda: now[0])),
+            patch("src.core.app.supervisor.next_taipei_timestamp", side_effect=next_due),
+            patch("src.core.app.supervisor.asyncio.sleep", sleep),
             self.assertLogs(level="ERROR"),
             self.assertRaises(asyncio.CancelledError),
         ):

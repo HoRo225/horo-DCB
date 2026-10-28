@@ -18,19 +18,19 @@ from src.ai.access import AiSettings
 from src.ai.access_service import AiAccessService
 from src.codex.conversations import ConversationStore
 from src.codex.service import CodexService
-from src.brand import load_app_emojis, report_interaction_error, sync_discord_brand
-from src.config import CODEX_URL, AppConfig
-from src.discord_utils import member_role_ids
+from src.core.adapters.discord.brand import load_app_emojis, report_interaction_error, sync_discord_brand
+from src.core.app.config import CODEX_URL, AppConfig
+from src.core.adapters.discord.channels import member_role_ids
 from src.games.cog import GamesCog
 from src.games.operations import GameOperations
 from src.games.store import GameStore
 from src.state import DB_PATH, hold_lock, open_db
 from src.steam.cog import SteamCog
 from src.steam.notifier import SteamFreeGamesNotifier
-from src.tasks import stage
+from src.core.app.supervisor import stage
 from src.voice.cog import VoiceCog
 from src.voice.manager import TempVoiceManager
-from src.watchdog import install_stack_dump_signal, run_watchdog
+from src.core.adapters.discord.watchdog import install_stack_dump_signal, run_watchdog
 
 
 class HoroBot(commands.Bot):
@@ -104,12 +104,12 @@ class HoroBot(commands.Bot):
             logging.exception("Discord slash command sync failed; continuing startup.")
 
     async def close(self) -> None:
-        from src import tasks
+        from src.core.app import supervisor
 
         if self._close_task is None:
             self._closing = True
             self._db_safe_to_close = False
-            self._shutdown_limit = asyncio.get_running_loop().time() + tasks.SHUTDOWN_SECONDS
+            self._shutdown_limit = asyncio.get_running_loop().time() + supervisor.SHUTDOWN_SECONDS
             self._shutdown_cogs = tuple(self.cogs.values())
             self._shutdown_seen: set[asyncio.Task] = set()
             for service in (self.codex, getattr(self, "actions", None), self.steam_free_games, self.temp_voice, self.admin_panels):
@@ -120,7 +120,7 @@ class HoroBot(commands.Bot):
             for cog in self._shutdown_cogs:
                 for field in ("_tasks", "_redrawing", "_requests"):
                     scheduled.update(getattr(cog, field, ()))
-            tasks.cancel_all(task for task in scheduled if isinstance(task, asyncio.Task))
+            supervisor.cancel_all(task for task in scheduled if isinstance(task, asyncio.Task))
             self._close_task = asyncio.create_task(self._shutdown())
         cancelled = False
         while not self._close_task.done():
@@ -133,10 +133,10 @@ class HoroBot(commands.Bot):
             raise asyncio.CancelledError
 
     def _shutdown_owners(self) -> set[asyncio.Task]:
-        from src import tasks
+        from src.core.app import supervisor
         from src.ai.output import CARD_CLEANUPS
 
-        found = {*tasks._stage_tasks, *CARD_CLEANUPS}
+        found = {*supervisor._stage_tasks, *CARD_CLEANUPS}
         for owner, field in ((getattr(self, "actions", None), "_tasks"), (self.temp_voice, "_tasks"),
                              (self.access_service, "_tasks"),
                              (getattr(self, "effects", None), "_tasks")):
@@ -161,7 +161,7 @@ class HoroBot(commands.Bot):
 
     def _shutdown_failstop(self) -> None:
         import os
-        from src.watchdog import dump_stacks
+        from src.core.adapters.discord.watchdog import dump_stacks
 
         try:
             dump_stacks()
@@ -172,45 +172,45 @@ class HoroBot(commands.Bot):
         os._exit(1)
 
     async def _shutdown(self) -> None:
-        from src import tasks
+        from src.core.app import supervisor
 
         deadline = self._shutdown_limit
-        work_deadline = deadline - tasks.SHUTDOWN_STAGE_SECONDS
-        token = tasks.shutdown_deadline.set(deadline)
+        work_deadline = deadline - supervisor.SHUTDOWN_STAGE_SECONDS
+        token = supervisor.shutdown_deadline.set(deadline)
         cleanup: set[asyncio.Task] = set()
         try:
-            tasks.track(cleanup, asyncio.create_task(stage("ai cancellation", self.codex.cancel(self.guild_id))))
+            supervisor.track(cleanup, asyncio.create_task(stage("ai cancellation", self.codex.cancel(self.guild_id))))
             while owners := self._shutdown_owners() | cleanup:
-                pending = await tasks.wait_until(owners, work_deadline)
+                pending = await supervisor.wait_until(owners, work_deadline)
                 if pending:
                     break
             effects = getattr(self, "effects", None)
             if effects is not None:
                 effects.stop_new_work()
-            tasks.cancel_all((self._shutdown_owners() | cleanup) - self._shutdown_presentations())
+            supervisor.cancel_all((self._shutdown_owners() | cleanup) - self._shutdown_presentations())
             cog_names = tuple(self.cogs)
             for name in cog_names:
-                tasks.track(cleanup, asyncio.create_task(self.remove_cog(name, guild=discord.Object(id=self.guild_id))))
+                supervisor.track(cleanup, asyncio.create_task(self.remove_cog(name, guild=discord.Object(id=self.guild_id))))
             if "AiCog" not in cog_names:
-                tasks.track(cleanup, asyncio.create_task(stage("access", self.access_service.close(deadline=deadline))))
-                tasks.track(cleanup, asyncio.create_task(stage("codex", self.codex.close(deadline=deadline))))
+                supervisor.track(cleanup, asyncio.create_task(stage("access", self.access_service.close(deadline=deadline))))
+                supervisor.track(cleanup, asyncio.create_task(stage("codex", self.codex.close(deadline=deadline))))
             if "AdminCog" not in cog_names:
-                tasks.track(cleanup, asyncio.create_task(stage("panel", self.admin_panels.close(deadline=deadline))))
+                supervisor.track(cleanup, asyncio.create_task(stage("panel", self.admin_panels.close(deadline=deadline))))
             if "VoiceCog" not in cog_names:
-                tasks.track(cleanup, asyncio.create_task(stage("voice", self.temp_voice.close(deadline=deadline))))
+                supervisor.track(cleanup, asyncio.create_task(stage("voice", self.temp_voice.close(deadline=deadline))))
             if "SteamCog" not in cog_names:
-                tasks.track(cleanup, asyncio.create_task(stage("steam", self.steam_free_games.close())))
+                supervisor.track(cleanup, asyncio.create_task(stage("steam", self.steam_free_games.close())))
             actions = getattr(self, "actions", None)
             if actions is not None:
-                tasks.track(cleanup, asyncio.create_task(stage("actions", actions.close(deadline=deadline))))
+                supervisor.track(cleanup, asyncio.create_task(stage("actions", actions.close(deadline=deadline))))
             await asyncio.sleep(0)
             while presentations := self._shutdown_presentations():
-                if await tasks.wait_until(presentations, deadline):
+                if await supervisor.wait_until(presentations, deadline):
                     self._shutdown_failstop()
-            discord_close = tasks.track(cleanup, asyncio.create_task(stage("discord", super().close())))
+            discord_close = supervisor.track(cleanup, asyncio.create_task(stage("discord", super().close())))
             while pending := self._shutdown_owners() | {task for task in cleanup if not task.done()}:
-                if await tasks.wait_until(pending, deadline):
-                    tasks.cancel_all(pending)
+                if await supervisor.wait_until(pending, deadline):
+                    supervisor.cancel_all(pending)
                     await asyncio.sleep(0)
                     if self._shutdown_owners() or any(not task.done() for task in cleanup):
                         self._shutdown_failstop()
@@ -219,7 +219,7 @@ class HoroBot(commands.Bot):
                 self._shutdown_failstop()
             self._db_safe_to_close = True
         finally:
-            tasks.shutdown_deadline.reset(token)
+            supervisor.shutdown_deadline.reset(token)
 
     async def on_ready(self) -> None:
         if self._closing:

@@ -6,7 +6,7 @@ from uuid import uuid4
 import discord
 
 from src.cards import render
-from src.discord_utils import post_problem, text_channel_problem
+from src.core.adapters.discord.channels import post_problem, text_channel_problem
 from src.games.cards import banner_file, banner_png
 from src.games.store import GameStore
 from src.games.views import lobby_view

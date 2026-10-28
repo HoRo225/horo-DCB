@@ -9,7 +9,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import IO, Any
 
-from src.config import DATA_DIR
+from src.core.app.config import DATA_DIR
 
 DB_PATH = DATA_DIR / "horo.db"
 SETTING_DEFAULTS: dict[str, object] = {

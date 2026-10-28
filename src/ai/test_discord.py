@@ -17,7 +17,7 @@ from src.codex.instructions import CHAT_INSTRUCTIONS
 from src.codex.model_settings import DEFAULT_MODEL_SETTINGS
 from src.ai.output import CARD_CLEANUPS
 from src.codex.protocol import MAX_PROMPT_CHARACTERS, CodexError, CodexChatReply
-from src.tasks import track
+from src.core.app.supervisor import track
 from src.testing import text as _text
 
 BOT, GUILD, CHANNEL, USER = 10, 20, 30, 40

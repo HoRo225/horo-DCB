@@ -18,7 +18,7 @@ from src.ai.query_views import help_view
 from src.codex.rate_limits import CodexRateLimits, CodexRateWindow
 from src.codex.service import DeviceLogin
 from src.bot import HoroBot
-from src.brand import ICONS, WHITE, full_rules, notice_view
+from src.core.adapters.discord.brand import ICONS, WHITE, full_rules, notice_view
 from src.games import slots
 from src.games.blackjack import RANKS, SUITS, Card, Round
 from src.games.tables import TABLES, BlackjackTableView, SlotTableView
@@ -42,9 +42,9 @@ class LayoutBudgetTest(unittest.IsolatedAsyncioTestCase):
         }
         names = [f"bar{colour}{part}" for colour in ("gold", "empty") for part in "lmr"] + ["rana"]
         with (
-            patch.dict("src.brand.ICONS", icons),
-            patch.dict("src.brand.WHITE", {icon: icon.replace(":lg", ":lw") for icon in icons.values() if ":lg" in icon}),
-            patch.dict("src.brand.APP_EMOJIS", {name: f"<:{name}:1234567890123456789>" for name in names}),
+            patch.dict("src.core.adapters.discord.brand.ICONS", icons),
+            patch.dict("src.core.adapters.discord.brand.WHITE", {icon: icon.replace(":lg", ":lw") for icon in icons.values() if ":lg" in icon}),
+            patch.dict("src.core.adapters.discord.brand.APP_EMOJIS", {name: f"<:{name}:1234567890123456789>" for name in names}),
         ):
             await self.check_layouts("app emoji icons")
 
@@ -77,8 +77,8 @@ class LayoutBudgetTest(unittest.IsolatedAsyncioTestCase):
         image = "https://cdn.example.com/header.jpg"
         name = "名" * 200
         with (
-            patch.dict("src.brand._brand_urls", card=image),
-            patch.dict("src.brand.APP_EMOJIS", emojis),
+            patch.dict("src.core.adapters.discord.brand._brand_urls", card=image),
+            patch.dict("src.core.adapters.discord.brand.APP_EMOJIS", emojis),
         ):
             db = testing.memory_db(self)
             for key in ("feature.ai", "feature.temp_voice", "feature.steam_free_games"):

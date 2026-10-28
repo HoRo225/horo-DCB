@@ -11,7 +11,7 @@ from dataclasses import asdict
 import aiohttp
 import discord
 
-from src.discord_utils import post_problem, text_channel_problem
+from src.core.adapters.discord.channels import post_problem, text_channel_problem
 from src.operations import DiscordEffect, OperationStore
 from src.settings_ops import save_settings
 from src.state import set_setting, setting, transaction

@@ -8,13 +8,13 @@ from typing import TYPE_CHECKING
 import discord
 from discord.ext import commands
 
-from src.discord_utils import avatar_url
+from src.core.adapters.discord.channels import avatar_url
 from src.games import rana
 from src.games.hub import refresh_hub
 from src.games.table_runtime import dispatch_table, restore_tables
 from src.games.tables import IDLE_SECONDS, LIVE_TABLES, SeatView
 from src.games.views import GamePickSelect, RulesButton
-from src.tasks import cancel_all, daily, shutdown_deadline, track, wait_until
+from src.core.app.supervisor import cancel_all, daily, shutdown_deadline, track, wait_until
 
 if TYPE_CHECKING:
     from src.bot import HoroBot

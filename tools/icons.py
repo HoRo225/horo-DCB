@@ -298,7 +298,7 @@ def sheet(icons: dict[str, bytes], face: bytes, path: pathlib.Path) -> None:
 
 
 def icon_keys() -> set[str]:
-    tree = ast.parse((ROOT / "src" / "brand.py").read_text(encoding="utf-8"))
+    tree = ast.parse((ROOT / "src" / "core" / "adapters" / "discord" / "brand.py").read_text(encoding="utf-8"))
     node = next(n for n in tree.body if isinstance(n, ast.Assign) and getattr(n.targets[0], "id", "") == "ICONS")
     return set(ast.literal_eval(node.value))
 

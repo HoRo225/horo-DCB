@@ -3,7 +3,7 @@ from __future__ import annotations
 import sqlite3
 
 from src.codex.model_settings import DEFAULT_MODEL_SETTINGS, ModelSettings, parse_model_settings
-from src.config import is_positive_int
+from src.core.app.config import is_positive_int
 from src.state import setting
 from src.settings_ops import save_settings
 

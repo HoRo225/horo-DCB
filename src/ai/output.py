@@ -18,8 +18,8 @@ from src.ai.formatting import (
     split_markdown,
     split_reasoning_summary,
 )
-from src.brand import BRAND_COLOUR, ICONS, notice_view
-from src.tasks import track
+from src.core.adapters.discord.brand import BRAND_COLOUR, ICONS, notice_view
+from src.core.app.supervisor import track
 
 PROGRESS_FALLBACK = ("thinking", "{name} 正在思考")
 PROGRESS_OVERRIDES = {

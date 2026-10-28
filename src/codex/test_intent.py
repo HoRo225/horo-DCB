@@ -14,7 +14,7 @@ from src.codex.instructions import INTENT_INSTRUCTIONS
 from src.codex.model_settings import ModelChoice, ModelInfo, ModelSettings
 from src.codex.protocol import CodexError
 from src.codex.service import COMMON_DISABLED_FEATURES, CodexService, feature_config
-from src.tasks import shutdown_deadline
+from src.core.app.supervisor import shutdown_deadline
 
 KEY = "guild:1:channel:2:user:3"
 SETTINGS = ModelSettings(ModelChoice("primary"), ModelChoice("fallback"))

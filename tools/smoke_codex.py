@@ -9,7 +9,7 @@ import aiohttp
 
 from src.codex.model_settings import DEFAULT_MODEL_SETTINGS, parse_model_list, resolve_model_settings
 from src.codex.rpc import AppServerClient
-from src.config import CODEX_TOKEN_FILE, CODEX_URL, codex_token
+from src.core.app.config import CODEX_TOKEN_FILE, CODEX_URL, codex_token
 
 
 async def rejected_status(url: str) -> int | None:

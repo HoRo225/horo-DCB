@@ -4,7 +4,7 @@ import re
 
 import discord
 
-from src.brand import ICONS
+from src.core.adapters.discord.brand import ICONS
 
 DISCORD_MESSAGE_LIMIT = 2_000
 MAX_DISCORD_RESPONSE_CHUNKS = 8

@@ -1,5 +1,5 @@
 from __future__ import annotations
-from src.discord_utils import interaction_operation_id
+from src.core.adapters.discord.channels import interaction_operation_id
 
 import logging
 import sqlite3
@@ -17,7 +17,7 @@ from src.codex.model_settings import (
     ModelSettings,
     find_model,
 )
-from src.brand import BRAND_COLOUR, ICONS
+from src.core.adapters.discord.brand import BRAND_COLOUR, ICONS
 
 if TYPE_CHECKING:
     from src.admin.panel import AdminPanelView

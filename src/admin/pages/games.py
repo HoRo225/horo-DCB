@@ -15,8 +15,9 @@ from src.admin.pages.common import (
     no_guild_note,
     role_select,
 )
-from src.brand import BRAND_COLOUR, ICONS
-from src.discord_utils import hub_link, interaction_operation_id
+from src.core.adapters.discord.brand import BRAND_COLOUR, ICONS
+from src.core.adapters.discord.channels import interaction_operation_id
+from src.games.access import hub_link
 from src.games.hub import (
     bind_channel as bind_game_channel,
     channel_problem as game_channel_problem,

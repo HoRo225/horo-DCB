@@ -3,7 +3,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 from src.ai.private_results import TTL_SECONDS, PrivateResults
-from src.brand import ICONS, NEUTRAL_COLOUR, notice_view
+from src.core.adapters.discord.brand import ICONS, NEUTRAL_COLOUR, notice_view
 from src.testing import interaction, text
 
 

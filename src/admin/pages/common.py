@@ -8,8 +8,8 @@ from typing import TYPE_CHECKING
 
 import discord
 
-from src.brand import ICONS, note_text
-from src.discord_utils import interaction_operation_id
+from src.core.adapters.discord.brand import ICONS, note_text
+from src.core.adapters.discord.channels import interaction_operation_id
 
 if TYPE_CHECKING:
     from src.admin.panel import AdminPanelView

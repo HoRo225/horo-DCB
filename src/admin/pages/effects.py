@@ -4,7 +4,7 @@ from dataclasses import dataclass
 
 import discord
 
-from src.brand import ICONS, ErrorNotice, send_notice
+from src.core.adapters.discord.brand import ICONS, ErrorNotice, send_notice
 from src.admin.pages.common import footer_note
 from src.effects import CONFIRMABLE, RETRYABLE
 

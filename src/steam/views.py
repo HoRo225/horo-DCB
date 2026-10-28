@@ -5,7 +5,7 @@ from typing import TYPE_CHECKING
 
 import discord
 
-from src.brand import BRAND_COLOUR, ICONS, card_title, reported, send_notice
+from src.core.adapters.discord.brand import BRAND_COLOUR, ICONS, card_title, reported, send_notice
 from src.steam.models import SteamOffer, offer_from_payload
 
 if TYPE_CHECKING:

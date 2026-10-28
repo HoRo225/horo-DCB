@@ -94,7 +94,7 @@ class HoroBotTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.bot.tree.get_commands(guild=discord.Object(G)), [])
 
     async def test_every_cog_task_set_is_cancelled_and_drained_at_close(self) -> None:
-        from src.tasks import track
+        from src.core.app.supervisor import track
 
         await self.start()
         probes = {
@@ -117,7 +117,7 @@ class HoroBotTests(unittest.IsolatedAsyncioTestCase):
         loop = asyncio.get_running_loop()
         start = loop.time()
         with (
-            patch("src.tasks.SHUTDOWN_STAGE_SECONDS", 0.5),
+            patch("src.core.app.supervisor.SHUTDOWN_STAGE_SECONDS", 0.5),
             patch.object(self.bot.admin_panels, "close", step(order, "panel", stuck=True)),
             patch.object(self.bot.access_service, "close", step(order, "access")),
             patch.object(self.bot.codex, "close", step(order, "codex")),
@@ -169,7 +169,7 @@ class HoroBotTests(unittest.IsolatedAsyncioTestCase):
         loop = asyncio.get_running_loop()
         start = loop.time()
         with (
-            patch("src.tasks.SHUTDOWN_STAGE_SECONDS", 0.5),
+            patch("src.core.app.supervisor.SHUTDOWN_STAGE_SECONDS", 0.5),
             patch.object(self.bot.steam_free_games, "close", step(order, "steam")),
             patch("discord.Client.close", step(order, "discord")),
             self.assertLogs(level="ERROR") as logs,
@@ -192,7 +192,7 @@ class HoroShutdownTests(unittest.IsolatedAsyncioTestCase):
         self.bot._shutdown_failstop = MagicMock(side_effect=testing.Fatal)
 
     async def test_accepted_mutation_finishes_before_transport_shutdown(self) -> None:
-        from src.tasks import track
+        from src.core.app.supervisor import track
 
         self.db.execute("CREATE TABLE shutdown_check (value INTEGER)")
         order = []
@@ -263,7 +263,7 @@ class HoroShutdownTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_late_card_keeps_cleanup_owner_and_discord_open(self) -> None:
         from src.ai.output import CARD_CLEANUPS, _delete_when_landed
-        from src.tasks import track
+        from src.core.app.supervisor import track
 
         order = []
         message = MagicMock(delete=AsyncMock(side_effect=lambda: order.append("delete")))
@@ -274,8 +274,8 @@ class HoroShutdownTests(unittest.IsolatedAsyncioTestCase):
 
         sending = asyncio.create_task(send())
         cleanup = track(CARD_CLEANUPS, asyncio.create_task(_delete_when_landed(sending)))
-        with (patch("src.tasks.SHUTDOWN_SECONDS", 1),
-              patch("src.tasks.SHUTDOWN_STAGE_SECONDS", 0.7),
+        with (patch("src.core.app.supervisor.SHUTDOWN_SECONDS", 1),
+              patch("src.core.app.supervisor.SHUTDOWN_STAGE_SECONDS", 0.7),
               patch("discord.Client.close", step(order, "discord"))):
             await self.bot.close()
         self.assertEqual(order, ["delete", "discord"])
@@ -297,8 +297,8 @@ class HoroShutdownTests(unittest.IsolatedAsyncioTestCase):
         loop = asyncio.get_running_loop()
         started = loop.time()
         try:
-            with (patch("src.tasks.SHUTDOWN_SECONDS", 0.12),
-                  patch("src.tasks.SHUTDOWN_STAGE_SECONDS", 0.03),
+            with (patch("src.core.app.supervisor.SHUTDOWN_SECONDS", 0.12),
+                  patch("src.core.app.supervisor.SHUTDOWN_STAGE_SECONDS", 0.03),
                   patch("discord.Client.close", AsyncMock()), patch("logging.error"),
                   self.assertRaises(testing.Fatal)):
                 await self.bot.close()
@@ -311,7 +311,7 @@ class HoroShutdownTests(unittest.IsolatedAsyncioTestCase):
             await owner
 
     async def test_simultaneous_stages_share_total_deadline(self) -> None:
-        from src.tasks import shutdown_deadline
+        from src.core.app.supervisor import shutdown_deadline
 
         await self.bot.add_cogs()
         deadlines = []
@@ -323,8 +323,8 @@ class HoroShutdownTests(unittest.IsolatedAsyncioTestCase):
                 all_started.set()
             await all_started.wait()
 
-        with (patch("src.tasks.SHUTDOWN_SECONDS", 1),
-              patch("src.tasks.SHUTDOWN_STAGE_SECONDS", 0.5),
+        with (patch("src.core.app.supervisor.SHUTDOWN_SECONDS", 1),
+              patch("src.core.app.supervisor.SHUTDOWN_STAGE_SECONDS", 0.5),
               patch.object(self.bot.admin_panels, "close", hang),
               patch.object(self.bot.access_service, "close", hang),
               patch.object(self.bot.codex, "close", hang),

@@ -9,9 +9,9 @@ from uuid import uuid4
 
 import discord
 
-from src import discord_utils
-from src.brand import PENDING_CHECK, note_text
-from src.games import rana, tables
+from src.core.adapters.discord import channels
+from src.core.adapters.discord.brand import PENDING_CHECK, note_text
+from src.games import access, rana, tables
 from src.games.blackjack import Round
 from src.games.hub import publish_hub
 from src.games.table_runtime import delete_message
@@ -63,7 +63,7 @@ class GameOperations:
                 table.game = game
                 table.notice = note_text(("warn", f"閒置 {tables.IDLE_SECONDS // 60} 分鐘，已代你停牌結算，賭桌關閉。"))
                 table.render()
-                if links := discord_utils.hub_link(self.bot):
+                if links := access.hub_link(self.bot):
                     table.add_item(discord.ui.ActionRow(*links))
                 try:
                     await table.message.edit(view=table)
@@ -108,7 +108,7 @@ class GameOperations:
         channel_id = getattr(source, "channel_id", None) or source.channel.id
         if refresh:
             try:
-                guild, actor = await discord_utils.fetch_current_member(bot, guild_id, actor.id)
+                guild, actor = await channels.fetch_current_member(bot, guild_id, actor.id)
             except ValueError as exc:
                 return None, str(exc)
             except discord.HTTPException:
@@ -130,7 +130,7 @@ class GameOperations:
                                   guild_id=guild_id, channel_id=channel_id)
         if table is not None and actor.id != table.player_id:
             return context, "只有開桌的玩家可以操作這張賭桌。"
-        return context, discord_utils.play_problem(context)
+        return context, access.play_problem(context)
 
     @staticmethod
     def _failure(code: str, text: str) -> dict:
@@ -176,7 +176,7 @@ class GameOperations:
             if problem:
                 result = self._failure("forbidden", problem)
                 if ui:
-                    await tables.send_notice(source, problem, items=discord_utils.hub_link(self.bot))
+                    await tables.send_notice(source, problem, items=access.hub_link(self.bot))
                 return result
             operation_id = operation_id or (f"interaction:{source.id}" if isinstance(source.id, int) else uuid4().hex)
             inputs = {"actor_id": user_id, "guild_id": context.guild_id if isinstance(context.guild_id, int) else None,
@@ -217,7 +217,7 @@ class GameOperations:
                         await self._present(table, source, operation_id)
                 else:
                     await tables.send_notice(source, result["text"], "error" if result["code"] == "seat_gone" else "warn",
-                                             items=discord_utils.hub_link(self.bot)
+                                             items=access.hub_link(self.bot)
                                              if result["code"] in {"seat_gone", "no_table"} else ())
             elif result["ok"] and table is not None:
                 if table.closed:
@@ -404,7 +404,7 @@ class GameOperations:
                 self.records.update_effect(effect_id, "skipped", message_id=new.message.id, error=problem)
                 self.records.complete(operation_id, "game_action", inputs, result, status="failed")
             if ui:
-                await tables.send_notice(source, problem, items=discord_utils.hub_link(self.bot))
+                await tables.send_notice(source, problem, items=access.hub_link(self.bot))
             return result
         result = {"ok": True, "code": "done", "text": "賭桌已開啟。", **self._snapshot(new),
                   "resource_id": str(new.message.id)}

@@ -9,7 +9,7 @@ from src.action_service import ActionService, _static_action_problem
 from src.ai.access import AiSettings
 from src.codex.contracts import GAME_ACTIONS, Action, IntentDecision
 from src.codex.protocol import CodexError
-from src.brand import ICONS
+from src.core.adapters.discord.brand import ICONS
 from src.games.operations import GameOperations
 from src.games.store import GameStore
 from src.state import transaction

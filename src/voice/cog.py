@@ -6,7 +6,7 @@ from typing import TYPE_CHECKING
 
 import discord
 from discord.ext import commands
-from src.tasks import stage, shutdown_deadline, SHUTDOWN_STAGE_SECONDS
+from src.core.app.supervisor import stage, shutdown_deadline, SHUTDOWN_STAGE_SECONDS
 
 if TYPE_CHECKING:
     from src.bot import HoroBot

@@ -9,7 +9,7 @@ from dataclasses import dataclass
 
 import discord
 
-from src.brand import ICONS, send_notice
+from src.core.adapters.discord.brand import ICONS, send_notice
 
 EXPIRED = "私人結果已過期，請再 @樂奈 問一次。"
 TTL_SECONDS = 1800

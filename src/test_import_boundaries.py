@@ -79,12 +79,13 @@ class ImportBoundaryTests(unittest.TestCase):
 
     def test_frame_worker_loads_no_ai_layers(self) -> None:
         modules = loaded_modules("src.ai.frames")
-        for module in ("src.codex.protocol", "src.codex.model_settings", "src.config"):
+        for module in ("src.codex.protocol", "src.codex.model_settings", "src.core.app.config"):
             self.assertNotIn(module, modules)
 
     def test_shared_layers_load_no_features(self) -> None:
         features = ("games", "voice", "steam", "ai", "admin")
-        for shared in ("state", "clock", "tasks", "brand", "discord_utils", "config", "cards"):
+        for shared in ("state", "core.domain.clock", "core.app.supervisor", "core.adapters.discord.brand",
+                       "core.adapters.discord.channels", "core.adapters.discord.watchdog", "core.app.config", "cards"):
             modules = loaded_modules(f"src.{shared}")
             with self.subTest(shared):
                 self.assertEqual({m for m in modules if m.startswith("src.") and m.split(".")[1] in features}, set())

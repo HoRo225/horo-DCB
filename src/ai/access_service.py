@@ -8,7 +8,7 @@ from typing import Literal
 from src.ai.access import AiSettings
 from src.codex.service import CodexService
 from src.codex.protocol import CodexError, scope_matches
-from src.tasks import cancel_all, track, wait_until
+from src.core.app.supervisor import cancel_all, track, wait_until
 
 AccessChangeOutcome = Literal["unchanged", "updated"]
 

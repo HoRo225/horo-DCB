@@ -4,8 +4,9 @@ from unittest.mock import AsyncMock, MagicMock
 
 import discord
 
-from src.brand import ICONS
-from src.discord_utils import fetch_current_member, hub_link, play_problem, role_problem
+from src.core.adapters.discord.brand import ICONS
+from src.core.adapters.discord.channels import fetch_current_member
+from src.games.access import hub_link, play_problem, role_problem
 
 
 class PlayPermissionTest(unittest.IsolatedAsyncioTestCase):

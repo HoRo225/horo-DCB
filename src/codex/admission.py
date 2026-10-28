@@ -7,7 +7,7 @@ from contextlib import asynccontextmanager
 from dataclasses import dataclass
 
 from src.codex.protocol import CLEANUP_SECONDS, CodexError, scope_matches
-from src.tasks import cancel_all, consume_task_exception, wait_until
+from src.core.app.supervisor import cancel_all, consume_task_exception, wait_until
 
 MAX_ACTIVE_KEYS = 4
 

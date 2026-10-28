@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import discord
 
-from src.brand import BRAND_COLOUR, ICONS, card_title, full_rules, reported, send_notice
-from src import discord_utils
+from src.core.adapters.discord.brand import BRAND_COLOUR, ICONS, card_title, full_rules, reported, send_notice
+from src.games import access
 from src.games import table_runtime
 from src.games.tables import TABLES
 
@@ -41,8 +41,8 @@ class GamePickSelect(discord.ui.DynamicItem[discord.ui.Select], template=r"horo:
 
     @reported
     async def callback(self, interaction: discord.Interaction) -> None:
-        if problem := discord_utils.play_problem(interaction):
-            await send_notice(interaction, problem, items=discord_utils.hub_link(interaction.client))
+        if problem := access.play_problem(interaction):
+            await send_notice(interaction, problem, items=access.hub_link(interaction.client))
             return
         await interaction.response.edit_message(view=lobby_view(banner=bool(interaction.message.attachments)))
         await table_runtime.open_table(interaction, self.item.values[0])
@@ -64,7 +64,7 @@ class RulesButton(discord.ui.DynamicItem[discord.ui.Button], template=r"horo:gam
     async def callback(self, interaction: discord.Interaction) -> None:
         if (table := TABLES.get(self.game)) is None:
             await send_notice(interaction, "這個遊戲已下架，請重新從遊戲大廳選擇。",
-                              items=discord_utils.hub_link(interaction.client))
+                              items=access.hub_link(interaction.client))
         else:
             view = full_rules(f"{ICONS[table.key]} {table.title} 完整規則", table.sections())
             await interaction.response.send_message(view=view, ephemeral=True)
