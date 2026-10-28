@@ -43,8 +43,14 @@ class DiscordTables:
     def hub_link(self) -> list[discord.ui.Button]:
         return hub_link(self._lobby.hub_message, self._live.guild_id)
 
-    async def lobby_message(self) -> dict[str, object]:
-        if file := await self._banner():
+    async def lobby_message(self, interaction: discord.Interaction) -> dict[str, object]:
+        try:
+            attachments = (await interaction.message.fetch()).attachments
+        except discord.HTTPException:
+            attachments = []
+        if attachments:
+            return {"view": lobby_view(), "attachments": attachments}
+        if interaction.app_permissions.attach_files and (file := await self._banner()):
             return {"view": lobby_view(), "attachments": [file]}
         return {"view": lobby_view(banner=False), "attachments": []}
 

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 import time
 from collections.abc import Awaitable, Callable
 
@@ -20,6 +21,8 @@ from src.games.app.tables import LiveTable, Tables
 
 HUB_QUIET_SECONDS = 60
 SWEEP_SECONDS = 60
+TABLE_BUTTON = re.compile(r"[0-9a-f]{32}:[a-z_]+")
+TABLE_ENDED = "這張賭桌已經結束，請從遊戲大廳重新開桌。"
 
 
 class GamesCog(commands.Cog):
@@ -93,6 +96,8 @@ class GamesCog(commands.Cog):
                 await self._click(interaction, table)
             except Exception as error:
                 await report_interaction_error(interaction, error)
+        elif TABLE_BUTTON.fullmatch(interaction.data["custom_id"]):
+            await send_notice(interaction, TABLE_ENDED, "deadline", items=self._presenter.hub_link())
 
     async def _click(self, interaction: discord.Interaction, table: LiveTable) -> None:
         if interaction.user.id != table.player_id:

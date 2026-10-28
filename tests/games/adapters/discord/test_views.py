@@ -1,5 +1,6 @@
 import unittest
 from types import SimpleNamespace
+from unittest.mock import MagicMock
 
 import discord
 
@@ -12,13 +13,19 @@ HUB_URL = f"https://discord.com/channels/{GUILD}/{CHANNEL}/50"
 
 
 class Presenter:
-    def __init__(self) -> None:
+    def __init__(self, seat=lambda: None) -> None:
         self.replies: list[FakeReply] = []
+        self.seat = seat
+        self.redrawn_after: list[object] = []
+        self.redraw_error: Exception | None = None
 
     def hub_link(self) -> list[discord.ui.Button]:
         return [discord.ui.Button(label="前往遊戲大廳", url=HUB_URL)]
 
-    async def lobby_message(self) -> dict[str, object]:
+    async def lobby_message(self, interaction: discord.Interaction) -> dict[str, object]:
+        self.redrawn_after.append(self.seat())
+        if self.redraw_error is not None:
+            raise self.redraw_error
         return {"view": lobby_view(), "attachments": ["hub.png"]}
 
     def reply(self, interaction: discord.Interaction) -> FakeReply:
@@ -52,13 +59,14 @@ class LobbyViewTests(unittest.TestCase):
 class GamePickTests(unittest.IsolatedAsyncioTestCase):
     def setUp(self) -> None:
         self.game = GameHarness(self)
-        self.presenter = Presenter()
+        self.presenter = Presenter(lambda: self.game.store.seat(PLAYER))
         self.roles: frozenset[int] | None = frozenset({ROLE})
         players = SimpleNamespace(role_ids=lambda user_id: self.roles)
         self.pick = game_pick_item(self.game.play, self.game.lobby, self.presenter, players)
 
-    async def choose(self, game: str) -> discord.Interaction:
+    async def choose(self, game: str, *, edit_error: Exception | None = None) -> discord.Interaction:
         picked = testing.interaction()
+        picked.edit_original_response.side_effect = edit_error
         picked.id, picked.user.id, picked.guild_id, picked.channel_id = 900, PLAYER, GUILD, CHANNEL
         picked.message.attachments = []
         item = await self.pick.from_custom_id(picked, None, None)
@@ -66,14 +74,32 @@ class GamePickTests(unittest.IsolatedAsyncioTestCase):
         await item.callback(picked)
         return picked
 
-    async def test_pick_redraws_the_lobby_with_its_banner_and_opens_a_table(self) -> None:
+    async def test_pick_acknowledges_opens_a_table_then_resets_the_lobby(self) -> None:
         picked = await self.choose("slots")
-        redrawn = picked.response.edit_message.await_args.kwargs
+        picked.response.defer.assert_awaited_once_with()
+        picked.response.edit_message.assert_not_awaited()
+        [seat] = self.presenter.redrawn_after
+        self.assertEqual(seat.game, "slots")
+        redrawn = picked.edit_original_response.await_args.kwargs
         self.assertEqual((galleries(redrawn["view"]), redrawn["attachments"]), (1, ["hub.png"]))
-        self.assertEqual(self.game.store.seat(PLAYER).game, "slots")
         self.assertEqual(self.game.records.get_effect("interaction:900:table-send").payload["source_message_id"], 900)
         [reply] = self.presenter.replies
         self.assertEqual(reply.answers(), [])
+
+    async def assert_reset_failure_is_quiet(self, **failure: Exception) -> None:
+        with self.assertLogs(level="WARNING") as logs:
+            picked = await self.choose("slots", **failure)
+        self.assertEqual({record.levelname for record in logs.records}, {"WARNING"})
+        self.assertEqual(self.game.store.seat(PLAYER).game, "slots")
+        picked.followup.send.assert_not_awaited()
+        picked.response.send_message.assert_not_awaited()
+
+    async def test_lobby_that_cannot_be_rebuilt_leaves_the_table_open_quietly(self) -> None:
+        self.presenter.redraw_error = discord.HTTPException(MagicMock(status=500), "down")
+        await self.assert_reset_failure_is_quiet()
+
+    async def test_lobby_edit_refusal_leaves_the_table_open_quietly(self) -> None:
+        await self.assert_reset_failure_is_quiet(edit_error=discord.HTTPException(MagicMock(status=500), "down"))
 
     async def test_ineligible_pick_only_gets_the_reason_and_the_way_back(self) -> None:
         self.roles = None

@@ -19,7 +19,7 @@ from src.games.domain.table import Dealer, TableState
 
 GUILD, CHANNEL, PLAYER, ROLE = 5, 10, 1, 7
 RESTARTING = "Bot 正在重新啟動，請稍後再試。"
-OTHER_GUILD = "此 Bot 只服務 .env 的 DISCORD_GUILD_ID 伺服器。"
+OTHER_GUILD = "此 Bot 只在指定的伺服器提供服務。"
 
 
 def deck(*ranks: str) -> list[Card]:

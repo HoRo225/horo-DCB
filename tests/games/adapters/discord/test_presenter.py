@@ -54,14 +54,38 @@ class TableMessageTests(unittest.IsolatedAsyncioTestCase):
         view = self.channel.send.await_args.kwargs["view"]
         self.assertIn(f"{'a' * 32}:again", view.actions)
 
-    async def test_lobby_message_carries_the_banner_file_or_drops_the_banner(self) -> None:
+    def lobby(self, banner: discord.File | None) -> tuple[DiscordTables, AsyncMock]:
         client = Client(Guild(G).add(self.channel))
-        live = LiveGuild(client, G, lambda: False)
-        drawn = DiscordTables(client, live, SimpleNamespace(), AsyncMock(return_value=discord.File(io.BytesIO(b"png"), "hub.png")))
-        content = await drawn.lobby_message()
-        self.assertEqual((galleries(content["view"]), [file.filename for file in content["attachments"]]), (1, ["hub.png"]))
-        failed = DiscordTables(client, live, SimpleNamespace(), AsyncMock(return_value=None))
-        content = await failed.lobby_message()
+        drawing = AsyncMock(return_value=banner)
+        return DiscordTables(client, LiveGuild(client, G, lambda: False), SimpleNamespace(), drawing), drawing
+
+    def picked(self, *, fetched: object, attach: bool = True) -> MagicMock:
+        clicked = testing.interaction()
+        clicked.message.fetch = AsyncMock(side_effect=fetched) if isinstance(fetched, Exception) else AsyncMock(return_value=fetched)
+        clicked.app_permissions = discord.Permissions(attach_files=attach)
+        return clicked
+
+    async def test_lobby_redraw_keeps_the_uploaded_banner_without_reuploading(self) -> None:
+        tables, drawing = self.lobby(discord.File(io.BytesIO(b"png"), "hub.png"))
+        kept = SimpleNamespace(id=70, filename="hub.png")
+        content = await tables.lobby_message(self.picked(fetched=SimpleNamespace(attachments=[kept])))
+        self.assertEqual((galleries(content["view"]), content["attachments"]), (1, [kept]))
+        drawing.assert_not_awaited()
+
+    async def test_lobby_redraw_uploads_a_banner_only_when_it_may_attach_one(self) -> None:
+        unreadable = http(discord.Forbidden, 403)
+        for fetched in (SimpleNamespace(attachments=[]), unreadable):
+            with self.subTest(fetched=fetched):
+                tables, _ = self.lobby(discord.File(io.BytesIO(b"png"), "hub.png"))
+                content = await tables.lobby_message(self.picked(fetched=fetched))
+                self.assertEqual((galleries(content["view"]), [file.filename for file in content["attachments"]]),
+                                 (1, ["hub.png"]))
+                tables, drawing = self.lobby(discord.File(io.BytesIO(b"png"), "hub.png"))
+                content = await tables.lobby_message(self.picked(fetched=fetched, attach=False))
+                self.assertEqual((galleries(content["view"]), content["attachments"]), (0, []))
+                drawing.assert_not_awaited()
+        tables, _ = self.lobby(None)
+        content = await tables.lobby_message(self.picked(fetched=unreadable))
         self.assertEqual((galleries(content["view"]), content["attachments"]), (0, []))
 
     async def test_refused_or_missing_channel_is_a_present_error(self) -> None:

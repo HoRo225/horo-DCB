@@ -5,7 +5,7 @@ from collections.abc import Callable, Collection
 from src.games.domain import slots
 
 IDLE_SECONDS = 10 * 60
-NO_LOBBY = "遊戲大廳尚未開放，請管理員先在 /控制台 設定遊戲頻道。"
+NO_LOBBY = "遊戲大廳尚未開放，請等管理員設定遊戲頻道。"
 NO_IDENTITY = "目前無法確認你的伺服器身分，請稍後再試。"
 NO_ROLE = "你沒有使用這個功能的身分組。"
 OUTCOMES = {

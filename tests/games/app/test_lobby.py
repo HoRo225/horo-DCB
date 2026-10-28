@@ -23,7 +23,7 @@ class AccessTests(unittest.IsolatedAsyncioTestCase):
     def test_closed_lobby_is_named_before_identity(self) -> None:
         game = GameHarness(self)
         game.db.execute("DELETE FROM settings WHERE key = 'games.channel_id'")
-        self.assertEqual(game.lobby.problem(GUILD, CHANNEL, None), "遊戲大廳尚未開放，請管理員先在 /控制台 設定遊戲頻道。")
+        self.assertEqual(game.lobby.problem(GUILD, CHANNEL, None), "遊戲大廳尚未開放，請等管理員設定遊戲頻道。")
 
     def test_roles_are_stored_sorted(self) -> None:
         game = GameHarness(self)

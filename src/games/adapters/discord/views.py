@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from typing import TYPE_CHECKING
 
 import discord
@@ -61,10 +62,14 @@ def game_pick_item(
             if problem := lobby.problem(interaction.guild_id, interaction.channel_id, players.role_ids(user_id)):
                 await send_notice(interaction, problem, items=tables.hub_link())
                 return
-            await interaction.response.edit_message(**await tables.lobby_message())
+            await interaction.response.defer()
             move = Move("open_table", user_id, interaction.guild_id, interaction.channel_id, interaction.id,
                         play.snapshot(user_id)["state_token"], game=self.item.values[0])
             await play.execute(move, tables.reply(interaction))
+            try:
+                await interaction.edit_original_response(**await tables.lobby_message(interaction))
+            except Exception:
+                logging.warning("Game lobby menu could not be reset after a pick.", exc_info=True)
 
     return GamePickSelect
 

@@ -4,6 +4,7 @@ import sqlite3
 import time
 import unittest
 
+from src.core.adapters.discord.effects import WAITING
 from src.games.adapters.sqlite.store import SqliteGameStore
 from src.games.app.play import (
     BUSY_REQUEST,
@@ -318,6 +319,17 @@ class OpenTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(game.tables.at(100))
         self.assertEqual(game.store.seat(PLAYER).message_id, 101)
         self.assertEqual(game.records.get_effect("switch:table-delete").status, "done")
+
+    async def test_unknown_send_tells_the_player_it_waits_for_an_admin_check(self) -> None:
+        game = GameHarness(self)
+        game.presenter.post_error = PresentError("down")
+        with self.assertLogs(level="ERROR"):
+            result, reply = await game.ui("open_table", game="slots")
+        self.assertEqual(reply.answers(), [
+            ("notice", "賭桌是否已送出還無法確認，已列入管理員的待處理項目核對；不會自動重送。", "warn", False),
+        ])
+        self.assertEqual(result["code"], "unknown")
+        self.assertEqual([effect.kind for effect in game.records.effects(status=WAITING)], ["game_table_open"])
 
     async def test_unknown_send_keeps_the_old_table_and_never_resends(self) -> None:
         game = GameHarness(self)
