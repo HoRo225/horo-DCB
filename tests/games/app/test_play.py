@@ -309,6 +309,12 @@ class OpenTests(unittest.IsolatedAsyncioTestCase):
         effect = game.records.get_effect("open:table-send")
         self.assertEqual((effect.status, effect.message_id, effect.payload["user_id"]), ("done", 100, PLAYER))
 
+    async def test_picking_a_game_tells_the_player_where_the_new_table_is(self) -> None:
+        game = GameHarness(self)
+        result, reply = await game.ui("open_table", game="slots")
+        self.assertTrue(result["ok"])
+        self.assertEqual(reply.answers(), [("opened", "賭桌已開啟。", f"https://discord.com/channels/{GUILD}/{CHANNEL}/100")])
+
     async def test_new_table_replaces_the_old_one_after_it_is_shown(self) -> None:
         game = GameHarness(self)
         old = await game.dealt("10", "9", "8", "8", "2")
@@ -474,7 +480,7 @@ class IdleTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(game.presenter.edits), edits + 1)
         shown = game.presenter.edits[-1]
         self.assertEqual((shown.farewell, shown.closed), (IDLE_FAREWELL, True))
-        self.assertEqual(IDLE_FAREWELL, "閒置 10 分鐘，已代你停牌結算，賭桌關閉。")
+        self.assertEqual(IDLE_FAREWELL, "已閒置結束")
         self.assertEqual(game.presenter.deleted, [])
         self.assertEqual(game.tables.live(), [])
 

@@ -5,6 +5,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import discord
 
+from src.core.adapters.discord.brand import ICONS
 from src.core.adapters.discord.live import LiveGuild
 from src.games import LiveTable
 from src.games.adapters.discord.presenter import DiscordLobbyBoard, DiscordTables, draw_banner
@@ -118,10 +119,13 @@ class TableMessageTests(unittest.IsolatedAsyncioTestCase):
     def test_restored_tables_link_to_their_message(self) -> None:
         self.assertEqual(self.presenter.url(CHANNEL, 20), f"https://discord.com/channels/@me/{CHANNEL}/20")
 
-    def test_closed_tables_link_back_to_the_lobby(self) -> None:
-        self.table.farewell = "閒置"
-        [link] = [item for item in self.presenter.view(self.table).walk_children() if isinstance(item, discord.ui.Button)]
-        self.assertEqual(link.url, f"https://discord.com/channels/{G}/{CHANNEL}/50")
+    async def test_idle_closed_table_is_edited_into_a_card_without_controls(self) -> None:
+        self.table.farewell = "已閒置結束"
+        await self.presenter.edit(self.table)
+        view = self.messages.message.edit.await_args.kwargs["view"]
+        self.messages.message.delete.assert_not_awaited()
+        self.assertTrue(testing.text(view).startswith("🪑 **已閒置結束**"))
+        self.assertFalse(any(isinstance(item, (discord.ui.Button, discord.ui.ActionRow)) for item in view.walk_children()))
 
 
 class InteractionReplyTests(unittest.IsolatedAsyncioTestCase):
@@ -147,6 +151,26 @@ class InteractionReplyTests(unittest.IsolatedAsyncioTestCase):
         await self.presenter.reply(clicked).notice("請稍候")
         view = clicked.response.send_message.await_args.kwargs["view"]
         self.assertFalse(any(isinstance(item, discord.ui.Button) for item in view.walk_children()))
+
+    async def test_opened_table_gets_a_private_link_to_it(self) -> None:
+        clicked = testing.interaction()
+        clicked.response.is_done.return_value = True
+        await self.presenter.reply(clicked).opened("賭桌已開啟。", f"https://discord.com/channels/{G}/{CHANNEL}/30")
+        sent = clicked.followup.send.await_args.kwargs
+        self.assertTrue(sent["ephemeral"])
+        self.assertIn(f"{ICONS['ok']} 賭桌已開啟。", testing.text(sent["view"]))
+        [link] = [item for item in sent["view"].walk_children() if isinstance(item, discord.ui.Button)]
+        self.assertEqual((link.label, link.style, link.url),
+                         ("前往牌桌", discord.ButtonStyle.link, f"https://discord.com/channels/{G}/{CHANNEL}/30"))
+
+    async def test_opened_table_without_url_sends_only_text(self) -> None:
+        clicked = testing.interaction()
+        clicked.response.is_done.return_value = True
+        await self.presenter.reply(clicked).opened("賭桌已開啟。", None)
+        sent = clicked.followup.send.await_args.kwargs
+        self.assertTrue(sent["ephemeral"])
+        self.assertIn("賭桌已開啟。", testing.text(sent["view"]))
+        self.assertFalse(any(isinstance(item, (discord.ui.Button, discord.ui.ActionRow)) for item in sent["view"].walk_children()))
 
     async def test_show_edits_the_clicked_message(self) -> None:
         clicked = testing.interaction()

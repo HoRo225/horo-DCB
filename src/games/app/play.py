@@ -30,7 +30,7 @@ OPEN_UNCERTAIN = "賭桌是否已送出還無法確認，已列入管理員的�
 OPENED = "賭桌已開啟。"
 MOVED = "遊戲動作已完成。"
 LEFT = "已離桌。"
-IDLE_FAREWELL = f"閒置 {IDLE_SECONDS // 60} 分鐘，已代你停牌結算，賭桌關閉。"
+IDLE_FAREWELL = "已閒置結束"
 
 
 @dataclass(frozen=True, slots=True)
@@ -332,4 +332,6 @@ class Play:
                 await self._delete(previous, operation_id)
             else:
                 await self._presenter.delete(replaced.channel_id, replaced.message_id)
+        if reply is not None:
+            await reply.opened(OPENED, new.posted.url)
         return result

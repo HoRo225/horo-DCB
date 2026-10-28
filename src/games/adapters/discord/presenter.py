@@ -5,7 +5,7 @@ from collections.abc import Awaitable, Callable
 
 import discord
 
-from src.core.adapters.discord.brand import send_notice
+from src.core.adapters.discord.brand import ICONS, send_notice
 from src.core.adapters.discord.channels import post_problem
 from src.core.adapters.discord.live import LiveGuild
 from src.games.adapters.discord.access import hub_link
@@ -55,7 +55,7 @@ class DiscordTables:
         return {"view": lobby_view(banner=False), "attachments": []}
 
     def view(self, table: LiveTable) -> SeatView:
-        return seat_view(table, self.hub_link() if table.farewell is not None else ())
+        return seat_view(table)
 
     def reply(self, interaction: discord.Interaction) -> InteractionReply:
         return InteractionReply(interaction, self)
@@ -111,6 +111,10 @@ class InteractionReply:
 
     async def show(self, table: LiveTable) -> None:
         await self._tables.view(table).present(self._interaction)
+
+    async def opened(self, text: str, url: str | None) -> None:
+        items = [discord.ui.Button(label="前往牌桌", url=url, emoji=ICONS["manage"])] if url else []
+        await send_notice(self._interaction, text, "ok", items=items)
 
 
 class DiscordLobbyBoard:

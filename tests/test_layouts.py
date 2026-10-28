@@ -156,7 +156,6 @@ class LayoutBudgetTest(unittest.IsolatedAsyncioTestCase):
             for game in GAMES.values():
                 fits(f"{game.key} full rules", full_rules(f"{ICONS[game.key]} {game.title} 完整規則", game.rules(slot_symbol)))
 
-            hub = [discord.ui.Button(label="前往遊戲大廳", emoji=ICONS["games"], url="https://discord.com/channels/1/2/3")]
             table = LiveTable(OWNER, Blackjack(), "t" * 32, avatar_url=image)
             fits("blackjack open", seat_view(table))
             table.state = Blackjack(Round([Card("K", "S"), Card("9", "S"), Card("A", "S"), Card("9", "H")]))
@@ -174,7 +173,7 @@ class LayoutBudgetTest(unittest.IsolatedAsyncioTestCase):
             self.assertTrue(any(f"**樂奈**　{table.taunt}" in i.content for i in shown.walk_children()
                                 if isinstance(i, discord.ui.TextDisplay)))
             table.farewell = "註" * 60
-            fits("blackjack closed idle", seat_view(table, hub))
+            fits("blackjack closed idle", seat_view(table))
 
             spin = LiveTable(OWNER, Slots(), "t" * 32, avatar_url=image)
             fits("slots open", seat_view(spin))
@@ -186,7 +185,7 @@ class LayoutBudgetTest(unittest.IsolatedAsyncioTestCase):
             self.assertTrue(any(f"**樂奈**　{spin.taunt}" in i.content for i in shown.walk_children()
                                 if isinstance(i, discord.ui.TextDisplay)))
             spin.farewell = "註" * 60
-            fits("slots closed idle", seat_view(spin, hub))
+            fits("slots closed idle", seat_view(spin))
 
             roles = [MagicMock(mention=f"<@&{10**18 + n}>") for n in range(25)]
             offer = SteamOffer(1, name, "NT$1,000,000", "說" * 5000, ("開發商",) * 10, image, ends_at=2**31)

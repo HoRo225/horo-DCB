@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Sequence
 
 import discord
 
@@ -12,7 +11,6 @@ from src.core.adapters.discord.brand import (
     NEUTRAL_COLOUR,
     bot_avatar,
     card_title,
-    note_text,
     rana_says,
     tint,
 )
@@ -27,10 +25,9 @@ type Rows = list[list[discord.ui.Item]]
 
 
 class SeatView(discord.ui.LayoutView):
-    def __init__(self, table: LiveTable, hub: Sequence[discord.ui.Item] = ()) -> None:
+    def __init__(self, table: LiveTable) -> None:
         super().__init__(timeout=None)
         self.table = table
-        self.hub = hub
         self.actions: dict[str, str] = {}
         self.render()
 
@@ -44,25 +41,33 @@ class SeatView(discord.ui.LayoutView):
     def compose(self) -> tuple[list[discord.ui.Item], list[str], Rows]:
         raise NotImplementedError
 
+    def outcome(self) -> str | None:
+        return None
+
     def render(self) -> None:
         self.actions = {}
+        self.clear_items()
+        if self.table.farewell is not None:
+            self.add_item(self.idle_card())
+            return
         items, footer, rows = self.compose()
         if footer:
             items = [*items, discord.ui.Separator(), discord.ui.TextDisplay("\n".join(footer))]
-        self.clear_items()
         self.add_item(discord.ui.Container(*items, accent_colour=self.colour))
-        if self.table.farewell is not None:
-            rows, self.actions = [list(self.hub)] if self.hub else [], {}
         for row in rows:
             self.add_item(discord.ui.ActionRow(*row))
+
+    def idle_card(self) -> discord.ui.Container:
+        parts = [self.table.game.title, f"<@{self.table.player_id}>", self.outcome()]
+        line = f"🪑 **{self.table.farewell}**　" + "・".join(part for part in parts if part)
+        return discord.ui.Container(discord.ui.TextDisplay(line), accent_colour=NEUTRAL_COLOUR)
 
     def header(self, thumbnail: str | None = None) -> discord.ui.Item:
         game = self.table.game
         return card_title(f"{ICONS[game.key]} {game.title}", f"<@{self.table.player_id}>", thumbnail=thumbnail)
 
     def tail(self) -> list[str]:
-        farewell, taunt = self.table.farewell, self.table.taunt
-        return [line for line in (farewell and note_text(("warn", farewell)), taunt and rana_says(taunt)) if line]
+        return [rana_says(self.table.taunt)] if self.table.taunt else []
 
     def button(
         self, action: str, label: str, style: discord.ButtonStyle = discord.ButtonStyle.secondary, emoji: str | None = None,
@@ -93,6 +98,10 @@ class BlackjackView(SeatView):
         hand = self.table.state.hand
         return BRAND_COLOUR if hand is None or not hand.done else BANNERS[hand.result()][1]
 
+    def outcome(self) -> str | None:
+        hand = self.table.state.hand
+        return BANNERS[hand.result()][0] if hand is not None and hand.done else None
+
     def compose(self) -> tuple[list[discord.ui.Item], list[str], Rows]:
         hand = self.table.state.hand
         items: list[discord.ui.Item] = [self.header()]
@@ -116,10 +125,10 @@ class BlackjackView(SeatView):
 
 class SlotsView(SeatView):
     def __init__(
-        self, table: LiveTable, hub: Sequence[discord.ui.Item] = (), *, frame: tuple[tuple[str, ...], ...] | None = None,
+        self, table: LiveTable, *, frame: tuple[tuple[str, ...], ...] | None = None,
     ) -> None:
         self.frame = frame
-        super().__init__(table, hub)
+        super().__init__(table)
 
     @property
     def colour(self) -> discord.Colour:
@@ -156,5 +165,5 @@ class SlotsView(SeatView):
 VIEWS: dict[str, type[SeatView]] = {Blackjack.key: BlackjackView, Slots.key: SlotsView}
 
 
-def seat_view(table: LiveTable, hub: Sequence[discord.ui.Item] = ()) -> SeatView:
-    return VIEWS[table.state.key](table, hub)
+def seat_view(table: LiveTable) -> SeatView:
+    return VIEWS[table.state.key](table)

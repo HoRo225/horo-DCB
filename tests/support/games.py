@@ -142,6 +142,9 @@ class FakeReply:
     async def show(self, table: LiveTable) -> None:
         self.calls.append(("show", Screen.of(table)))
 
+    async def opened(self, text: str, url: str | None) -> None:
+        self.calls.append(("opened", text, url))
+
     def answers(self) -> list[tuple[object, ...]]:
         return [call for call in self.calls if call[0] != "defer"]
 

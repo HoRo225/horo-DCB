@@ -84,7 +84,7 @@ class GamePickTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual((galleries(redrawn["view"]), redrawn["attachments"]), (1, ["hub.png"]))
         self.assertEqual(self.game.records.get_effect("interaction:900:table-send").payload["source_message_id"], 900)
         [reply] = self.presenter.replies
-        self.assertEqual(reply.answers(), [])
+        self.assertEqual(reply.answers(), [("opened", "賭桌已開啟。", f"https://discord.com/channels/{GUILD}/{CHANNEL}/100")])
 
     async def assert_reset_failure_is_quiet(self, **failure: Exception) -> None:
         with self.assertLogs(level="WARNING") as logs:

@@ -15,7 +15,6 @@ from tests.support import testing
 from tests.support.games import deck
 
 AVATAR = "https://cdn.example.com/a.png"
-HUB = [discord.ui.Button(label="前往遊戲大廳", url="https://discord.com/channels/5/10/50")]
 
 
 def table(state, **fields) -> LiveTable:
@@ -105,15 +104,20 @@ class ControlTests(unittest.TestCase):
         [rules] = [item for item in view.walk_children() if isinstance(item, discord.ui.Button) and item.label == "完整規則"]
         self.assertEqual(rules.style, discord.ButtonStyle.secondary)
 
-    def test_closed_idle_table_shows_its_farewell_and_the_way_back(self) -> None:
+    def test_closed_idle_table_folds_into_one_line_without_controls(self) -> None:
         settled = Blackjack(Round(deck("10", "9", "8", "7", "5"))).settle()
-        view = seat_view(table(settled, farewell="閒置 10 分鐘，已代你停牌結算，賭桌關閉。"), HUB)
-        self.assertIn(f"{ICONS['warn']} 閒置 10 分鐘，已代你停牌結算，賭桌關閉。", testing.text(view))
-        self.assertIn("你輸了", testing.text(view))
-        self.assertEqual([(button.label, button.url) for button in view.walk_children() if isinstance(button, discord.ui.Button)],
-                         [("前往遊戲大廳", "https://discord.com/channels/5/10/50")])
+        view = seat_view(table(settled, farewell="已閒置結束", taunt="下次再來"))
+        self.assertEqual(testing.text(view), "🪑 **已閒置結束**　21 點・<@1>・你輸了")
+        self.assertEqual(colour(view), NEUTRAL_COLOUR)
+        self.assertEqual([item for item in view.walk_children()
+                          if isinstance(item, (discord.ui.Button, discord.ui.Select, discord.ui.ActionRow))], [])
         self.assertEqual(view.actions, {})
-        self.assertEqual(labels(seat_view(table(settled, farewell="x"))), [])
+
+    def test_finished_round_without_farewell_keeps_its_full_card(self) -> None:
+        settled = Blackjack(Round(deck("10", "9", "8", "7", "5"))).settle()
+        view = seat_view(table(settled))
+        self.assertIn("# 你輸了", testing.text(view))
+        self.assertEqual(labels(view), ["再來一局", "完整規則", "離桌"])
 
     def test_table_views_are_never_stored_for_dispatch(self) -> None:
         for key in GAMES:
