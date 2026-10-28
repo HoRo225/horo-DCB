@@ -1,17 +1,38 @@
 services:
   codex:
-    build: .
-    image: horo-dcb:latest
+    build:
+      context: docker
+      dockerfile: codex.Dockerfile
+    image: horo-dcb-codex:latest
     logging:
       driver: local
-    command: ["python", "-m", "src.codex.bridge", "serve"]
-    environment:
-      CODEX_HOME: /app/codex
-      CODEX_BRIDGE_TOKEN: ${CODEX_BRIDGE_TOKEN}
+    command:
+      - codex
+      - -c
+      - forced_login_method="chatgpt"
+      - -c
+      - cli_auth_credentials_store="file"
+      - -c
+      - agents.enabled=false
+      - -c
+      - mcp_servers={}
+      - -c
+      - shell_environment_policy.inherit="none"
+      - -c
+      - check_for_update_on_startup=false
+      - app-server
+      - --listen
+      - ws://0.0.0.0:8765
+      - --ws-auth
+      - capability-token
+      - --ws-token-file
+      - /run/secrets/codex_ws_token
     volumes:
       - codex-home:/app/codex
+    secrets:
+      - codex_ws_token
     healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8765/livez')"]
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8765/readyz"]
       interval: 60s
       start_interval: 1s
       timeout: 5s
@@ -22,17 +43,23 @@ services:
 
   bot:
     build: .
-    image: horo-dcb:latest
+    image: horo-dcb-bot:latest
     logging:
       driver: local
     env_file: .env
     volumes:
       - data:/app/data
+    secrets:
+      - codex_ws_token
     depends_on:
       codex:
         condition: service_healthy
     stop_grace_period: 30s
     restart: unless-stopped
+
+secrets:
+  codex_ws_token:
+    file: ./secrets/codex_ws_token
 
 volumes:
   codex-home:

@@ -5,8 +5,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends fonts-noto-colo
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-RUN useradd --uid 10001 --create-home app && mkdir -p /app/data /app/codex /app/codex-workspace && chown app:app /app/data /app/codex /app/codex-workspace
-COPY codex/requirements.toml /etc/codex/requirements.toml
+RUN useradd --uid 10001 --create-home app && mkdir -p /app/data && chown app:app /app/data
 COPY src ./src
 RUN python -m compileall -q src
 
