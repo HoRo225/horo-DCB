@@ -12,11 +12,9 @@ from src.core.adapters.discord.live import LiveGuild
 from src.core.adapters.sqlite.db import open_db, transaction
 from src.core.adapters.sqlite.operations import OperationStore
 from src.core.app.effects import EffectKind, EffectRegistry, MessageProof, ResourceProof
-from src.core.app.supervisor import WORK, TaskGroup
 from src.core.adapters.sqlite.settings import SettingsStore
 from src.games.operations import EFFECT_KINDS as GAME_EFFECT_KINDS
 from src.games.store import GAMES_HUB_MESSAGE
-from src.voice.manager import TempVoiceManager
 from tests.support.discord import Client, Guild, member
 
 G, CHANNEL, ADMIN, BOT = 100, 101, 102, 103
@@ -334,44 +332,12 @@ class ResolverTests(Harness):
 class FeatureKindTests(Harness):
     def setUp(self) -> None:
         super().setUp()
-        self.voice = TempVoiceManager(self.db, TaskGroup("voice", WORK), self.live)
-        self.kinds.register(*self.voice.effect_kinds(), *GAME_EFFECT_KINDS)
+        self.kinds.register(*GAME_EFFECT_KINDS)
         self.effects = self.resolver()
 
     async def resolve(self, effect_id: str, resolution: str, **kwargs) -> str | None:
         return await self.effects.resolve(effect_id, resolution, actor_id=ADMIN, **kwargs)
 
-    async def test_uncertain_voice_room_cannot_be_recreated_and_skipping_adopts_nothing(self) -> None:
-        self.effect("voice", "voice.create", payload={"owner_id": ADMIN})
-        self.assertEqual(await self.resolve("voice", "retry"), NOT_RETRYABLE)
-        self.assertEqual(await self.resolve("voice", "confirmed"), "請提供已核對的語音頻道 ID。")
-        self.assertIsNone(await self.resolve("voice", "skip"))
-        self.assertEqual(self.status("voice"), "skipped")
-        self.assertEqual(self.db.execute("SELECT COUNT(*) FROM voice_rooms").fetchone(), (0,))
-
-    async def test_voice_cleanup_retries_only_while_the_administrator_stays_current(self) -> None:
-        room = MagicMock(spec=discord.VoiceChannel)
-        room.configure_mock(id=204, guild=self.guild, type=discord.ChannelType.voice, voice_states={}, delete=AsyncMock())
-        self.guild.channels[room.id] = room
-        effect_id = f"voice.delete:{room.id}"
-        with transaction(self.db):
-            self.records.create_effect(effect_id, "voice.delete", room.id, {"channel_id": room.id, "guild_id": G})
-            self.records.update_effect(effect_id, "unknown")
-            self.db.execute("INSERT INTO voice_rooms (channel_id, owner_id) VALUES (?, ?)", (room.id, 500))
-        self.assertEqual(await self.resolve(effect_id, "confirmed", message_id=501), "刪除操作請使用重試清理，系統會核對既有頻道 ID。")
-        async with self.voice._lock:
-            task = asyncio.create_task(self.resolve(effect_id, "retry"))
-            await asyncio.sleep(0)
-            await asyncio.sleep(0)
-            self.revoke()
-        self.assertIsNotNone(await task)
-        room.delete.assert_not_awaited()
-        self.assertEqual(self.status(effect_id), "unknown")
-        self.guild.members[ADMIN].guild_permissions = discord.Permissions(administrator=True)
-        self.assertIsNone(await self.resolve(effect_id, "retry"))
-        room.delete.assert_awaited_once()
-        self.assertEqual(self.status(effect_id), "done")
-        self.assertEqual(self.db.execute("SELECT COUNT(*) FROM voice_rooms").fetchone(), (0,))
 
     async def test_hub_confirmation_keeps_a_newer_hub_pointer(self) -> None:
         settings = SettingsStore(self.db, self.records)

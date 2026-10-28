@@ -28,7 +28,7 @@ from src.steam.adapters.discord.views import build_offer_view
 from src.games.store import GAMES_HUB_MESSAGE
 from src.ai.access import AI_ENABLED
 from src.steam.adapters.sqlite.store import STEAM_ENABLED, STEAM_ROLE_IDS
-from src.voice.manager import VOICE_ENABLED
+from src.voice.adapters.sqlite.store import VOICE_ENABLED
 
 G, OWNER, MEMBER = 100, 200, 300
 

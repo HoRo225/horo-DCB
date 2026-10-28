@@ -63,7 +63,9 @@ class SettingsContractTests(unittest.TestCase):
         from src.steam.adapters.discord.announcer import DiscordAnnouncer
         from src.steam.adapters.http.provider import SteamOfferProvider
         from src.steam.adapters.sqlite.store import STEAM_ENABLED, SqliteSteamStore
-        from src.voice.manager import VOICE_ENABLED, TempVoiceManager
+        from src.voice import Voice
+        from src.voice.adapters.discord.gateway import DiscordVoiceGateway
+        from src.voice.adapters.sqlite.store import VOICE_ENABLED, SqliteVoiceStore
 
         db = open_db(":memory:")
         self.addCleanup(db.close)
@@ -72,7 +74,7 @@ class SettingsContractTests(unittest.TestCase):
         live = LiveGuild(client, 1, lambda: False)
         components = {
             AI_ENABLED: AiSettings(db, 1),
-            VOICE_ENABLED: TempVoiceManager(db, TaskGroup("voice", WORK), live),
+            VOICE_ENABLED: Voice(SqliteVoiceStore(db), DiscordVoiceGateway(live), TaskGroup("voice", WORK)),
             STEAM_ENABLED: Steam(SqliteSteamStore(db), SteamOfferProvider(), DiscordAnnouncer(client, live),
                                  TaskGroup("steam", SCHEDULED)),
         }

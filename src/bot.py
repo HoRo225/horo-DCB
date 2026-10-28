@@ -39,9 +39,12 @@ from src.core.adapters.discord.shutdown import Shutdown
 from src.core.app.effects import EffectRegistry
 from src.core.app.maintenance import Maintenance
 from src.core.app.supervisor import PRESENTATION, REQUEST, SCHEDULED, WORK, Supervisor
-from src.voice.actions import voice_actions
-from src.voice.cog import VoiceCog
-from src.voice.manager import TempVoiceManager
+from src.voice import Voice
+from src.voice.adapters.discord.actions import voice_actions
+from src.voice.adapters.discord.cog import VoiceCog
+from src.voice.adapters.discord.effects import voice_effect_kinds
+from src.voice.adapters.discord.gateway import DiscordVoiceGateway
+from src.voice.adapters.sqlite.store import SqliteVoiceStore
 from src.core.adapters.discord.watchdog import install_stack_dump_signal, run_watchdog
 
 
@@ -79,7 +82,7 @@ class HoroBot(commands.Bot):
         self.access_service = AiAccessService(
             self.ai_settings, codex, supervisor.group("access", WORK), role_ids_for_user=self._member_roles,
         )
-        self.temp_voice = TempVoiceManager(db, supervisor.group("voice", WORK), live)
+        self.temp_voice = voice = Voice(SqliteVoiceStore(db), DiscordVoiceGateway(live), supervisor.group("voice", WORK))
         steam_store = SqliteSteamStore(db)
         self.steam = steam = Steam(
             steam_store, SteamOfferProvider(), DiscordAnnouncer(self, live), supervisor.group("steam", SCHEDULED),
@@ -93,16 +96,16 @@ class HoroBot(commands.Bot):
         self.receipts = DiscordReceipts(self.operations, live, self, registry)
         kinds = EffectRegistry()
         kinds.register(
-            *self.temp_voice.effect_kinds(), *steam_effect_kinds(steam, steam_store), *GAME_EFFECT_KINDS,
+            *voice_effect_kinds(voice), *steam_effect_kinds(steam, steam_store), *GAME_EFFECT_KINDS,
             self.receipts.effect_kind(),
         )
         self.effects = EffectResolver(self.operations, kinds, live, self)
         registry.register(
             *game_actions(self.game_operations, live),
             ai_actions(self.ai_settings, self.access_service, codex.get_models, lambda: self.games.channel_id),
-            voice_actions(self.temp_voice, live),
+            voice_actions(voice, live),
             steam_actions(steam, live),
-            admin_actions(lambda: self.ai_settings.enabled, lambda: self.temp_voice.enabled,
+            admin_actions(lambda: self.ai_settings.enabled, lambda: voice.enabled,
                           lambda: steam.status().running, lambda: len(self.effects.pending())),
             effect_actions(self.effects),
         )
@@ -114,7 +117,7 @@ class HoroBot(commands.Bot):
                 (("access", self.access_service), ("codex", codex)),
                 (("actions", self.actions),),
                 (("steam", steam),),
-                (("voice", self.temp_voice),),
+                (("voice", voice),),
                 (("panel", self.admin_panels),),
             ),
             interrupt=lambda: codex.cancel(guild_id),
@@ -134,7 +137,7 @@ class HoroBot(commands.Bot):
         supervisor, live = self.supervisor, self.live
         for cog in (
             GamesCog(self, supervisor.group("games.cog", SCHEDULED), live),
-            VoiceCog(self, live),
+            VoiceCog(self.temp_voice, live),
             AdminCog(self, live),
             AiCog(self, live, requests=supervisor.group("ai", REQUEST), cleanups=supervisor.group("ai", PRESENTATION),
                   actions=self.actions),

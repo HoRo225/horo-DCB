@@ -21,7 +21,7 @@ from src.core.app.supervisor import PRESENTATION, WORK
 from src.ai.access import AI_ENABLED
 from src.games.store import GAMES_HUB_MESSAGE
 from src.steam.adapters.sqlite.store import STEAM_CHANNEL_ID
-from src.voice.manager import VOICE_ENABLED, VOICE_ENTRY_CHANNEL_ID
+from src.voice.adapters.sqlite.store import VOICE_ENABLED, VOICE_ENTRY_CHANNEL_ID
 
 G, OWNER = 100, 200
 
@@ -408,7 +408,7 @@ class AdminPanelTest(unittest.IsolatedAsyncioTestCase):
             self.assertTrue(voice.enabled)
             self.assertIn("✅ 已開啟臨時語音。", self.screen(clicked))
             reconcile.assert_awaited_once()
-            self.assertIs(reconcile.await_args.args[0], self.guild)
+            self.assertTrue(callable(reconcile.await_args.kwargs["still_current"]))
 
             self.view.toggled_at.clear()
             clicked = await self.click(self.button("關閉臨時語音"))
@@ -457,7 +457,7 @@ class AdminPanelTest(unittest.IsolatedAsyncioTestCase):
         with patch.object(voice, "bind_entry", wraps=voice.bind_entry) as bind_entry:
             clicked = await self.choose(self.select("選擇臨時語音入口頻道"), resolved(entry))
             bind_entry.assert_awaited_once()
-            self.assertEqual(bind_entry.await_args.args, (self.guild, entry))
+            self.assertEqual(bind_entry.await_args.args, (entry.id,))
             self.assertTrue(callable(bind_entry.await_args.kwargs["still_current"]))
         self.assertIn("已綁定入口；開啟臨時語音後生效。", self.screen(clicked))
 

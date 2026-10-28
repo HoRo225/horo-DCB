@@ -16,7 +16,8 @@ from src.admin.pages.common import (
     no_guild_note,
 )
 from src.core.adapters.discord.brand import ICONS
-from src.voice.manager import TempVoiceStatus
+from src.core.adapters.discord.channels import is_voice_channel
+from src.voice import VoiceStatus
 
 if TYPE_CHECKING:
     from src.admin.panel import AdminPanelView
@@ -24,7 +25,7 @@ if TYPE_CHECKING:
 
 @dataclass(frozen=True, slots=True)
 class _VoiceState:
-    status: TempVoiceStatus
+    status: VoiceStatus
     problem: str | None
     label: str
     detail: str
@@ -36,7 +37,7 @@ class _VoiceState:
         return self.detail or f"{self.entry} · {self.status.room_count} 個追蹤中"
 
 
-def voice_entry_problem(view, status: TempVoiceStatus) -> str | None:
+def voice_entry_problem(view, status: VoiceStatus) -> str | None:
     if not view.temp_voice.enabled:
         return None
     guild = view.live.guild()
@@ -45,7 +46,7 @@ def voice_entry_problem(view, status: TempVoiceStatus) -> str | None:
 
     if status.entry_channel_id is None:
         return None
-    return view.temp_voice.entry_problem(guild)
+    return view.temp_voice.entry_problem()
 
 
 def voice_state(view: AdminPanelView) -> _VoiceState:
@@ -121,7 +122,6 @@ async def _after_voice_toggle(
         return None
     try:
         await view.temp_voice.reconcile(
-            guild,
             still_current=lambda: view.is_current(operation) and view.live.guild() is guild,
         )
     except Exception:
@@ -141,7 +141,8 @@ async def handle_voice_entry_select(
         guild = view.live.guild()
         if guild is None:
             return lambda: render_voice(view, no_guild_note())
-        problem = await view.temp_voice.bind_entry(guild, channel, still_current=lambda: view.is_current(operation) and view.live.guild() is guild, operation_id=interaction_operation_id(interaction))
+        chosen = channel.id if is_voice_channel(channel) and channel.guild.id == guild.id else None
+        problem = await view.temp_voice.bind_entry(chosen, still_current=lambda: view.is_current(operation) and view.live.guild() is guild, operation_id=interaction_operation_id(interaction))
         if problem is not None:
             return lambda: render_voice(view, ("warn", problem))
         if not view.temp_voice.enabled:
@@ -159,7 +160,6 @@ async def _voice_sync(view: AdminPanelView, operation: int) -> Callable[[], None
         return lambda: render_voice(view, no_guild_note())
     try:
         await view.temp_voice.reconcile(
-            guild,
             still_current=lambda: view.is_current(operation) and view.live.guild() is guild,
         )
     except Exception:
