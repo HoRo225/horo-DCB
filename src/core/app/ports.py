@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from contextlib import AbstractContextManager
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Protocol
 
 from src.core.domain.actions import Target
@@ -22,6 +22,7 @@ class Actor:
     avatar_url: str
     role_ids: frozenset[int]
     admin: bool
+    member: object = field(default=None, compare=False, repr=False)
 
 
 @dataclass(frozen=True, slots=True)

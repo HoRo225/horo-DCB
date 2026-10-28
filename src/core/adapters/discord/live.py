@@ -52,6 +52,7 @@ def as_actor(member: discord.Member) -> Actor:
         avatar_url=member.display_avatar.url,
         role_ids=member_role_ids(member),
         admin=bool(member.guild_permissions.administrator),
+        member=member,
     )
 
 
@@ -60,7 +61,6 @@ class LiveGuild:
         self._client = client
         self.guild_id = guild_id
         self._closing = closing
-        self._fetched: dict[int, discord.Member] = {}
 
     def unavailable_reason(self, guild_id: int | None) -> str | None:
         if self._closing():
@@ -124,7 +124,6 @@ class LiveGuild:
             return None
         if self.channel(channel_id) is None:
             return None
-        self._fetched[user_id] = member
         return as_actor(member)
 
     def send_problem(self, channel_id: int, user_id: int) -> str | None:
@@ -138,8 +137,7 @@ class LiveGuild:
         return None
 
     def _member_for(self, actor: Actor) -> discord.Member | None:
-        fetched = self._fetched.get(actor.user_id)
-        return fetched if fetched is not None and as_actor(fetched) == actor else self.member(actor.user_id)
+        return actor.member if actor.member is not None else self.member(actor.user_id)
 
     def act_problem(self, guild_id: int | None, channel_id: int, actor: Actor) -> str | None:
         guild = self.guild()
