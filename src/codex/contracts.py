@@ -118,3 +118,36 @@ def parse_intent_json(text: str) -> IntentDecision:
             raise ValueError("duplicate intent field")
         return result
     return parse_intent_decision(json.loads(text, object_pairs_hook=pairs))
+
+
+def intent_schema() -> dict[str, object]:
+    primitive: dict[str, dict[str, object]] = {
+        "id": {"type": "integer", "minimum": 1},
+        "bool": {"type": "boolean"}, "text": {"type": "string"},
+        "ids": {"type": "array", "items": {"type": "integer", "minimum": 1}, "maxItems": 25},
+        "game": {"type": "string", "enum": list(GAMES)},
+        "resolution": {"type": "string", "enum": ["confirmed", "retry", "skip"]},
+    }
+    model_choice = {"type": "object", "properties": {"model": {"type": "string"}, "effort": {"type": ["string", "null"]}},
+                    "required": ["model", "effort"], "additionalProperties": False}
+    primitive["choice"] = model_choice
+    primitive["nullable_choice"] = {"anyOf": [model_choice, {"type": "null"}]}
+    choices = []
+    for name, params in ACTION_PARAMETERS.items():
+        properties = {key: primitive[kind] if required else {"anyOf": [primitive[kind], {"type": "null"}]}
+                      for key, (kind, required) in params.items()}
+        choices.append({
+            "type": "object", "properties": {
+                "name": {"type": "string", "enum": [name]},
+                "params": {"type": "object", "properties": properties, "required": list(properties), "additionalProperties": False},
+            }, "required": ["name", "params"], "additionalProperties": False,
+        })
+    return {
+        "title": "IntentEnvelope", "type": "object", "additionalProperties": False,
+        "required": ["kind", "actions", "question"],
+        "properties": {
+            "kind": {"type": "string", "enum": ["chat", "plan", "clarification"]},
+            "actions": {"type": "array", "items": {"anyOf": choices}, "maxItems": MAX_ACTIONS},
+            "question": {"type": "string"},
+        },
+    }

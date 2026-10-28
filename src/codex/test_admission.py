@@ -4,7 +4,7 @@ import asyncio
 import unittest
 
 from src.codex.admission import MAX_ACTIVE_KEYS, Admission
-from src.codex.protocol import CodexBridgeError
+from src.codex.protocol import CodexError
 
 A = "guild:1:channel:2:user:3"
 B = "guild:1:thread:9"
@@ -34,7 +34,7 @@ class AdmissionTest(unittest.IsolatedAsyncioTestCase):
 
     async def claim_error(self, key: str, **kwargs: object) -> str:
         kwargs.setdefault("deadline", self.deadline)
-        with self.assertRaises(CodexBridgeError) as caught:
+        with self.assertRaises(CodexError) as caught:
             async with self.admission.claim(key, **kwargs):
                 pass
         return caught.exception.code

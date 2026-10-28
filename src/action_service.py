@@ -12,7 +12,7 @@ import discord
 
 from src.codex.contracts import ACTION_NAMES, GAME_ACTIONS, IntentDecision, parse_intent_decision
 from src.codex.model_settings import parse_model_settings, resolve_model_settings
-from src.codex.protocol import CodexBridgeError
+from src.codex.protocol import CodexError
 from src.ai.private_results import TTL_SECONDS, PrivateResults
 from src.ai.query_views import help_view, info_card
 from src.brand import BRAND_COLOUR, ICONS, WARN_COLOUR, card_title, rana_says, tone_colour
@@ -280,7 +280,7 @@ class ActionService:
         try:
             if problem := await self._preflight(source, decision):
                 return [self._failure("forbidden", problem)]
-        except (ValueError, discord.HTTPException, CodexBridgeError):
+        except (ValueError, discord.HTTPException, CodexError):
             return [self._failure("invalid_plan", "無法確認完整操作清單，未執行任何操作。")]
         request = self.records.register_request(source.id, self._actor(source).id, source.guild.id, source.channel.id,
                                                 {"decision": decision.to_payload(), "game": game_snapshot})
@@ -365,7 +365,7 @@ class ActionService:
             if self.bot.ai_settings.set_enabled(params["enabled"], operation_id=operation_id) and was_enabled and not params["enabled"]:
                 try:
                     await self.bot.codex.cancel(guild.id)
-                except CodexBridgeError:
+                except CodexError:
                     logging.exception("AI action disabled AI but could not stop requests in flight.")
         elif name == "ai_display":
             self.bot.ai_settings.set_display(params["enabled"], operation_id=operation_id)

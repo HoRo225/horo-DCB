@@ -4,8 +4,6 @@ import re
 from collections.abc import Iterable
 from dataclasses import dataclass
 
-from src.config import is_positive_int
-
 _IDENTIFIER = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}\Z")
 
 
@@ -53,8 +51,6 @@ def parse_model_settings(value: object) -> ModelSettings:
         parse_model_choice(value["primary"]),
         None if value["fallback"] is None else parse_model_choice(value["fallback"]),
     )
-
-
 @dataclass(frozen=True, slots=True)
 class ModelInfo:
     model: str
@@ -62,15 +58,6 @@ class ModelInfo:
     default_effort: str
     supported_efforts: tuple[str, ...]
     input_modalities: tuple[str, ...]
-
-    def to_payload(self) -> dict[str, object]:
-        return {
-            "model": self.model,
-            "display_name": self.display_name,
-            "default_effort": self.default_effort,
-            "supported_efforts": list(self.supported_efforts),
-            "input_modalities": list(self.input_modalities),
-        }
 
 
 def find_model(catalog: Iterable[ModelInfo], model: str | None) -> ModelInfo | None:
@@ -104,38 +91,31 @@ def with_effort(settings: ModelSettings, effort: str, catalog: Iterable[ModelInf
     return ModelSettings(choose(settings.primary), choose(settings.fallback) if settings.fallback else None)
 
 
-def parse_model_catalog(value: object) -> tuple[ModelInfo, ...]:
-    if (
-        not isinstance(value, dict)
-        or set(value) != {"models", "fetched_at"}
-        or not is_positive_int(value["fetched_at"])
-        or not isinstance(value["models"], list)
-        or not value["models"]
-        or len(value["models"]) > 1000
-    ):
+def parse_model_list(entries: object) -> tuple[ModelInfo, ...]:
+    if not isinstance(entries, list) or not entries or len(entries) > 1000:
         raise ValueError("invalid model catalog")
     result: list[ModelInfo] = []
     seen: set[str] = set()
-    fields = {"model", "display_name", "default_effort", "supported_efforts", "input_modalities"}
-    for raw in value["models"]:
-        if not isinstance(raw, dict) or set(raw) != fields:
+    for raw in entries:
+        if not isinstance(raw, dict):
             raise ValueError("invalid model catalog entry")
-        model = _identifier(raw["model"])
-        name = raw["display_name"]
+        model = _identifier(raw.get("model"))
+        name = raw.get("displayName")
         if not isinstance(name, str) or not name.strip() or len(name) > 200 or model in seen:
             raise ValueError("invalid model catalog name")
-        efforts = raw["supported_efforts"]
-        modalities = raw["input_modalities"]
+        efforts = raw.get("supportedReasoningEfforts")
+        modalities = raw.get("inputModalities") or []
         if (
             not isinstance(efforts, list)
             or len(efforts) > 25
             or not isinstance(modalities, list)
             or len(modalities) > 25
+            or any(not isinstance(option, dict) for option in efforts)
         ):
             raise ValueError("invalid model capabilities")
-        supported = tuple(_identifier(item) for item in efforts)
+        supported = tuple(_identifier(option.get("reasoningEffort")) for option in efforts)
         inputs = tuple(_identifier(item) for item in modalities)
-        default = _identifier(raw["default_effort"])
+        default = _identifier(raw.get("defaultReasoningEffort"))
         if (
             len(set(supported)) != len(supported)
             or len(set(inputs)) != len(inputs)

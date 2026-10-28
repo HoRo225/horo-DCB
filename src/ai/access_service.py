@@ -6,15 +6,15 @@ from collections.abc import Callable
 from typing import Literal
 
 from src.ai.access import AiSettings
-from src.ai.client import CodexBridgeClient
-from src.codex.protocol import CodexBridgeError, scope_matches
+from src.codex.service import CodexService
+from src.codex.protocol import CodexError, scope_matches
 from src.tasks import cancel_all, track, wait_until
 
 AccessChangeOutcome = Literal["unchanged", "updated"]
 
 
 class AiAccessService:
-    def __init__(self, access: AiSettings, client: CodexBridgeClient, *, role_ids_for_user: Callable[[int], frozenset[int] | None] | None = None) -> None:
+    def __init__(self, access: AiSettings, client: CodexService, *, role_ids_for_user: Callable[[int], frozenset[int] | None] | None = None) -> None:
         self.access = access
         self.client = client
         self._tasks: set[asyncio.Task[AccessChangeOutcome]] = set()
@@ -66,7 +66,7 @@ class AiAccessService:
                         )
                     try:
                         await self.client.cancel_revoked(guild_id, in_removed)
-                    except CodexBridgeError:
+                    except CodexError:
                         logging.exception("AI requests in removed allowlist channels did not stop in time.")
                 self.access.set_allowlist(guild_id, selected, roles=roles, operation_id=operation_id)
                 if roles and removed:

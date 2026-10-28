@@ -6,7 +6,7 @@ from collections.abc import Callable
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 
-from src.codex.protocol import CLEANUP_SECONDS, CodexBridgeError, scope_matches
+from src.codex.protocol import CLEANUP_SECONDS, CodexError, scope_matches
 from src.tasks import cancel_all, consume_task_exception, wait_until
 
 MAX_ACTIVE_KEYS = 4
@@ -61,18 +61,18 @@ class Admission:
         parent_channel_id: int | None = None,
     ):
         if self.closed:
-            raise CodexBridgeError("unavailable")
+            raise CodexError("unavailable")
         immediate = len(self.active_keys) < MAX_ACTIVE_KEYS and key not in self.active_keys
         if not immediate and (
             len(self.waiting) >= self.max_waiters or any(job.key == key for job in self.waiting)
         ):
-            raise CodexBridgeError("busy")
+            raise CodexError("busy")
         task = asyncio.current_task()
         assert task is not None
         loop = asyncio.get_running_loop()
         accepted_at = loop.time()
         if deadline <= accepted_at:
-            raise CodexBridgeError("timeout")
+            raise CodexError("timeout")
         job = AcceptedJob(
             task=task,
             key=key,
@@ -95,11 +95,11 @@ class Admission:
                     min(queue_timeout_seconds, max(0, deadline - loop.time())),
                 )
             except TimeoutError:
-                raise CodexBridgeError("timeout") from None
+                raise CodexError("timeout") from None
             if not job.current:
-                raise CodexBridgeError("revoked")
+                raise CodexError("revoked")
             if loop.time() >= deadline:
-                raise CodexBridgeError("timeout")
+                raise CodexError("timeout")
             yield job
         finally:
             self.jobs.pop(task, None)
@@ -140,4 +140,4 @@ class Admission:
         for task in targets - pending:
             consume_task_exception(task)
         if pending:
-            raise CodexBridgeError("unavailable")
+            raise CodexError("unavailable")

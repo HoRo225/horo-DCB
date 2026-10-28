@@ -17,7 +17,7 @@ from src.ai.discord import TIPPED, handle_message
 from src.ai.formatting import codex_error_text
 from src.codex.model_settings import DEFAULT_MODEL_SETTINGS
 from src.ai.output import CARD_CLEANUPS
-from src.codex.protocol import MAX_PROMPT_CHARACTERS, CodexBridgeError, CodexChatReply
+from src.codex.protocol import MAX_PROMPT_CHARACTERS, CodexError, CodexChatReply
 from src.tasks import track
 from src.testing import text as _text
 
@@ -267,7 +267,7 @@ class HandleMessageTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_bridge_busy_turns_progress_card_into_error(self) -> None:
         message = _message()
-        codex = _Codex(admission_error=CodexBridgeError("busy"))
+        codex = _Codex(admission_error=CodexError("busy"))
         await _handle(message, codex)
         self.assertIn(
             codex_error_text("busy", "霍蘿"), _text(message.progress.edit.await_args.kwargs["view"])
@@ -277,7 +277,7 @@ class HandleMessageTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_bridge_token_error_says_misconfigured(self) -> None:
         message = _message()
-        codex = _Codex(admission_error=CodexBridgeError("unauthorized"))
+        codex = _Codex(admission_error=CodexError("unauthorized"))
         await _handle(message, codex)
         card = _text(message.progress.edit.await_args.kwargs["view"])
         self.assertIn(codex_error_text("unauthorized", "霍蘿"), card)
@@ -287,14 +287,14 @@ class HandleMessageTests(unittest.IsolatedAsyncioTestCase):
         message = _message()
         message.progress.edit.side_effect = discord.HTTPException(MagicMock(status=500), "down")
         with self.assertLogs(level="ERROR") as logs:
-            await _handle(message, _Codex(admission_error=CodexBridgeError("busy")))
+            await _handle(message, _Codex(admission_error=CodexError("busy")))
         self.assertIn("Failed to send Discord AI status reply.", "\n".join(logs.output))
         message.progress.delete.assert_awaited_once()
 
     async def test_busy_without_progress_card_replies_in_channel(self) -> None:
         message = _message()
         message.reply.side_effect = TimeoutError
-        await _handle(message, _Codex(admission_error=CodexBridgeError("busy")))
+        await _handle(message, _Codex(admission_error=CodexError("busy")))
         sent = message.channel.send.await_args.kwargs
         self.assertIn(codex_error_text("busy", "霍蘿"), _text(sent["view"]))
         self.assertFalse(sent["reference"].fail_if_not_exists)
@@ -454,7 +454,7 @@ class AskTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(codex.generate_once.await_args.kwargs["effort"])
         self.assertEqual(await ask(codex, _Access(), "key", "問題", lambda: True, effort="low"), "最終答案")
         self.assertEqual(codex.generate_once.await_args.kwargs["effort"], "low")
-        codex.generate_once.side_effect = CodexBridgeError("unavailable")
+        codex.generate_once.side_effect = CodexError("unavailable")
         with self.assertLogs(level="ERROR"):
             self.assertIsNone(await ask(codex, _Access(), "key", "問題", lambda: True))
 

@@ -8,7 +8,7 @@ import discord
 from src.action_service import ActionService, _static_action_problem
 from src.ai.access import AiSettings
 from src.codex.contracts import GAME_ACTIONS, Action, IntentDecision
-from src.codex.protocol import CodexBridgeError
+from src.codex.protocol import CodexError
 from src.brand import ICONS
 from src.games.operations import GameOperations
 from src.games.store import GameStore
@@ -252,7 +252,7 @@ class ActionServiceTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_failed_cancel_after_disable_is_only_logged(self):
         self.actor.guild_permissions.administrator = True
-        self.bot.codex = SimpleNamespace(cancel=AsyncMock(side_effect=CodexBridgeError("unavailable")))
+        self.bot.codex = SimpleNamespace(cancel=AsyncMock(side_effect=CodexError("unavailable")))
         with self.assertLogs(level="ERROR"):
             result = await self.execute(Action("ai_enabled", {"enabled": False}))
         self.assertTrue(result[0]["ok"])
@@ -336,7 +336,7 @@ class ActionServiceTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_codex_failure_while_checking_models_is_an_invalid_plan(self):
         self.actor.guild_permissions.administrator = True
-        self.bot.codex = SimpleNamespace(get_models=AsyncMock(side_effect=CodexBridgeError("unavailable")))
+        self.bot.codex = SimpleNamespace(get_models=AsyncMock(side_effect=CodexError("unavailable")))
         [result] = await self.execute(Action("ai_models", {"primary": {"model": "gpt-5", "effort": None}, "fallback": None}))
         self.assertEqual(result["code"], "invalid_plan")
         self.assertIsNone(self.service.records.get_request(1000))

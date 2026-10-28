@@ -19,10 +19,10 @@ from src.admin.pages.common import (
     spacer,
 )
 from src.ai.access import MAX_CODEX_ALLOWED_CHANNELS
-from src.ai.client import CodexBridgeClient
 from src.ai.formatting import codex_error_text
-from src.codex.protocol import EMPTY_CODEX_RUNTIME_STATUS, CodexBridgeError, CodexRuntimeStatus
+from src.codex.protocol import CodexError, CodexRuntimeStatus
 from src.codex.rate_limits import CodexRateLimits
+from src.codex.service import CodexService
 from src.brand import BRAND_COLOUR, ICONS, bar
 from src.discord_utils import (
     VIEW_AND_SEND,
@@ -47,7 +47,7 @@ class _AiState:
 
 @dataclass(slots=True)
 class AiReadings:
-    codex_status: CodexRuntimeStatus = EMPTY_CODEX_RUNTIME_STATUS
+    codex_status: CodexRuntimeStatus = CodexRuntimeStatus()
     rate_limits: CodexRateLimits = CodexRateLimits()
 
 
@@ -66,15 +66,15 @@ def rate_visible(view: AdminPanelView) -> bool:
     return view.ai_settings.enabled
 
 
-async def load_codex_status(client: CodexBridgeClient) -> CodexRuntimeStatus:
+async def load_codex_status(client: CodexService) -> CodexRuntimeStatus:
     try:
         return await client.get_runtime_status()
     except Exception:
         logging.exception("Admin panel failed to read Codex status.")
-        return EMPTY_CODEX_RUNTIME_STATUS
+        return CodexRuntimeStatus()
 
 
-async def load_codex_rate_limits(client: CodexBridgeClient) -> CodexRateLimits:
+async def load_codex_rate_limits(client: CodexService) -> CodexRateLimits:
     try:
         return await client.get_rate_limits()
     except Exception:
@@ -214,18 +214,16 @@ def ai_state(view: AdminPanelView) -> _AiState:
         label, detail = "需要處理", "白名單身分組尚未設定"
     elif allowlist_detail is not None:
         label, detail = "需要處理", allowlist_detail
-    elif not status.available and status.reason == "unavailable":
-        label, detail = "需要處理", "Codex bridge 無法連線"
-        next_step = view.bot_text("請確認", "服務正在執行且連線設定正確，再重新整理。")
+    elif status.reason == "unavailable":
+        label, detail = "需要處理", "codex 無法連線"
+        next_step = "請確認 codex 服務正在執行且連線 token 設定正確，再重新整理。"
     elif not status.ready:
         label, detail = (
             "需要處理",
             {
-                "initializing": view.bot_text(after="服務初始化中"),
+                "connecting": view.bot_text(after="服務連線中"),
                 "auth_required": "Codex 尚未登入",
-                "state_unavailable": view.bot_text(after="對話狀態檔不可用"),
                 "draining": view.bot_text(after="服務正在收尾"),
-                "unavailable": view.bot_text(after="服務暫時不可用"),
             }.get(status.reason, view.bot_text(after="服務暫時不可用")),
         )
     else:
@@ -297,7 +295,7 @@ async def _after_ai_toggle(
     if not enabled:
         try:
             await view.codex_client.cancel(view.guild_id)
-        except CodexBridgeError:
+        except CodexError:
             logging.exception("Admin panel could not stop AI requests after disabling.")
             note = ("warn", "部分進行中的請求未能即時停止。")
     if not await load_ai(view, operation):
@@ -447,20 +445,18 @@ def render_ai_access(view: AdminPanelView, note: tuple[str, str] | None = None) 
 def render_ai_tech(view: AdminPanelView) -> None:
     plan, runtime = ai_display(view)
     status = view.state(AiReadings).codex_status
-    sdk = status.sdk_version or "未提供"
     bot_active, bot_queued = view.codex_client.request_counts()
     children = view.header(view.bot_text(after="技術資訊"), "ai_tech")
     children.extend(
         (
             discord.ui.TextDisplay(
-                f"### 執行環境\n**{plan} · Runtime {runtime} · SDK {sdk}**\nWeb Search Live"
+                f"### 執行環境\n**{plan} · Runtime {runtime}**\nWeb Search Live"
             ),
             spacer(),
             discord.ui.TextDisplay(
                 "### 工作與對話\n"
                 f"**持久討論串**　{status.thread_count} 條\n"
-                f"**Bot**　執行 {bot_active} · 等待 {bot_queued}\n"
-                f"**Bridge**　執行 {status.active_requests} · 等待 {status.queued_requests}"
+                f"**請求**　執行 {bot_active} · 等待 {bot_queued}"
             ),
             spacer(),
             discord.ui.TextDisplay("### 安全邊界\n唯讀；指令列、MCP、應用程式、外掛、子代理與全域記憶都停用"),

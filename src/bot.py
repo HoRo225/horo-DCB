@@ -16,9 +16,10 @@ from src.ai.private_results import PrivateResultButton
 from src.ai.cog import AiCog
 from src.ai.access import AiSettings
 from src.ai.access_service import AiAccessService
-from src.ai.client import CodexBridgeClient
+from src.codex.conversations import ConversationStore
+from src.codex.service import CodexService
 from src.brand import load_app_emojis, report_interaction_error, sync_discord_brand
-from src.config import CODEX_BRIDGE_URL, AppConfig
+from src.config import CODEX_URL, AppConfig
 from src.discord_utils import member_role_ids
 from src.games.cog import GamesCog
 from src.games.operations import GameOperations
@@ -35,7 +36,7 @@ from src.watchdog import install_stack_dump_signal, run_watchdog
 class HoroBot(commands.Bot):
     def __init__(
         self,
-        codex: CodexBridgeClient,
+        codex: CodexService,
         *,
         guild_id: int,
         db: sqlite3.Connection,
@@ -247,7 +248,7 @@ def main() -> None:
     bot = None
     try:
         db = open_db(DB_PATH)
-        codex = CodexBridgeClient(CODEX_BRIDGE_URL, config.codex_bridge_token)
+        codex = CodexService(CODEX_URL, config.codex_token, ConversationStore(db))
         bot = HoroBot(codex, guild_id=config.guild_id, db=db)
         bot.run(config.discord_token, log_handler=None)
     finally:

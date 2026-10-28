@@ -13,7 +13,7 @@ import aiohttp
 import discord
 
 from src.ai.access import AiSettings
-from src.ai.client import CodexBridgeClient
+from src.codex.service import CodexService
 from src.codex.contracts import parse_intent_decision
 from src.ai.formatting import codex_error_text
 from src.ai.images import (
@@ -36,7 +36,7 @@ from src.codex.protocol import (
     CLEANUP_SECONDS,
     MAX_PROMPT_CHARACTERS,
     WORK_TIMEOUT_SECONDS,
-    CodexBridgeError,
+    CodexError,
     conversation_key,
 )
 from src.ai.query_views import help_view
@@ -110,7 +110,7 @@ async def handle_message(
     message: discord.Message,
     *,
     bot_user_id: int,
-    codex: CodexBridgeClient,
+    codex: CodexService,
     access: AiSettings,
     actions: Any = None,
     bot: Any = None,
@@ -195,7 +195,7 @@ class AiRequest:
         mentions_bot: bool,
         referenced_message: Any,
         bot_name: str,
-        codex: CodexBridgeClient,
+        codex: CodexService,
         access: AiSettings,
         text_display_enabled: bool,
         actions: Any = None,
@@ -222,7 +222,6 @@ class AiRequest:
         self.allowed_channel_id = message.channel.parent_id if isinstance(message.channel, discord.Thread) else message.channel.id
         self.channel_generation = access.channel_generation(self.allowed_channel_id)
         self.actions = actions
-        self.intent_unavailable = False
         self.context = received_context if received_context is not None else actions.snapshot(message) if actions is not None else {}
         self.job: Any = None
         self.progress = AiProgress(
@@ -285,18 +284,8 @@ class AiRequest:
             game_snapshot = prior.plan.get("game")
         else:
             with self._timed("sdk"), self._timed("intent"):
-                try:
-                    decision = await self.codex.intent(self.key, self.content, self.context,
-                                                      job=self.job, models=models, request_id=self.id)
-                except CodexBridgeError:
-                    try:
-                        status = await self.codex.get_runtime_status()
-                    except Exception:
-                        raise CodexBridgeError("unavailable") from None
-                    if status.ready and status.intent_reason == "sdk_callback_observer_unavailable":
-                        self.intent_unavailable = True
-                        return False
-                    raise
+                decision = await self.codex.intent(self.key, self.content, self.context,
+                                                  job=self.job, models=models, request_id=self.id)
             game_snapshot = self.context.get("game")
         if decision.kind == "chat":
             return False
@@ -332,14 +321,14 @@ class AiRequest:
                     summary = await self.codex.summarize(self.key, public, job=self.job, models=models, request_id=self.id)
                 if await self.can_send():
                     await self.actions.update_receipt(self.message, summary.text)
-            except (CodexBridgeError, TimeoutError):
+            except (CodexError, TimeoutError):
                 logging.warning("AI result explanation unavailable; the confirmed receipt remains.")
         return True
 
     async def send_error(self, exc: Exception, *, deadline: float) -> None:
         self.outcome = (
             exc.code
-            if isinstance(exc, CodexBridgeError)
+            if isinstance(exc, CodexError)
             else "timeout"
             if isinstance(exc, TimeoutError)
             else "invalid_request"
@@ -368,7 +357,7 @@ class AiRequest:
     async def _prepare(self) -> tuple[str, tuple[str, ...]]:
         message = self.message
         if not await self.can_send():
-            raise CodexBridgeError("revoked")
+            raise CodexError("revoked")
         if len(self.content) > MAX_PROMPT_CHARACTERS:
             raise ImageAttachmentError(f"問題最多 {MAX_PROMPT_CHARACTERS:,} 個字元，請縮短後再試。")
         if (
@@ -410,7 +399,7 @@ class AiRequest:
             media_note=describe_media(media_items, skipped, broken, timed_out),
         )
         if not await self.can_send():
-            raise CodexBridgeError("revoked")
+            raise CodexError("revoked")
         return prompt, images
 
     async def run(self) -> None:
@@ -421,7 +410,7 @@ class AiRequest:
             try:
                 models = self.access.models
             except sqlite3.Error, ValueError:
-                raise CodexBridgeError("model_configuration_invalid") from None
+                raise CodexError("model_configuration_invalid") from None
             async with codex.accepted_request(
                     self.key,
                 still_current=self._current,
@@ -460,7 +449,6 @@ class AiRequest:
                         await progress.stop()
                         with self._timed("discord"):
                             notes = [RESTARTED_NOTICE] * reply.restarted
-                            notes += ["這次只能文字回答，沒有執行任何操作"] * self.intent_unavailable
                             user_id = message.author.id
                             if self.bot is not None and user_id not in TIPPED:
                                 TIPPED.add(user_id)
@@ -476,18 +464,18 @@ class AiRequest:
                             )
                         if not job.current:
                             self.outcome = "revoked"
-                except (ImageAttachmentError, CodexBridgeError, TimeoutError) as exc:
+                except (ImageAttachmentError, CodexError, TimeoutError) as exc:
                     await self.send_error(exc, deadline=job.deadline)
         except asyncio.CancelledError:
             self.outcome = "cancelled"
-        except CodexBridgeError as exc:
+        except CodexError as exc:
             self.ms["queue"] = (time.monotonic() - self.queued_at) * 1000
             await self.send_error(exc, deadline=self.accepted_deadline)
         except discord.HTTPException, aiohttp.ClientError, TimeoutError:
             self.outcome = "unavailable"
         except Exception:
             logging.exception("AI request id=%s failed unexpectedly.", self.id)
-            await self.send_error(CodexBridgeError("unavailable"), deadline=self.accepted_deadline)
+            await self.send_error(CodexError("unavailable"), deadline=self.accepted_deadline)
         finally:
             await self._cleanup()
 

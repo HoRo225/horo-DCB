@@ -13,7 +13,7 @@ from src.ai.access import AiSettings
 from src.codex.admission import AcceptedJob
 from src.codex.contracts import Action, IntentDecision
 from src.ai.discord import AiRequest, handle_message
-from src.codex.protocol import CodexBridgeError, CodexChatReply, conversation_key
+from src.codex.protocol import CodexError, CodexChatReply, conversation_key
 from src.operations import OperationStore
 from src.state import open_db, set_setting
 from src.testing import text
@@ -86,7 +86,7 @@ class FakeCodex:
     @asynccontextmanager
     async def accepted_request(self, key, *, deadline, still_current, user_id=None, parent_channel_id=None):
         if not still_current():
-            raise CodexBridgeError("revoked")
+            raise CodexError("revoked")
         started = asyncio.get_running_loop().time()
         yield AcceptedJob(
             task=asyncio.current_task(), key=key, ready=asyncio.Event(), accepted_at=started,
@@ -247,7 +247,7 @@ class FrontendIntentTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.actions.seen_game[0]["state_token"], "received-token")
 
     async def test_only_missing_observer_allows_explicit_chat_capability_fallback(self):
-        self.codex.intent.side_effect = CodexBridgeError("unavailable")
+        self.codex.intent.side_effect = CodexError("unavailable")
         self.codex.get_runtime_status = AsyncMock()
         for index, reason in enumerate(("sdk_callback_observer_unavailable", "unsafe_intent")):
             with self.subTest(reason=reason):
@@ -330,7 +330,7 @@ class FrontendIntentTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_summary_failure_preserves_receipt_and_never_reexecutes(self):
         self.codex.intent.return_value = PLAN
-        for index, failure in enumerate((CodexBridgeError("unavailable"), TimeoutError())):
+        for index, failure in enumerate((CodexError("unavailable"), TimeoutError())):
             with self.subTest(failure=type(failure).__name__):
                 message = FakeMessage(800 + index)
                 self.actions.execute_plan.reset_mock()

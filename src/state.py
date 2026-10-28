@@ -258,6 +258,14 @@ UPDATE discord_effects SET status = 'skipped', error = 'feature_removed', update
 WHERE kind IN ('lfg_create', 'lfg_edit', 'lfg_depart') AND status IN ('pending', 'unknown', 'failed');
 UPDATE operations SET status = 'skipped' WHERE kind IN ('lfg_create', 'lfg_action') AND status = 'running';
 """,
+    """
+CREATE TABLE codex_threads (
+    conversation_key TEXT PRIMARY KEY,
+    thread_id TEXT NOT NULL,
+    parent_channel_id INTEGER
+);
+CREATE TABLE codex_pending_archives (thread_id TEXT PRIMARY KEY);
+""",
 ]
 
 

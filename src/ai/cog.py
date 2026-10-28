@@ -10,7 +10,7 @@ from discord import app_commands
 
 from src.ai import discord as ai_discord
 from src.ai.output import CARD_CLEANUPS
-from src.codex.protocol import CodexBridgeError
+from src.codex.protocol import CodexError
 from src.discord_utils import is_text_channel, member_role_ids
 from src.brand import send_notice
 from src.codex.protocol import conversation_key
@@ -94,7 +94,7 @@ class AiCog(commands.Cog):
         key = conversation_key(interaction.guild_id, channel.id, interaction.user.id, is_thread=is_thread)
         try:
             result = await bot.codex.reset_conversation(key)
-        except CodexBridgeError:
+        except CodexError:
             await send_notice(interaction, "對話重設未能確認，請稍後再試。")
             return
         note = "已開始新的對話。"
@@ -114,7 +114,7 @@ class AiCog(commands.Cog):
             return
         try:
             await bot.codex.cancel(after.guild.id, after.id)
-        except CodexBridgeError:
+        except CodexError:
             logging.exception("Codex revoked member cleanup failed.")
 
     @commands.Cog.listener()

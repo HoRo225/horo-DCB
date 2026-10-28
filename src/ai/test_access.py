@@ -8,7 +8,7 @@ from unittest.mock import AsyncMock
 from src.ai.access import AiSettings
 from src.ai.access_service import AiAccessService
 from src.ai.client import CodexBridgeClient
-from src.codex.protocol import CodexBridgeError
+from src.codex.protocol import CodexError
 from src.state import open_db, set_setting
 
 
@@ -127,7 +127,7 @@ class AiAccessServiceTests(unittest.IsolatedAsyncioTestCase):
         client.archive_scope.assert_not_awaited()
 
     async def test_cancel_timeout_still_saves_and_resumes(self) -> None:
-        self.client.cancel_revoked.side_effect = CodexBridgeError("unavailable")
+        self.client.cancel_revoked.side_effect = CodexError("unavailable")
         with self.assertLogs(level="ERROR"):
             outcome = await self.service.change(1, frozenset({10}), roles=False)
         self.assertEqual(outcome, "updated")
