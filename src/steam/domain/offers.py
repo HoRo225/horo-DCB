@@ -1,6 +1,11 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from collections.abc import Mapping
+from dataclasses import asdict, dataclass
+from typing import Any
+
+ANNOUNCE = "steam.announce"
+OFFER_ENDED = "offer-ended"
 
 
 @dataclass(frozen=True, slots=True)
@@ -18,8 +23,25 @@ class SteamOffer:
         return f"https://store.steampowered.com/app/{self.app_id}/"
 
 
-def offer_from_payload(fields: dict) -> SteamOffer:
+def offer_from_payload(fields: Mapping[str, Any]) -> SteamOffer:
     return SteamOffer(**{**fields, "developers": tuple(fields["developers"])})
+
+
+@dataclass(frozen=True, slots=True)
+class Announcement:
+    offer: SteamOffer
+    role_ids: tuple[int, ...]
+
+    def payload(self) -> dict[str, object]:
+        return {"offer": asdict(self.offer), "role_ids": list(self.role_ids)}
+
+    @classmethod
+    def parse(cls, payload: Mapping[str, Any]) -> Announcement:
+        return cls(offer_from_payload(payload["offer"]), tuple(payload["role_ids"]))
+
+
+def announced_app(payload: Mapping[str, Any]) -> int:
+    return payload["offer"]["app_id"]
 
 
 @dataclass(frozen=True, slots=True)

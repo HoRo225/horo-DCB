@@ -10,7 +10,7 @@ from urllib.parse import urlparse
 
 import aiohttp
 
-from src.steam.models import SteamFetchResult, SteamOffer
+from src.steam.domain.offers import SteamFetchResult, SteamOffer
 
 REQUEST_TIMEOUT_SECONDS = 30
 FETCH_BATCH_TIMEOUT_SECONDS = 90
@@ -20,10 +20,8 @@ STEAM_APPDETAILS_URL = "https://store.steampowered.com/api/appdetails"
 STEAM_GETITEMS_URL = "https://api.steampowered.com/IStoreBrowseService/GetItems/v1/"
 _APP_ID_PATTERN = re.compile(r"/apps/(\d+)/")
 
-
 class _SteamDetailsFailure(Exception):
     pass
-
 
 class SteamOfferProvider:
     def __init__(self) -> None:
@@ -43,32 +41,6 @@ class SteamOfferProvider:
         if self._session is not None and not self._session.closed:
             await self._session.close()
         self._session = None
-
-    @staticmethod
-    def _extract_app_id(logo_url: object) -> int | None:
-        if not isinstance(logo_url, str):
-            return None
-        match = _APP_ID_PATTERN.search(logo_url)
-        if match is None:
-            return None
-        app_id = int(match.group(1))
-        return app_id if app_id > 0 else None
-
-    @staticmethod
-    def _clean_text(value: object, limit: int) -> str:
-        if not isinstance(value, str):
-            return ""
-        return " ".join(html.unescape(value).split())[:limit]
-
-    @staticmethod
-    def _safe_https_url(value: object) -> str | None:
-        if not isinstance(value, str):
-            return None
-        try:
-            parsed = urlparse(value)
-        except ValueError:
-            return None
-        return value if parsed.scheme == "https" and parsed.netloc else None
 
     async def _request_json(
         self,
@@ -130,7 +102,7 @@ class SteamOfferProvider:
             raise _SteamDetailsFailure
         if initial == 0 or discount != 100:
             return None
-        name = self._clean_text(data.get("name"), 200) or self._clean_text(
+        name = _clean_text(data.get("name"), 200) or _clean_text(
             fallback_name,
             200,
         )
@@ -140,15 +112,15 @@ class SteamOfferProvider:
         developers: tuple[str, ...] = ()
         if isinstance(developers_value, list):
             developers = tuple(
-                cleaned for item in developers_value[:5] if (cleaned := self._clean_text(item, 100))
+                cleaned for item in developers_value[:5] if (cleaned := _clean_text(item, 100))
             )
         return SteamOffer(
             app_id=app_id,
             name=name,
-            old_price=self._clean_text(price.get("initial_formatted"), 80),
-            description=self._clean_text(data.get("short_description"), 1000),
+            old_price=_clean_text(price.get("initial_formatted"), 80),
+            description=_clean_text(data.get("short_description"), 1000),
             developers=developers,
-            header_image=self._safe_https_url(data.get("header_image")),
+            header_image=_safe_https_url(data.get("header_image")),
         )
 
     async def _with_deadlines(self, offers: list[SteamOffer]) -> list[SteamOffer]:
@@ -264,7 +236,6 @@ class SteamOfferProvider:
             if task is not None:
                 self._fetches.discard(task)
 
-
 def _parse_search_items(payload: object) -> dict[int, str] | None:
     if not isinstance(payload, dict):
         return None
@@ -282,11 +253,10 @@ def _parse_search_items(payload: object) -> dict[int, str] | None:
             or not item["logo"].strip()
         ):
             return None
-        app_id = SteamOfferProvider._extract_app_id(item["logo"])
+        app_id = _extract_app_id(item["logo"])
         if app_id is not None:
-            search_items.setdefault(app_id, SteamOfferProvider._clean_text(item["name"], 200))
+            search_items.setdefault(app_id, _clean_text(item["name"], 200))
     return search_items
-
 
 def _rotate_work_ids(app_ids: set[int], cursor: int | None) -> list[int]:
     work_ids = sorted(app_ids)
@@ -297,3 +267,27 @@ def _rotate_work_ids(app_ids: set[int], cursor: int | None) -> list[int]:
         len(work_ids),
     )
     return work_ids[split:] + work_ids[:split]
+
+def _extract_app_id(logo_url: object) -> int | None:
+    if not isinstance(logo_url, str):
+        return None
+    match = _APP_ID_PATTERN.search(logo_url)
+    if match is None:
+        return None
+    app_id = int(match.group(1))
+    return app_id if app_id > 0 else None
+
+def _clean_text(value: object, limit: int) -> str:
+    if not isinstance(value, str):
+        return ""
+    return " ".join(html.unescape(value).split())[:limit]
+
+def _safe_https_url(value: object) -> str | None:
+    if not isinstance(value, str):
+        return None
+    try:
+        parsed = urlparse(value)
+    except ValueError:
+        return None
+    return value if parsed.scheme == "https" and parsed.netloc else None
+

@@ -86,8 +86,9 @@ class ImportBoundaryTests(unittest.TestCase):
     def test_feature_cogs_do_not_load_other_features(self) -> None:
         features = {"games", "voice", "steam", "ai", "admin"}
         allowed = {"games": {"ai"}, "steam": {"ai"}}
+        cogs = {"steam": "src.steam.adapters.discord.cog"}
         for feature in features - {"admin"}:
-            modules = loaded_modules(f"src.{feature}.cog")
+            modules = loaded_modules(cogs.get(feature, f"src.{feature}.cog"))
             with self.subTest(feature):
                 loaded = {m.split(".")[1] for m in modules if m.startswith("src.") and m.split(".")[1] in features}
                 self.assertLessEqual(loaded, {feature, *allowed.get(feature, ())})

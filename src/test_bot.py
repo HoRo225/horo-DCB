@@ -9,8 +9,8 @@ from src.ai.cog import AiCog
 from src.bot import HoroBot
 from src.core.app.supervisor import REQUEST
 from src.games.views import GamePickSelect, RulesButton, lobby_view
-from src.steam.models import SteamOffer
-from src.steam.views import SteamClaim, build_offer_view
+from src.steam import SteamOffer
+from src.steam.adapters.discord.views import build_offer_view
 
 G, BOT = 100, 999
 COGS = ["GamesCog", "VoiceCog", "AdminCog", "AiCog", "SteamCog"]
@@ -67,7 +67,7 @@ class HoroBotTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("on_interaction", self.bot.extra_events)
         self.assertEqual(
             set(self.bot._connection._view_store._dynamic_items.values()),
-            {GamePickSelect, RulesButton, self.bot.receipts.private_results.item, SteamClaim},
+            {GamePickSelect, RulesButton, self.bot.receipts.private_results.item, self.bot.get_cog("SteamCog").claim},
         )
 
     async def test_hub_custom_ids_reach_registered_handlers(self) -> None:

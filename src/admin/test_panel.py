@@ -15,12 +15,12 @@ from src.bot import HoroBot
 from src.core.adapters.discord.brand import BRAND_COLOUR, ICONS, NEUTRAL_COLOUR, WARN_COLOUR
 from src.core.adapters.sqlite.db import open_db, transaction
 from src.testing import put_setting
-from src.steam.models import SteamFetchResult, SteamOffer
+from src.steam import SteamFetchResult, SteamOffer
 from src.testing import group, text
 from src.core.app.supervisor import PRESENTATION, WORK
 from src.ai.access import AI_ENABLED
 from src.games.store import GAMES_HUB_MESSAGE
-from src.steam.notifier import STEAM_CHANNEL_ID
+from src.steam.adapters.sqlite.store import STEAM_CHANNEL_ID
 from src.voice.manager import VOICE_ENABLED, VOICE_ENTRY_CHANNEL_ID
 
 G, OWNER = 100, 200
@@ -135,7 +135,7 @@ class AdminPanelTest(unittest.IsolatedAsyncioTestCase):
         self.codex.request_counts.return_value = (0, 0)
         self.bot = HoroBot(self.codex, guild_id=G, db=db)
         await self.bot.add_cog(AdminCog(self.bot, self.bot.live), guild=discord.Object(id=G))
-        self.bot.steam_free_games.provider = AsyncMock()
+        self.bot.steam.fetch_current_offers = AsyncMock(return_value=None)
         self.guild = MagicMock()
         self.guild.id = G
         self.guild.unavailable = False
@@ -494,12 +494,12 @@ class AdminPanelTest(unittest.IsolatedAsyncioTestCase):
     async def test_steam_query_renders_result(self) -> None:
         await self.open_panel()
         await self.go("Steam 免費遊戲")
-        provider = self.bot.steam_free_games.provider
-        provider.fetch_current_offers.return_value = SteamFetchResult(
+        query = self.bot.steam.fetch_current_offers
+        query.return_value = SteamFetchResult(
             frozenset({10}), (SteamOffer(10, "Test Game", "NT$100", "", (), None),)
         )
         clicked = await self.click(self.button("重新查詢"))
-        provider.fetch_current_offers.assert_awaited_once()
+        query.assert_awaited_once()
         self.assertIn("**Test Game**\n~~NT$100~~ → **免費**", self.screen(clicked))
 
     async def test_steam_toggle_and_notification_roles(self) -> None:
@@ -507,16 +507,16 @@ class AdminPanelTest(unittest.IsolatedAsyncioTestCase):
         put_setting(self.db, STEAM_CHANNEL_ID, 700)
         await self.open_panel()
         await self.go("Steam 免費遊戲")
-        steam, role = self.bot.steam_free_games, self.role(900)
+        steam, role = self.bot.steam, self.role(900)
         roles = self.select("選擇通知身分組（清空即取消）")
         self.assertTrue(roles.disabled)
         self.assertIn("Steam 自動通知未開啟，未修改身分組設定。", self.screen(await self.choose(roles, role)))
         self.assertEqual(steam.status().role_ids, ())
 
-        steam.start(self.bot)
+        steam.start()
         with patch.object(steam, "start") as start:
             clicked = await self.click(self.button("開啟 Steam 自動通知"))
-        start.assert_called_once_with(self.bot)
+        start.assert_called_once_with()
         self.assertTrue(steam.enabled)
         self.assertIn("✅ 已開啟 Steam 自動通知。", self.screen(clicked))
         self.assertFalse(roles.disabled)

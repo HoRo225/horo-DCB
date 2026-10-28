@@ -91,7 +91,7 @@ class AdminPanelView(ErrorNotice, discord.ui.LayoutView):
         self.ai_settings = bot.ai_settings
         self.access_service = bot.access_service
         self.temp_voice = bot.temp_voice
-        self.steam_free_games = bot.steam_free_games
+        self.steam = bot.steam
         self.games = bot.games
         self.game_operations = bot.game_operations
         self.effects = bot.effects

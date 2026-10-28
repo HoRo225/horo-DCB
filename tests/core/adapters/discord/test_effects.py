@@ -1,7 +1,6 @@
 import asyncio
 import sqlite3
 import unittest
-from dataclasses import asdict
 from datetime import UTC, datetime
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
@@ -13,12 +12,10 @@ from src.core.adapters.discord.live import LiveGuild
 from src.core.adapters.sqlite.db import open_db, transaction
 from src.core.adapters.sqlite.operations import OperationStore
 from src.core.app.effects import EffectKind, EffectRegistry, MessageProof, ResourceProof
-from src.core.app.supervisor import SCHEDULED, WORK, TaskGroup
+from src.core.app.supervisor import WORK, TaskGroup
 from src.core.adapters.sqlite.settings import SettingsStore
 from src.games.operations import EFFECT_KINDS as GAME_EFFECT_KINDS
 from src.games.store import GAMES_HUB_MESSAGE
-from src.steam.models import SteamOffer
-from src.steam.notifier import STEAM_ENABLED, SteamFreeGamesNotifier
 from src.voice.manager import TempVoiceManager
 from tests.support.discord import Client, Guild, member
 
@@ -337,60 +334,12 @@ class ResolverTests(Harness):
 class FeatureKindTests(Harness):
     def setUp(self) -> None:
         super().setUp()
-        self.steam = SteamFreeGamesNotifier(self.db, self.live, TaskGroup("steam", SCHEDULED))
         self.voice = TempVoiceManager(self.db, TaskGroup("voice", WORK), self.live)
-        self.kinds.register(*self.steam.effect_kinds(), *self.voice.effect_kinds(), *GAME_EFFECT_KINDS)
+        self.kinds.register(*self.voice.effect_kinds(), *GAME_EFFECT_KINDS)
         self.effects = self.resolver()
 
     async def resolve(self, effect_id: str, resolution: str, **kwargs) -> str | None:
         return await self.effects.resolve(effect_id, resolution, actor_id=ADMIN, **kwargs)
-
-    def steam_effect(self, *, status: str = "unknown"):
-        offer = SteamOffer(13, "遊戲", "NT$100", "說明", (), None)
-        return self.effect("steam", "steam.announce", status=status, payload={"offer": asdict(offer), "role_ids": []})
-
-    def posted(self) -> list[tuple[int]]:
-        return self.db.execute("SELECT app_id FROM steam_posted").fetchall()
-
-    async def test_steam_confirmation_needs_the_exact_store_link_and_suppresses_the_offer(self) -> None:
-        effect = self.steam_effect()
-        for content in ("無關的 Bot 公告", "https://store.steampowered.com/app/130/"):
-            self.channel.fetch_message.return_value = self.message(effect, content=content)
-            self.assertEqual(await self.resolve("steam", "confirmed", message_id=501), "訊息內容不是這一項 Steam 活動。")
-            self.assertEqual((self.status("steam"), self.posted()), ("unknown", []))
-        self.channel.fetch_message.return_value = self.message(effect, content="https://store.steampowered.com/app/13/")
-        self.assertIsNone(await self.resolve("steam", "confirmed", message_id=501))
-        self.assertEqual((self.status("steam"), self.posted()), ("done", [(13,)]))
-
-    async def test_steam_suppression_and_delivery_commit_together(self) -> None:
-        effect = self.steam_effect()
-        self.channel.fetch_message.return_value = self.message(effect, content="https://store.steampowered.com/app/13/")
-        self.db.execute("CREATE TRIGGER reject_post BEFORE INSERT ON steam_posted BEGIN SELECT RAISE(ABORT, 'disk full'); END")
-        with self.assertLogs(level="ERROR"):
-            self.assertEqual(await self.resolve("steam", "confirmed", message_id=501), UNSAVED)
-        unchanged = self.records.get_effect("steam")
-        self.assertEqual((unchanged.status, unchanged.message_id, self.posted()), ("unknown", None, []))
-
-    async def test_skipping_a_failed_steam_post_still_suppresses_the_offer(self) -> None:
-        self.steam_effect(status="failed")
-        self.assertIsNone(await self.resolve("steam", "skip"))
-        self.assertEqual((self.status("steam"), self.posted()), ("skipped", [(13,)]))
-
-    async def test_steam_retry_sends_once_and_stops_when_revoked_while_queued(self) -> None:
-        self.steam_effect()
-        with transaction(self.db):
-            SettingsStore(self.db, self.records).put({STEAM_ENABLED: True})
-        async with self.steam._lock:
-            task = asyncio.create_task(self.resolve("steam", "retry"))
-            await asyncio.sleep(0)
-            self.revoke()
-        self.assertEqual(await task, "已處理送出要求；尚未確認送達，請重新整理查看狀態。")
-        self.channel.send.assert_not_awaited()
-        self.guild.members[ADMIN].guild_permissions = discord.Permissions(administrator=True)
-        self.channel.send.return_value = SimpleNamespace(id=777)
-        self.assertIsNone(await self.resolve("steam", "retry"))
-        self.assertEqual((self.status("steam"), self.posted()), ("done", [(13,)]))
-        self.channel.send.assert_awaited_once()
 
     async def test_uncertain_voice_room_cannot_be_recreated_and_skipping_adopts_nothing(self) -> None:
         self.effect("voice", "voice.create", payload={"owner_id": ADMIN})

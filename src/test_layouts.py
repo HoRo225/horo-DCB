@@ -23,11 +23,11 @@ from src.games.tables import TABLES, BlackjackTableView, SlotTableView
 from src.games.views import lobby_view
 from src.core.adapters.sqlite.db import transaction
 from src.testing import put_setting
-from src.steam.models import SteamFetchResult, SteamOffer
-from src.steam.views import build_offer_view
+from src.steam import SteamFetchResult, SteamOffer
+from src.steam.adapters.discord.views import build_offer_view
 from src.games.store import GAMES_HUB_MESSAGE
 from src.ai.access import AI_ENABLED
-from src.steam.notifier import STEAM_ENABLED, STEAM_ROLE_IDS
+from src.steam.adapters.sqlite.store import STEAM_ENABLED, STEAM_ROLE_IDS
 from src.voice.manager import VOICE_ENABLED
 
 G, OWNER, MEMBER = 100, 200, 300

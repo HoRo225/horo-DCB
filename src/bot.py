@@ -28,9 +28,13 @@ from src.games.cog import GamesCog
 from src.games.operations import EFFECT_KINDS as GAME_EFFECT_KINDS, GameOperations
 from src.games.store import GameStore
 from src.core.adapters.sqlite.db import DB_PATH, hold_lock, open_db
-from src.steam.actions import steam_actions
-from src.steam.cog import SteamCog
-from src.steam.notifier import SteamFreeGamesNotifier
+from src.steam import Steam
+from src.steam.adapters.discord.actions import steam_actions
+from src.steam.adapters.discord.announcer import DiscordAnnouncer
+from src.steam.adapters.discord.cog import SteamCog
+from src.steam.adapters.discord.effects import steam_effect_kinds
+from src.steam.adapters.http.provider import SteamOfferProvider
+from src.steam.adapters.sqlite.store import SqliteSteamStore
 from src.core.adapters.discord.shutdown import Shutdown
 from src.core.app.effects import EffectRegistry
 from src.core.app.maintenance import Maintenance
@@ -76,7 +80,10 @@ class HoroBot(commands.Bot):
             self.ai_settings, codex, supervisor.group("access", WORK), role_ids_for_user=self._member_roles,
         )
         self.temp_voice = TempVoiceManager(db, supervisor.group("voice", WORK), live)
-        self.steam_free_games = SteamFreeGamesNotifier(db, live, supervisor.group("steam", SCHEDULED))
+        steam_store = SqliteSteamStore(db)
+        self.steam = steam = Steam(
+            steam_store, SteamOfferProvider(), DiscordAnnouncer(self, live), supervisor.group("steam", SCHEDULED),
+        )
         self.games = GameStore(db)
         self.game_operations = GameOperations(self, supervisor.group("games", WORK), live)
         self.admin_panels = PanelSessionRegistry(
@@ -86,7 +93,7 @@ class HoroBot(commands.Bot):
         self.receipts = DiscordReceipts(self.operations, live, self, registry)
         kinds = EffectRegistry()
         kinds.register(
-            *self.temp_voice.effect_kinds(), *self.steam_free_games.effect_kinds(), *GAME_EFFECT_KINDS,
+            *self.temp_voice.effect_kinds(), *steam_effect_kinds(steam, steam_store), *GAME_EFFECT_KINDS,
             self.receipts.effect_kind(),
         )
         self.effects = EffectResolver(self.operations, kinds, live, self)
@@ -94,9 +101,9 @@ class HoroBot(commands.Bot):
             *game_actions(self.game_operations, live),
             ai_actions(self.ai_settings, self.access_service, codex.get_models, lambda: self.games.channel_id),
             voice_actions(self.temp_voice, live),
-            steam_actions(self.steam_free_games, live),
+            steam_actions(steam, live),
             admin_actions(lambda: self.ai_settings.enabled, lambda: self.temp_voice.enabled,
-                          lambda: self.steam_free_games.status().running, lambda: len(self.effects.pending())),
+                          lambda: steam.status().running, lambda: len(self.effects.pending())),
             effect_actions(self.effects),
         )
         self.actions = ActionEngine(registry, self.operations, live, self.receipts, supervisor.group("actions", WORK))
@@ -106,7 +113,7 @@ class HoroBot(commands.Bot):
             (
                 (("access", self.access_service), ("codex", codex)),
                 (("actions", self.actions),),
-                (("steam", self.steam_free_games),),
+                (("steam", steam),),
                 (("voice", self.temp_voice),),
                 (("panel", self.admin_panels),),
             ),
@@ -131,7 +138,7 @@ class HoroBot(commands.Bot):
             AdminCog(self, live),
             AiCog(self, live, requests=supervisor.group("ai", REQUEST), cleanups=supervisor.group("ai", PRESENTATION),
                   actions=self.actions),
-            SteamCog(self),
+            SteamCog(self, self.steam),
         ):
             await self.add_cog(cog, guild=guild)
 

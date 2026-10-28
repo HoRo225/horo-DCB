@@ -59,17 +59,22 @@ class SettingsContractTests(unittest.TestCase):
 
     def test_feature_switches_drive_their_components(self) -> None:
         from src.ai.access import AI_ENABLED, AiSettings
-        from src.steam.notifier import STEAM_ENABLED, SteamFreeGamesNotifier
+        from src.steam import Steam
+        from src.steam.adapters.discord.announcer import DiscordAnnouncer
+        from src.steam.adapters.http.provider import SteamOfferProvider
+        from src.steam.adapters.sqlite.store import STEAM_ENABLED, SqliteSteamStore
         from src.voice.manager import VOICE_ENABLED, TempVoiceManager
 
         db = open_db(":memory:")
         self.addCleanup(db.close)
         settings = SettingsStore(db, OperationStore(db))
-        live = LiveGuild(SimpleNamespace(get_guild=lambda _guild_id: None), 1, lambda: False)
+        client = SimpleNamespace(get_guild=lambda _guild_id: None)
+        live = LiveGuild(client, 1, lambda: False)
         components = {
             AI_ENABLED: AiSettings(db, 1),
             VOICE_ENABLED: TempVoiceManager(db, TaskGroup("voice", WORK), live),
-            STEAM_ENABLED: SteamFreeGamesNotifier(db, live, TaskGroup("steam", SCHEDULED)),
+            STEAM_ENABLED: Steam(SqliteSteamStore(db), SteamOfferProvider(), DiscordAnnouncer(client, live),
+                                 TaskGroup("steam", SCHEDULED)),
         }
         for switch, component in components.items():
             with self.subTest(switch.key):

@@ -1,15 +1,12 @@
 from __future__ import annotations
 
 from collections.abc import Iterable
-from typing import TYPE_CHECKING
 
 import discord
 
 from src.core.adapters.discord.brand import BRAND_COLOUR, ICONS, card_title, reported, send_notice
-from src.steam.models import SteamOffer, offer_from_payload
-
-if TYPE_CHECKING:
-    from src.bot import HoroBot
+from src.steam.app.steam import Steam
+from src.steam.domain.offers import SteamOffer
 
 
 def truncate_discord_text(text: str, prefix_limit: int, suffix: str) -> str:
@@ -72,26 +69,27 @@ def build_offer_view(offer: SteamOffer, roles: Iterable[discord.Role] = ()) -> d
     return view
 
 
-class SteamClaim(discord.ui.DynamicItem[discord.ui.Button], template=r"horo:steam:claim:(?P<app>[0-9]+)"):
-    def __init__(self, app_id: int) -> None:
-        super().__init__(discord.ui.Button(
-            label="我領了", emoji=ICONS["ok"], style=discord.ButtonStyle.secondary,
-            custom_id=f"horo:steam:claim:{app_id}",
-        ))
-        self.app_id = app_id
+def steam_claim_item(steam: Steam) -> type[discord.ui.DynamicItem[discord.ui.Button]]:
+    class SteamClaim(discord.ui.DynamicItem[discord.ui.Button], template=r"horo:steam:claim:(?P<app>[0-9]+)"):
+        def __init__(self, app_id: int) -> None:
+            super().__init__(discord.ui.Button(
+                label="我領了", emoji=ICONS["ok"], style=discord.ButtonStyle.secondary,
+                custom_id=f"horo:steam:claim:{app_id}",
+            ))
+            self.app_id = app_id
 
-    @classmethod
-    async def from_custom_id(cls, interaction, item, match, /) -> SteamClaim:
-        return cls(int(match["app"]))
+        @classmethod
+        async def from_custom_id(cls, interaction, item, match, /) -> SteamClaim:
+            return cls(int(match["app"]))
 
-    @reported
-    async def callback(self, interaction: discord.Interaction) -> None:
-        bot: HoroBot = interaction.client
-        message, guild = interaction.message, bot.get_guild(interaction.guild_id)
-        effect = next((effect for effect in bot.steam_free_games.operations.effects(status="done", kind="steam.announce")
-                       if message is not None and effect.message_id == message.id), None)
-        if effect is not None:
-            roles = [role for role_id in effect.payload["role_ids"] if guild and (role := guild.get_role(role_id))]
-            await interaction.response.edit_message(view=build_offer_view(offer_from_payload(effect.payload["offer"]), roles),
-                                                    allowed_mentions=discord.AllowedMentions.none())
-        await send_notice(interaction, "這個按鈕已停用，請直接按「前往 Steam 領取」。", "info")
+        @reported
+        async def callback(self, interaction: discord.Interaction) -> None:
+            message, guild = interaction.message, interaction.client.get_guild(interaction.guild_id)
+            announcement = steam.announcement(message.id) if message is not None else None
+            if announcement is not None:
+                roles = [role for role_id in announcement.role_ids if guild and (role := guild.get_role(role_id))]
+                await interaction.response.edit_message(view=build_offer_view(announcement.offer, roles),
+                                                        allowed_mentions=discord.AllowedMentions.none())
+            await send_notice(interaction, "這個按鈕已停用，請直接按「前往 Steam 領取」。", "info")
+
+    return SteamClaim

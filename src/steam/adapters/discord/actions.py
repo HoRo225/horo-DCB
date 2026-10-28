@@ -5,18 +5,19 @@ from collections.abc import Mapping
 import discord
 
 from src.core.adapters.discord.brand import BRAND_COLOUR, ICONS, WARN_COLOUR, card_title
+from src.core.adapters.discord.channels import text_channel_problem
 from src.core.adapters.discord.live import LiveGuild
 from src.core.app.actions import ActionGroup, ActionSpec, Configure, Query, Step
 from src.core.app.ports import Actor
 from src.core.domain.actions import REGULAR_ROLES, TEXT_CHANNEL, Param, failure
-from src.steam.notifier import SteamFreeGamesNotifier
-from src.steam.views import offer_summary
+from src.steam.adapters.discord.views import offer_summary
+from src.steam.app.steam import Steam
 
 CHANNEL_STALE = "操作權限或期限已改變，未更新 Steam 頻道。"
 ROLES_STALE = "操作權限或期限已改變，未更新 Steam 身分組。"
 
 
-def steam_actions(steam: SteamFreeGamesNotifier, live: LiveGuild) -> ActionGroup:
+def steam_actions(steam: Steam, live: LiveGuild) -> ActionGroup:
     def guild() -> discord.Guild:
         if (current := live.guild()) is None:
             raise LookupError("current guild is unavailable")
@@ -27,15 +28,14 @@ def steam_actions(steam: SteamFreeGamesNotifier, live: LiveGuild) -> ActionGroup
 
     async def bind_channel(step: Step, params: Mapping[str, object]) -> Mapping[str, object] | None:
         current = guild()
-        if problem := await steam.bind_channel(current, current.get_channel(params["channel_id"]),
-                                               still_current=step.still_current, operation_id=step.operation_id):
+        channel = current.get_channel(params["channel_id"])
+        chosen = None if text_channel_problem(channel, current) else channel.id
+        if problem := await steam.bind_channel(chosen, still_current=step.still_current, operation_id=step.operation_id):
             return failure("channel", problem)
         return None
 
     async def set_roles(step: Step, params: Mapping[str, object]) -> None:
-        current = guild()
-        await steam.set_notification_roles(current, [current.get_role(identifier) for identifier in params["ids"]],
-                                           still_current=step.still_current, operation_id=step.operation_id)
+        await steam.set_roles(params["ids"], still_current=step.still_current, operation_id=step.operation_id)
 
     async def offers(actor: Actor) -> Mapping[str, object]:
         result = await steam.fetch_current_offers()
