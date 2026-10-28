@@ -8,8 +8,8 @@ import discord
 from src.core.adapters.discord.brand import BRAND_COLOUR, ICONS, NEUTRAL_COLOUR, WARN_COLOUR
 from src.core.adapters.sqlite.db import transaction
 from src.games.adapters.sqlite.store import GAMES_CHANNEL_ID
-from src.testing import put_setting, text
 from tests.support.admin import G, OWNER, READY, PanelCase, limits, text_channel
+from tests.support.testing import put_setting, text
 
 
 class OpenTests(PanelCase):

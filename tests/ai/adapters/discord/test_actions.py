@@ -8,8 +8,8 @@ from src.core.adapters.discord.brand import ICONS
 from src.core.app.actions import Step
 from src.core.app.ports import Actor, Source
 from src.core.app.supervisor import WORK, TaskGroup
-from src.testing import text
 from tests.support.ai import FakeModel, Games, MemoryAiStore
+from tests.support.testing import text
 
 G = 5
 MEMBER = Actor(1, "玩家", "", frozenset(), False)

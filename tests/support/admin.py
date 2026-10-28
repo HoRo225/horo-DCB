@@ -32,13 +32,13 @@ from src.steam import Steam
 from src.steam.adapters.discord.announcer import DiscordAnnouncer
 from src.steam.adapters.discord.views import offer_summary
 from src.steam.adapters.sqlite.store import SqliteSteamStore
-from src.testing import text
 from src.voice import Voice
 from src.voice.adapters.discord.effects import voice_effect_kinds
 from src.voice.adapters.discord.gateway import DiscordVoiceGateway
 from src.voice.adapters.sqlite.store import SqliteVoiceStore
 from tests.support.ai import FakeModel
 from tests.support.steam import FakeSource
+from tests.support.testing import text
 
 G, OWNER = 100, 200
 READY = RuntimeStatus(reason="ready", authenticated=True, plan="plus", runtime_version="1.0", thread_count=3)

@@ -6,10 +6,10 @@ import discord
 
 from src.core.adapters.discord.brand import WARN_COLOUR
 from src.core.adapters.discord.live import LiveGuild
-from src.testing import text
 from src.voice.adapters.discord.gateway import AUDIT_REASON, DiscordVoiceGateway
 from src.voice.app.ports import GatewayError
 from src.voice.domain.rooms import Overwrite
+from tests.support.testing import text
 
 G, ENTRY, CATEGORY, ROLE, OWNER = 100, 10, 20, 30, 1
 OWNER_ALLOW = discord.PermissionOverwrite(

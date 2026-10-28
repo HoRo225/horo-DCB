@@ -10,8 +10,8 @@ from src.admin.adapters.discord.panel import AdminPanelView
 from src.core.adapters.sqlite.db import open_db, transaction
 from src.core.adapters.sqlite.operations import OperationStore
 from src.core.app.effects import EffectKind, EffectRegistry, MessageProof, PendingEffect
-from src.testing import interaction
 from tests.support.admin import G, PanelCase
+from tests.support.testing import interaction
 
 CHANNEL, ADMIN = 101, 102
 

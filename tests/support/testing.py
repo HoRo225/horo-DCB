@@ -9,8 +9,8 @@ import discord
 from src.core.adapters.sqlite.db import open_db, transaction
 from src.core.adapters.sqlite.operations import OperationStore
 from src.core.adapters.sqlite.settings import SettingsStore
-from src.core.domain.settings import Setting
 from src.core.app.supervisor import WORK, Lane, TaskGroup
+from src.core.domain.settings import Setting
 
 
 class Fatal(BaseException):
@@ -30,10 +30,6 @@ def group(lane: Lane = WORK) -> TaskGroup:
 def put_setting(db: sqlite3.Connection, setting: Setting[object], value: object) -> None:
     with transaction(db):
         SettingsStore(db, OperationStore(db)).put({setting: value})
-
-
-def get_setting[T](db: sqlite3.Connection, setting: Setting[T]) -> T:
-    return SettingsStore(db, OperationStore(db)).get(setting)
 
 
 def memory_db(test: unittest.TestCase) -> sqlite3.Connection:
@@ -58,4 +54,3 @@ def interaction() -> MagicMock:
     fake.edit_original_response = AsyncMock()
     fake.delete_original_response = AsyncMock()
     return fake
-

@@ -6,8 +6,8 @@ import discord
 from src.admin.adapters.discord.pages.games import games_state
 from src.core.adapters.discord.brand import WARN_COLOUR
 from src.games.adapters.sqlite.store import GAMES_CHANNEL_ID, GAMES_HUB_MESSAGE
-from src.testing import put_setting
 from tests.support.admin import G, PanelCase, resolved, text_channel
+from tests.support.testing import put_setting
 
 ROLES = "選擇可用身分組（清空即所有人可用）"
 

@@ -4,7 +4,7 @@ from types import SimpleNamespace
 
 from src.admin.adapters.discord.sessions import PanelSessionRegistry
 from src.core.app.supervisor import PRESENTATION, WORK
-from src.testing import group
+from tests.support.testing import group
 
 KEY = (100, 200)
 

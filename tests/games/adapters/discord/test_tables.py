@@ -3,7 +3,6 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import discord
 
-from src import testing
 from src.core.adapters.discord.brand import BRAND_COLOUR, ERROR_COLOUR, GOLD_COLOUR, ICONS, NEUTRAL_COLOUR
 from src.games import GAMES, LiveTable
 from src.games.adapters.discord import tables
@@ -12,6 +11,7 @@ from src.games.app.tables import Posted
 from src.games.domain.blackjack import Round
 from src.games.domain.slots import evaluate
 from src.games.domain.table import Blackjack, Slots
+from tests.support import testing
 from tests.support.games import deck
 
 AVATAR = "https://cdn.example.com/a.png"

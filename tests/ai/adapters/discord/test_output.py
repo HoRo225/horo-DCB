@@ -6,8 +6,8 @@ from unittest.mock import AsyncMock
 
 import discord
 
-from src import testing
 from src.ai.adapters.discord.errors import codex_error_text
+from tests.support import testing
 from src.ai.adapters.discord.output import (
     DISCORD_MESSAGE_LIMIT,
     AiProgress,

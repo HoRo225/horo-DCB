@@ -4,7 +4,7 @@ from unittest.mock import AsyncMock, patch
 from src.core.adapters.discord.brand import ICONS, NEUTRAL_COLOUR, notice_view
 from src.core.adapters.discord.private import TTL_SECONDS, PrivateResults
 from src.core.app.ports import Source
-from src.testing import interaction, text
+from tests.support.testing import interaction, text
 
 LABELS = {"help": "功能說明", "steam_query": "Steam 免費遊戲"}
 EXPIRED = f"{ICONS['deadline']} 私人結果已過期，請再 @樂奈 問一次。"

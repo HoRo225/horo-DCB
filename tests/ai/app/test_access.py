@@ -2,8 +2,8 @@ import asyncio
 import unittest
 from types import SimpleNamespace
 
-from src import testing
 from src.ai import AiAccess, AiSettings, ModelError
+from tests.support import testing
 from tests.support.ai import FakeModel, MemoryAiStore
 
 G = 1

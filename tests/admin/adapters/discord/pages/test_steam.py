@@ -2,9 +2,9 @@ import unittest
 
 from src.steam import SteamOffer
 from src.steam.adapters.sqlite.store import STEAM_CHANNEL_ID
-from src.testing import put_setting
 from tests.support.admin import PanelCase, resolved, text_channel
 from tests.support.steam import fetched
+from tests.support.testing import put_setting
 
 ROLES = "選擇通知身分組（清空即取消）"
 

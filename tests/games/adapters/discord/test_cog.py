@@ -5,13 +5,13 @@ from unittest.mock import AsyncMock, MagicMock
 
 import discord
 
-from src import testing
 from src.core.adapters.discord.live import LiveGuild
 from src.core.app.supervisor import SCHEDULED, TaskGroup
 from src.games.adapters.discord.cog import HUB_QUIET_SECONDS, SWEEP_SECONDS, GamesCog
 from src.games.adapters.discord.presenter import DiscordTables
 from src.games.app.play import OWNER_ONLY
 from src.games.domain.rules import IDLE_SECONDS
+from tests.support import testing
 from tests.support.discord import Client, Guild
 from tests.support.games import CHANNEL, GUILD, PLAYER, GameHarness, deck
 

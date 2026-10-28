@@ -3,10 +3,7 @@ import unittest
 
 from src.core.adapters.discord.shutdown import Shutdown
 from src.core.app.supervisor import PRESENTATION, REQUEST, SCHEDULED, WORK, Supervisor
-
-
-class Fatal(BaseException):
-    pass
+from tests.support.testing import Fatal
 
 
 async def forever() -> None:

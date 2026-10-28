@@ -12,8 +12,8 @@ from src.core.adapters.sqlite.db import open_db, transaction
 from src.core.adapters.sqlite.operations import OperationStore
 from src.core.app.actions import ActionGroup, ActionRegistry, ActionSpec, Query
 from src.core.app.ports import Source
-from src.testing import interaction, text
 from tests.support.discord import Client, Guild, member
+from tests.support.testing import interaction, text
 
 G, CHANNEL, USER, BOT, SENT = 5, 10, 1, 99, 3000
 DONE = {"ok": True, "code": "done", "text": "管理操作已完成。"}

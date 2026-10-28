@@ -9,8 +9,8 @@ from src.core.app.ports import Actor
 from src.core.app.supervisor import SCHEDULED, TaskGroup
 from src.steam import Steam, SteamFetchResult, SteamOffer
 from src.steam.adapters.discord.actions import steam_actions
-from src.testing import text
 from tests.support.steam import FakeAnnouncer, FakeGuild, FakeSource, FakeStore
+from tests.support.testing import text
 
 G = 100
 ADMIN = Actor(1, "管理員", "", frozenset(), True)

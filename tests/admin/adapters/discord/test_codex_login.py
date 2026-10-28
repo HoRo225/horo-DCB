@@ -2,8 +2,8 @@ import asyncio
 import unittest
 
 from src.ai import ModelError
-from src.testing import text
 from tests.support.admin import LOGGED_OUT, READY, PanelCase
+from tests.support.testing import text
 
 
 class CodexLoginTests(PanelCase):

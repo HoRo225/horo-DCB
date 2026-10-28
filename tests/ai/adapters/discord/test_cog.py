@@ -5,12 +5,12 @@ from unittest.mock import AsyncMock, MagicMock
 
 import discord
 
-from src import testing
 from src.ai import AiSettings, ArchiveResult, ModelError
 from src.ai.adapters.discord.cog import AiCog
 from src.ai.domain.conversation import conversation_key
 from src.core.adapters.discord.live import LiveGuild
 from src.core.app.supervisor import REQUEST
+from tests.support import testing
 from tests.support.ai import FakeModel, MemoryAiStore
 
 G, CHANNEL, USER, ROLE = 1, 2, 3, 7

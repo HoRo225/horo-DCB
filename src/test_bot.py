@@ -4,7 +4,6 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import discord
 
-from src import testing
 from src.ai.adapters.discord.cog import AiCog
 from src.bot import HoroBot
 from src.core.adapters.discord.live import LiveGuild
@@ -16,6 +15,7 @@ from src.games.adapters.discord.views import lobby_view
 from src.games.adapters.sqlite.store import GAMES_CHANNEL_ID
 from src.steam import SteamOffer
 from src.steam.adapters.discord.views import build_offer_view
+from tests.support import testing
 
 G, BOT = 100, 999
 COGS = ["GamesCog", "VoiceCog", "AdminCog", "AiCog", "SteamCog"]

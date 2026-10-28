@@ -6,7 +6,6 @@ from unittest.mock import AsyncMock, MagicMock
 
 import discord
 
-from src import testing
 from src.ai import AiSettings, ModelError, ModelReply
 from src.ai.adapters.discord.errors import codex_error_text
 from src.ai.adapters.discord.messages import AiMessages
@@ -16,6 +15,7 @@ from src.ai.domain.conversation import MAX_PROMPT_CHARACTERS
 from src.ai.domain.prompts import CHAT_INSTRUCTIONS
 from src.core.adapters.discord.live import LiveGuild
 from src.core.app.supervisor import PRESENTATION
+from tests.support import testing
 from tests.support.ai import FakeActions, FakeMedia, FakeModel, Games, MemoryAiStore
 
 BOT, GUILD, CHANNEL, USER, ROLE = 10, 20, 30, 40, 50

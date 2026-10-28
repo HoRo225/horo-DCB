@@ -3,9 +3,9 @@ from types import SimpleNamespace
 
 import discord
 
-from src import testing
 from src.games import GAMES
 from src.games.adapters.discord.views import HUB_STATUS, RETIRED, game_pick_item, lobby_view, rules_item
+from tests.support import testing
 from tests.support.games import CHANNEL, GUILD, PLAYER, ROLE, FakeReply, GameHarness
 
 HUB_URL = f"https://discord.com/channels/{GUILD}/{CHANNEL}/50"

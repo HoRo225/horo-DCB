@@ -9,7 +9,6 @@ from unittest.mock import AsyncMock
 
 import discord
 
-from src import testing
 from src.ai import AiSettings, ModelError, ModelReply
 from src.ai.adapters.discord.messages import AiMessages
 from src.ai.adapters.discord.request import AiRequest, AiServices
@@ -22,6 +21,7 @@ from src.core.adapters.sqlite.operations import OperationStore
 from src.core.app.actions import Outcome
 from src.core.app.supervisor import PRESENTATION
 from src.core.domain.actions import Action, Catalogue, Plan
+from tests.support import testing
 from tests.support.ai import FakeMedia, FakeModel, Games, MemoryAiStore
 
 GUILD, CHANNEL_A, CHANNEL_B, USER, ROLE, BOT = 700, 701, 702, 710, 720, 799

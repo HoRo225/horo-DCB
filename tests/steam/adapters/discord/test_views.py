@@ -8,8 +8,8 @@ from src.core.adapters.discord.brand import BRAND_COLOUR, ICONS
 from src.core.app.supervisor import SCHEDULED, TaskGroup
 from src.steam import Steam
 from src.steam.adapters.discord.views import build_offer_view, offer_summary, steam_claim_item
-from src.testing import text
 from tests.support.steam import FakeAnnouncer, FakeGuild, FakeSource, FakeStore, announcement_effect, offer
+from tests.support.testing import text
 
 G = 100
 DATED = offer(1, name="**g**", header_image="https://cdn.example.com/h.jpg", ends_at=1792083600)

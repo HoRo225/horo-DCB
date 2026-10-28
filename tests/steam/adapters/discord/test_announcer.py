@@ -8,8 +8,8 @@ import discord
 from src.core.adapters.discord.live import LiveGuild
 from src.steam.adapters.discord.announcer import DiscordAnnouncer
 from src.steam.app.ports import DeliveryError
-from src.testing import text
 from tests.support.steam import offer
+from tests.support.testing import text
 
 G, CH, BOT = 100, 10, 99
 VIEW_SEND = discord.Permissions(view_channel=True, send_messages=True)

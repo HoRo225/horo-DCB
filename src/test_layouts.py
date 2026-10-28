@@ -4,7 +4,6 @@ from unittest.mock import MagicMock, patch
 
 import discord
 
-from src import testing
 from src.admin.adapters.discord.codex_login import CodexLogin
 from src.admin.adapters.discord.pages.ai import AiReadings, render_ai, render_ai_access
 from src.admin.adapters.discord.pages.ai_models import ModelEditor
@@ -15,24 +14,25 @@ from src.admin.adapters.discord.pages.voice import render_voice
 from src.admin.adapters.discord.panel import PAGES
 from src.ai import DeviceLogin, ModelChoice, ModelInfo, ModelSettings, RateLimits, RateWindow, RuntimeStatus
 from src.ai.adapters.discord.help import help_view
-from src.core.adapters.discord.receipts import receipt_view
+from src.ai.adapters.sqlite.store import AI_ENABLED
 from src.core.adapters.discord.brand import ICONS, WHITE, full_rules, notice_view
+from src.core.adapters.discord.receipts import receipt_view
+from src.core.adapters.sqlite.db import transaction
 from src.games import GAMES, LiveTable
 from src.games.adapters.discord.format import slot_symbol
 from src.games.adapters.discord.tables import seat_view
 from src.games.adapters.discord.views import lobby_view
+from src.games.adapters.sqlite.store import GAMES_HUB_MESSAGE
 from src.games.domain import slots
 from src.games.domain.blackjack import RANKS, SUITS, Card, Round
 from src.games.domain.table import Blackjack, Slots
-from src.core.adapters.sqlite.db import transaction
-from src.testing import put_setting
 from src.steam import SteamFetchResult, SteamOffer
 from src.steam.adapters.discord.views import build_offer_view
-from src.games.adapters.sqlite.store import GAMES_HUB_MESSAGE
-from src.ai.adapters.sqlite.store import AI_ENABLED
 from src.steam.adapters.sqlite.store import STEAM_ENABLED, STEAM_ROLE_IDS
 from src.voice.adapters.sqlite.store import VOICE_ENABLED
+from tests.support import testing
 from tests.support.admin import Admin
+from tests.support.testing import put_setting
 
 G, OWNER, MEMBER = 100, 200, 300
 
