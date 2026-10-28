@@ -58,7 +58,8 @@ class SettingsContractTests(unittest.TestCase):
         self.assertEqual(declared, PERSISTED)
 
     def test_feature_switches_drive_their_components(self) -> None:
-        from src.ai.access import AI_ENABLED, AiSettings
+        from src.ai import AiSettings
+        from src.ai.adapters.sqlite.store import AI_ENABLED, SqliteAiStore
         from src.steam import Steam
         from src.steam.adapters.discord.announcer import DiscordAnnouncer
         from src.steam.adapters.http.provider import SteamOfferProvider
@@ -73,7 +74,7 @@ class SettingsContractTests(unittest.TestCase):
         client = SimpleNamespace(get_guild=lambda _guild_id: None)
         live = LiveGuild(client, 1, lambda: False)
         components = {
-            AI_ENABLED: AiSettings(db, 1),
+            AI_ENABLED: AiSettings(SqliteAiStore(db), SimpleNamespace(), 1),
             VOICE_ENABLED: Voice(SqliteVoiceStore(db), DiscordVoiceGateway(live), TaskGroup("voice", WORK)),
             STEAM_ENABLED: Steam(SqliteSteamStore(db), SteamOfferProvider(), DiscordAnnouncer(client, live),
                                  TaskGroup("steam", SCHEDULED)),

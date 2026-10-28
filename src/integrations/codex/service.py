@@ -11,11 +11,8 @@ from dataclasses import dataclass
 from typing import Any
 
 from src.ai import (
-    CHAT_INSTRUCTIONS,
     CLEANUP_SECONDS,
     MAX_CHAT_BUDGET_MS,
-    ONCE_INSTRUCTIONS,
-    SUMMARY_INSTRUCTIONS,
     ArchiveResult,
     DeviceLogin,
     Job,
@@ -103,11 +100,6 @@ class Mode:
         else:
             params["baseInstructions"] = self.instructions
         return params
-
-
-CHAT = Mode("chat", CHAT_INSTRUCTIONS, MAX_CHAT_BUDGET_MS)
-SUMMARY = Mode("summary", SUMMARY_INSTRUCTIONS, 30_000, effort="medium", fallback=False)
-ONCE = Mode("once", ONCE_INSTRUCTIONS, MAX_CHAT_BUDGET_MS)
 
 
 def _nested_id(response: object, field: str) -> str:
@@ -333,14 +325,16 @@ class CodexService:
         text: str,
         images: tuple[str, ...],
         *,
+        instructions: str,
         job: Job,
         models: ModelSettings,
         on_progress: Callable[[str, str], None] | None = None,
         request_id: str | None = None,
     ) -> ModelReply:
         self._require_job(key, job)
+        mode = Mode("chat", instructions, MAX_CHAT_BUDGET_MS)
         try:
-            result, restarted = await self._turn(CHAT, key, text, images, job, models, on_progress, request_id)
+            result, restarted = await self._turn(mode, key, text, images, job, models, on_progress, request_id)
         except ModelError as exc:
             if exc.code != "stalled":
                 raise
@@ -350,7 +344,7 @@ class CodexService:
             if not await self._client.wait_ready(remaining):
                 raise ModelError("unavailable") from None
             self._require_job(key, job)
-            result, restarted = await self._turn(CHAT, key, text, images, job, models, on_progress, request_id)
+            result, restarted = await self._turn(mode, key, text, images, job, models, on_progress, request_id)
         return ModelReply(result.text.strip(), extract_reply_image_urls(result.web_searches, result.text), restarted)
 
     async def structured[T](
@@ -368,20 +362,22 @@ class CodexService:
             raise ModelError("unavailable") from None
 
     async def summarize(
-        self, key: str, safe_results: list[dict[str, object]], *, job: Job,
+        self, key: str, safe_results: list[dict[str, object]], *, instructions: str, job: Job,
         models: ModelSettings, request_id: str | None = None,
     ) -> ModelReply:
         self._require_job(key, job)
         prompt = json.dumps({"results": safe_results}, ensure_ascii=False, allow_nan=False)
-        result, _restarted = await self._turn(SUMMARY, key, prompt, (), job, models, None, request_id)
+        mode = Mode("summary", instructions, 30_000, effort="medium", fallback=False)
+        result, _restarted = await self._turn(mode, key, prompt, (), job, models, None, request_id)
         return ModelReply(result.text.strip())
 
     async def generate_once(
-        self, key: str, text: str, *, job: Job, models: ModelSettings,
+        self, key: str, text: str, *, instructions: str, job: Job, models: ModelSettings,
         request_id: str | None = None, effort: str | None = None,
     ) -> ModelReply:
         self._require_job(key, job)
-        result, _restarted = await self._turn(ONCE, key, text, (), job, models, None, request_id, effort)
+        mode = Mode("once", instructions, MAX_CHAT_BUDGET_MS)
+        result, _restarted = await self._turn(mode, key, text, (), job, models, None, request_id, effort)
         return ModelReply(result.text.strip())
 
     async def _turn(

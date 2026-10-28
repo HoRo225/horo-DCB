@@ -10,9 +10,7 @@ from src.core.adapters.sqlite.db import open_db, transaction
 from src.core.adapters.sqlite.operations import OperationStore
 from src.core.adapters.sqlite.settings import SettingsStore
 from src.core.domain.settings import Setting
-from src.core.app.supervisor import PRESENTATION, WORK, Lane, TaskGroup
-
-AI_CLEANUPS = TaskGroup("test.ai", PRESENTATION)
+from src.core.app.supervisor import WORK, Lane, TaskGroup
 
 
 class Fatal(BaseException):

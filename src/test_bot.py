@@ -5,7 +5,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import discord
 
 from src import testing
-from src.ai.cog import AiCog
+from src.ai.adapters.discord.cog import AiCog
 from src.bot import HoroBot
 from src.core.app.supervisor import REQUEST
 from src.games.adapters.discord.presenter import DiscordLobbyBoard
@@ -121,12 +121,13 @@ class HoroBotTests(unittest.IsolatedAsyncioTestCase):
         message.guild.id = G
         with (
             patch.object(self.bot, "process_commands", AsyncMock()) as process_commands,
-            patch("src.ai.cog.ai_discord.handle_message", AsyncMock()) as handle_message,
         ):
+            messages = MagicMock(handle=AsyncMock())
             await self.bot.on_message(message)
-            await AiCog(self.bot, self.bot.live, requests=testing.group(REQUEST), cleanups=testing.AI_CLEANUPS).on_message(message)
+            await AiCog(self.bot, self.bot.live, self.bot.ai_settings, self.bot.codex, messages,
+                        requests=testing.group(REQUEST)).on_message(message)
         process_commands.assert_not_awaited()
-        handle_message.assert_awaited_once()
+        messages.handle.assert_awaited_once_with(message, BOT)
 
 class HoroShutdownTests(unittest.IsolatedAsyncioTestCase):
     def setUp(self) -> None:

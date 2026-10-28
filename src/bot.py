@@ -10,11 +10,14 @@ from src.admin.actions import admin_actions
 from src.admin.cog import AdminCog
 from src.admin.sessions import PanelSessionRegistry
 from src.core.adapters.sqlite.operations import OperationStore
-from src.ai.actions import ai_actions
-from src.ai.background import GameRemarks
-from src.ai.cog import AiCog
-from src.ai.access import AiSettings
-from src.ai.access_service import AiAccessService
+from src.ai import AiAccess, AiSettings, AiText
+from src.ai.adapters.discord.actions import ai_actions
+from src.ai.adapters.discord.cog import AiCog
+from src.ai.adapters.discord.help import help_actions
+from src.ai.adapters.discord.messages import AiMessages
+from src.ai.adapters.media.frames import Frames
+from src.ai.adapters.media.images import MediaReader
+from src.ai.adapters.sqlite.store import SqliteAiStore
 from src.integrations.codex.conversations import ConversationStore
 from src.integrations.codex.service import CodexService
 from src.core.adapters.discord.brand import load_app_emojis, report_interaction_error, sync_discord_brand
@@ -82,9 +85,9 @@ class HoroBot(commands.Bot):
         self.maintenance = Maintenance(self.operations, supervisor.group("maintenance", SCHEDULED))
         self.maintenance.recover()
         self.codex = codex
-        self.ai_settings = AiSettings(db, guild_id)
-        self.access_service = AiAccessService(
-            self.ai_settings, codex, supervisor.group("access", WORK), role_ids_for_user=self._member_roles,
+        self.ai_settings = ai_settings = AiSettings(SqliteAiStore(db), codex, guild_id)
+        self.access_service = AiAccess(
+            ai_settings, codex, supervisor.group("access", WORK), role_ids_for_user=self._member_roles,
         )
         self.temp_voice = voice = Voice(SqliteVoiceStore(db), DiscordVoiceGateway(live), supervisor.group("voice", WORK))
         steam_store = SqliteSteamStore(db)
@@ -94,7 +97,7 @@ class HoroBot(commands.Bot):
         game_store, game_tasks = SqliteGameStore(db), supervisor.group("games", WORK)
         self.games = lobby = Lobby(game_store, DiscordLobbyBoard(self, live), live, game_tasks)
         game_tables, game_players, game_presenter = Tables(), DiscordPlayers(live), DiscordTables(self, live, lobby)
-        play = Play(game_store, game_tables, lobby, game_players, game_presenter, GameRemarks(self), game_tasks)
+        play = Play(game_store, game_tables, lobby, game_players, game_presenter, AiText(ai_settings, codex), game_tasks)
         self._games_cog = GamesCog(self, play, lobby, game_tables, game_presenter, game_players, live,
                                    supervisor.group("games.cog", SCHEDULED))
         self.admin_panels = PanelSessionRegistry(
@@ -110,14 +113,18 @@ class HoroBot(commands.Bot):
         self.effects = EffectResolver(self.operations, kinds, live, self)
         registry.register(
             *game_actions(play, lobby, live),
-            ai_actions(self.ai_settings, self.access_service, codex.get_models, lambda: lobby.channel_id),
+            ai_actions(ai_settings, self.access_service, codex.get_models),
+            help_actions(lobby),
             voice_actions(voice, live),
             steam_actions(steam, live),
-            admin_actions(lambda: self.ai_settings.enabled, lambda: voice.enabled,
+            admin_actions(lambda: ai_settings.enabled, lambda: voice.enabled,
                           lambda: steam.status().running, lambda: len(self.effects.pending())),
             effect_actions(self.effects),
         )
         self.actions = ActionEngine(registry, self.operations, live, self.receipts, supervisor.group("actions", WORK))
+        messages = AiMessages(live, ai_settings, codex, self.actions, lobby, MediaReader(Frames()),
+                              cleanups=supervisor.group("ai", PRESENTATION))
+        self._ai_cog = AiCog(self, live, ai_settings, codex, messages, requests=supervisor.group("ai", REQUEST))
         self._watchdog = supervisor.group("watchdog", SCHEDULED)
         self.shutdown = Shutdown(
             supervisor,
@@ -142,13 +149,12 @@ class HoroBot(commands.Bot):
     async def add_cogs(self) -> None:
         guild = discord.Object(id=self.guild_id)
         self.add_dynamic_items(self.receipts.private_results.item)
-        supervisor, live = self.supervisor, self.live
+        live = self.live
         for cog in (
             self._games_cog,
             VoiceCog(self.temp_voice, live),
             AdminCog(self, live),
-            AiCog(self, live, requests=supervisor.group("ai", REQUEST), cleanups=supervisor.group("ai", PRESENTATION),
-                  actions=self.actions),
+            self._ai_cog,
             SteamCog(self, self.steam),
         ):
             await self.add_cog(cog, guild=guild)

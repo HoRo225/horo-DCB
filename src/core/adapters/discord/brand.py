@@ -201,6 +201,12 @@ def card_title(
     return discord.ui.Section(text, accessory=accessory)
 
 
+def info_card(*items: discord.ui.Item) -> discord.ui.LayoutView:
+    view = discord.ui.LayoutView(timeout=None)
+    view.add_item(discord.ui.Container(*items, accent_colour=BRAND_COLOUR))
+    return view
+
+
 def full_rules(title: str, sections: Sequence[tuple[str, str]]) -> discord.ui.LayoutView:
     items: list[discord.ui.Item] = [card_title(title)]
     for heading, text in sections:

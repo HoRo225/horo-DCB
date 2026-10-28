@@ -52,8 +52,9 @@ class ImportBoundaryTests(unittest.TestCase):
                            for module, dependencies in graph.items()}).prepare()
 
     def test_background_prompts_do_not_load_message_pipeline(self) -> None:
-        modules = loaded_modules("src.ai.background")
-        self.assertTrue({"src.ai.discord", "src.ai.images", "src.ai.output"}.isdisjoint(modules))
+        modules = loaded_modules("src.ai.app.text")
+        self.assertFalse({module for module in modules if module.startswith("src.ai.adapters")})
+        self.assertNotIn("discord", modules)
 
     def test_nothing_imports_the_codex_sdk_or_pydantic(self) -> None:
         pattern = re.compile(r"^\s*(?:from|import)\s+(?:openai_codex|pydantic)\b", re.M)
@@ -67,7 +68,7 @@ class ImportBoundaryTests(unittest.TestCase):
         self.assertTrue({"openai_codex", "pydantic"}.isdisjoint(loaded_modules("src.bot")))
 
     def test_frame_worker_loads_no_ai_layers(self) -> None:
-        modules = loaded_modules("src.ai.frames")
+        modules = loaded_modules("src.ai.adapters.media.frames")
         self.assertNotIn("discord", modules)
         self.assertNotIn("src.core.app.config", modules)
         self.assertFalse({module for module in modules if module.startswith("src.integrations")})
@@ -86,8 +87,7 @@ class ImportBoundaryTests(unittest.TestCase):
     def test_feature_cogs_do_not_load_other_features(self) -> None:
         features = {"games", "voice", "steam", "ai", "admin"}
         for feature in features - {"admin"}:
-            cog = f"src.{feature}.cog" if feature == "ai" else f"src.{feature}.adapters.discord.cog"
-            modules = loaded_modules(cog)
+            modules = loaded_modules(f"src.{feature}.adapters.discord.cog")
             with self.subTest(feature):
                 loaded = {m.split(".")[1] for m in modules if m.startswith("src.") and m.split(".")[1] in features}
                 self.assertLessEqual(loaded, {feature})

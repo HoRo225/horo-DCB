@@ -7,9 +7,10 @@ from unittest.mock import AsyncMock, MagicMock
 
 import discord
 
-from src.ai.access import AiSettings
-from src.ai.access_service import AiAccessService
-from src.ai.actions import ai_actions
+from src.ai import AiAccess, AiSettings
+from src.ai.adapters.discord.actions import ai_actions
+from src.ai.adapters.discord.help import help_actions
+from src.ai.adapters.sqlite.store import SqliteAiStore
 from src.core.adapters.discord.live import LiveGuild
 from src.core.adapters.discord.receipts import DiscordReceipts
 from src.core.adapters.sqlite.db import open_db
@@ -46,8 +47,10 @@ class ActionHarness:
         self.guild.fetch_member = AsyncMock(return_value=self.member)
         self.guild.get_channel_or_thread.return_value = self.channel
         self.guild.get_channel.return_value = None
-        self.ai = AiSettings(self.db, GUILD)
-        self.ai.enabled = True
+        self.model = SimpleNamespace(cancel=AsyncMock(), cancel_revoked=AsyncMock())
+        ai_store = SqliteAiStore(self.db)
+        ai_store.set_enabled(True, operation_id=None)
+        self.ai = AiSettings(ai_store, self.model, GUILD)
         self.ai.set_allowlist(GUILD, frozenset({CHANNEL}), roles=False)
         self.ai.set_allowlist(GUILD, frozenset({ROLE}), roles=True)
         store = SqliteGameStore(self.db)
@@ -65,14 +68,15 @@ class ActionHarness:
         self.games = Lobby(store, DiscordLobbyBoard(self.client, self.live), self.live, tasks)
         self.play = Play(store, Tables(), self.games, DiscordPlayers(self.live),
                          DiscordTables(self.client, self.live, self.games), AsyncMock(), tasks)
-        self.access = AiAccessService(self.ai, SimpleNamespace(cancel=AsyncMock()), TaskGroup("test.access", WORK))
+        self.access = AiAccess(self.ai, self.model, TaskGroup("test.access", WORK))
         self.restart()
 
     def restart(self) -> None:
         registry = ActionRegistry()
         registry.register(
             *game_actions(self.play, self.games, self.live),
-            ai_actions(self.ai, self.access, AsyncMock(return_value=()), lambda: self.games.channel_id),
+            ai_actions(self.ai, self.access, AsyncMock(return_value=())),
+            help_actions(self.games),
             voice_actions(self.voice, self.live),
         )
         operations = OperationStore(self.db)

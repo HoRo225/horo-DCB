@@ -17,10 +17,9 @@ from src.admin.pages.common import (
     role_select,
     spacer,
 )
-from src.ai.access import MAX_CODEX_ALLOWED_CHANNELS
-from src.ai.formatting import codex_error_text
 from src.admin.ports import CodexAccount
-from src.ai import DeviceLogin, ModelError, RateLimits, RuntimeStatus
+from src.ai import MAX_CODEX_ALLOWED_CHANNELS, DeviceLogin, ModelError, RateLimits, RuntimeStatus
+from src.ai.adapters.discord.errors import codex_error_text
 from src.core.adapters.discord.brand import BRAND_COLOUR, ICONS, bar
 from src.core.adapters.discord.channels import (
     VIEW_AND_SEND,
@@ -246,7 +245,7 @@ def render_ai(view: AdminPanelView, note: tuple[str, str] | None = None) -> None
                 view,
                 "ai",
                 "{name}",
-                owner=view.access_service,
+                owner=view.ai_settings,
                 render=render_ai,
                 after=_after_ai_toggle,
             ),

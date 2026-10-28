@@ -13,7 +13,7 @@ from src.admin.pages.steam import SteamQuery, render_steam
 from src.admin.pages.voice import render_voice
 from src.admin.panel import PAGES, AdminPanelView
 from src.ai import DeviceLogin, ModelChoice, ModelInfo, ModelSettings, RateLimits, RateWindow, RuntimeStatus
-from src.ai.query_views import help_view
+from src.ai.adapters.discord.help import help_view
 from src.core.adapters.discord.receipts import receipt_view
 from src.bot import HoroBot
 from src.core.adapters.discord.brand import ICONS, WHITE, full_rules, notice_view
@@ -29,7 +29,7 @@ from src.testing import put_setting
 from src.steam import SteamFetchResult, SteamOffer
 from src.steam.adapters.discord.views import build_offer_view
 from src.games.adapters.sqlite.store import GAMES_HUB_MESSAGE
-from src.ai.access import AI_ENABLED
+from src.ai.adapters.sqlite.store import AI_ENABLED
 from src.steam.adapters.sqlite.store import STEAM_ENABLED, STEAM_ROLE_IDS
 from src.voice.adapters.sqlite.store import VOICE_ENABLED
 

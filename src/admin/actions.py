@@ -4,8 +4,7 @@ from collections.abc import Callable, Mapping
 
 import discord
 
-from src.ai.query_views import info_card
-from src.core.adapters.discord.brand import ICONS, card_title
+from src.core.adapters.discord.brand import ICONS, card_title, info_card
 from src.core.app.actions import ActionGroup, ActionSpec, Query
 from src.core.app.ports import Actor
 

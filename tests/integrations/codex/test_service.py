@@ -5,7 +5,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from src.ai import CHAT_INSTRUCTIONS, SUMMARY_INSTRUCTIONS, ModelChoice, ModelError, ModelSettings
+from src.ai import ModelChoice, ModelError, ModelSettings
 from src.core.adapters.sqlite.db import open_db
 from src.integrations.codex.conversations import ConversationStore
 from src.integrations.codex.rpc import AppServerClient
@@ -17,6 +17,9 @@ THREAD_KEY = "guild:1:thread:9"
 SETTINGS = ModelSettings(ModelChoice("gpt-test"), ModelChoice("gpt-backup"))
 PLAN = {"kind": "plan", "actions": [{"name": "help", "params": {}}], "question": ""}
 INSTRUCTIONS = "只回傳符合 schema 的 JSON。"
+CHAT_INSTRUCTIONS = "你是測試用的聊天角色。"
+SUMMARY_INSTRUCTIONS = "只說明結果。"
+ONCE_INSTRUCTIONS = "單次回覆。"
 SCHEMA = {"type": "object", "required": ["kind", "actions", "question"]}
 
 
@@ -59,7 +62,7 @@ class ServiceTests(unittest.IsolatedAsyncioTestCase):
             return await call(job)
 
     async def chat(self, text: str = "你好", images: tuple[str, ...] = (), key: str = KEY, progress=None, parent=None):
-        return await self.run_job(lambda job: self.service.chat(key, text, images, job=job, models=SETTINGS,
+        return await self.run_job(lambda job: self.service.chat(key, text, images, instructions=CHAT_INSTRUCTIONS, job=job, models=SETTINGS,
                                                                 on_progress=progress), key, parent)
 
     async def intent(self):
@@ -211,7 +214,7 @@ class ServiceTests(unittest.IsolatedAsyncioTestCase):
     async def test_summary_never_falls_back(self) -> None:
         self.server.script = answer(status="failed", error=OVERLOADED)
         with self.assertRaises(ModelError) as caught:
-            await self.run_job(lambda job: self.service.summarize(KEY, [{"ok": True}], job=job, models=SETTINGS))
+            await self.run_job(lambda job: self.service.summarize(KEY, [{"ok": True}], instructions=SUMMARY_INSTRUCTIONS, job=job, models=SETTINGS))
         self.assertEqual(caught.exception.code, "model_capacity")
         self.assertEqual(len(self.server.params("turn/start")), 1)
         self.assertEqual(self.server.params("thread/start")[0]["baseInstructions"], SUMMARY_INSTRUCTIONS)
@@ -226,7 +229,7 @@ class ServiceTests(unittest.IsolatedAsyncioTestCase):
             with self.subTest(code):
                 self.server.script = answer(status="failed", error=error)
                 with self.assertRaises(ModelError) as caught:
-                    await self.run_job(lambda job: self.service.generate_once(KEY, "嘴一句", job=job, models=SETTINGS))
+                    await self.run_job(lambda job: self.service.generate_once(KEY, "嘴一句", instructions=ONCE_INSTRUCTIONS, job=job, models=SETTINGS))
                 self.assertEqual(caught.exception.code, code)
         self.assertEqual(self.service.last_error, "usage_limit_or_unavailable")
 
@@ -327,8 +330,8 @@ class ServiceTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_one_job_resolves_models_once_and_the_next_job_sees_catalog_changes(self) -> None:
         async def twice(job):
-            await self.service.chat(KEY, "一", (), job=job, models=SETTINGS)
-            await self.service.chat(KEY, "二", (), job=job, models=SETTINGS)
+            await self.service.chat(KEY, "一", (), instructions=CHAT_INSTRUCTIONS, job=job, models=SETTINGS)
+            await self.service.chat(KEY, "二", (), instructions=CHAT_INSTRUCTIONS, job=job, models=SETTINGS)
         await self.run_job(twice)
         self.assertEqual(self.server.methods().count("model/list"), 1)
         self.server.models = [{**MODELS[0], "defaultReasoningEffort": "high"}, MODELS[1]]
@@ -337,13 +340,13 @@ class ServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual([params["effort"] for params in self.server.params("turn/start")], ["medium", "medium", "high"])
 
     async def test_requested_effort_overrides_the_model_default(self) -> None:
-        await self.run_job(lambda job: self.service.generate_once(KEY, "嘴一句", job=job, models=SETTINGS, effort="high"))
+        await self.run_job(lambda job: self.service.generate_once(KEY, "嘴一句", instructions=ONCE_INSTRUCTIONS, job=job, models=SETTINGS, effort="high"))
         (turn,) = self.server.params("turn/start")
         self.assertEqual((turn["model"], turn["effort"]), ("gpt-test", "high"))
 
     async def test_missing_model_is_a_configuration_error(self) -> None:
         with self.assertRaises(ModelError) as caught:
-            await self.run_job(lambda job: self.service.chat(KEY, "你好", (), job=job,
+            await self.run_job(lambda job: self.service.chat(KEY, "你好", (), instructions=CHAT_INSTRUCTIONS, job=job,
                                                              models=ModelSettings(ModelChoice("gone"), None)))
         self.assertEqual(caught.exception.code, "model_configuration_invalid")
         self.assertFalse(self.server.params("turn/start"))

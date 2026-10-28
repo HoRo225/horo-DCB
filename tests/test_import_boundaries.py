@@ -72,8 +72,8 @@ class IntegrationBoundaryTests(unittest.TestCase):
         for source, expected in (
             ("from src.ai import ModelError", {"src.ai"}),
             ("from src import ai, core", {"src.ai", "src.core"}),
-            ("import src.ai.discord", {"src.ai.discord"}),
-            ("from ...ai.discord import x", {"src.ai.discord"}),
+            ("import src.ai.adapters.discord.cog", {"src.ai.adapters.discord.cog"}),
+            ("from ...ai.adapters import x", {"src.ai.adapters"}),
             ("from .. import codex", {"src.integrations.codex"}),
             ("from .rpc import x", {"src.integrations.codex.rpc"}),
             ("if TYPE_CHECKING:\n    from src.games.store import GameStore", {"src.games.store"}),

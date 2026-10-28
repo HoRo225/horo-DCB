@@ -18,7 +18,7 @@ from src.testing import put_setting
 from src.steam import SteamFetchResult, SteamOffer
 from src.testing import group, text
 from src.core.app.supervisor import PRESENTATION, WORK
-from src.ai.access import AI_ENABLED
+from src.ai.adapters.sqlite.store import AI_ENABLED
 from src.games.adapters.sqlite.store import GAMES_CHANNEL_ID, GAMES_HUB_MESSAGE
 from src.steam.adapters.sqlite.store import STEAM_CHANNEL_ID
 from src.voice.adapters.sqlite.store import VOICE_ENABLED, VOICE_ENTRY_CHANNEL_ID

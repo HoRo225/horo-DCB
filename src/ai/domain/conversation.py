@@ -66,6 +66,15 @@ def safe_https_hostname(url: str) -> str | None:
     return parsed.hostname.casefold()
 
 
+def is_discord_media_url(url: str) -> bool:
+    host = safe_https_hostname(url)
+    return host is not None and (
+        host in {"cdn.discordapp.com", "media.discordapp.net"}
+        or host.endswith(".discordapp.com")
+        or host.endswith(".discordapp.net")
+    )
+
+
 def normalize_reply_image_urls(value: object) -> tuple[str, ...]:
     if not isinstance(value, (list, tuple)):
         return ()
