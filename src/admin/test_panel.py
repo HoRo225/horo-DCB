@@ -9,10 +9,7 @@ from unittest.mock import ANY, AsyncMock, MagicMock, patch
 import discord
 
 from src.admin.pages.games import games_state
-from src.codex.model_settings import ModelInfo
-from src.codex.protocol import CodexRuntimeStatus
-from src.codex.rate_limits import CodexRateLimits, CodexRateWindow
-from src.codex.service import DeviceLogin
+from src.ai import DeviceLogin, ModelInfo, RateLimits, RateWindow, RuntimeStatus
 from src.admin.cog import AdminCog
 from src.bot import HoroBot
 from src.core.adapters.discord.brand import BRAND_COLOUR, ICONS, NEUTRAL_COLOUR, WARN_COLOUR
@@ -99,8 +96,8 @@ class PanelShutdownTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(shared.done())
         self.assertFalse(self.mutations.pending())
 
-STATUS = CodexRuntimeStatus(reason="ready", authenticated=True, plan="plus", runtime_version="1.0", thread_count=3)
-LOGGED_OUT = CodexRuntimeStatus(reason="auth_required", runtime_version="1.0")
+STATUS = RuntimeStatus(reason="ready", authenticated=True, plan="plus", runtime_version="1.0", thread_count=3)
+LOGGED_OUT = RuntimeStatus(reason="auth_required", runtime_version="1.0")
 LOGIN = DeviceLogin("login-1", "https://auth.openai.com/codex/device", "ABCD-1234")
 MODELS = (
     ModelInfo("gpt-a", "Model A", "medium", ("low", "medium"), ("text",)),
@@ -108,8 +105,8 @@ MODELS = (
 )
 
 
-def limits(used: int) -> CodexRateLimits:
-    return CodexRateLimits(int(time.time()), (CodexRateWindow("primary", used, 300, None),), None)
+def limits(used: int) -> RateLimits:
+    return RateLimits(int(time.time()), (RateWindow("primary", used, 300, None),), None)
 
 
 def resolved(channel: object) -> MagicMock:
@@ -886,7 +883,7 @@ class AdminPanelTest(unittest.IsolatedAsyncioTestCase):
         self.assertIn("尚未登入。", shown)
 
     async def test_unresponsive_codex_is_named_on_ai_page_and_overview(self) -> None:
-        self.codex.get_runtime_status.return_value = CodexRuntimeStatus(reason="unresponsive")
+        self.codex.get_runtime_status.return_value = RuntimeStatus(reason="unresponsive")
         self.bot.ai_settings.set_allowlist(G, frozenset({600}), roles=False)
         self.bot.ai_settings.set_allowlist(G, frozenset({700}), roles=True)
         self.channels[600] = text_channel(600, self.guild)

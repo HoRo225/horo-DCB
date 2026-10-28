@@ -19,9 +19,8 @@ from src.admin.pages.common import (
 )
 from src.ai.access import MAX_CODEX_ALLOWED_CHANNELS
 from src.ai.formatting import codex_error_text
-from src.codex.protocol import CodexError, CodexRuntimeStatus
-from src.codex.rate_limits import CodexRateLimits
-from src.codex.service import CodexService, DeviceLogin
+from src.admin.ports import CodexAccount
+from src.ai import DeviceLogin, ModelError, RateLimits, RuntimeStatus
 from src.core.adapters.discord.brand import BRAND_COLOUR, ICONS, bar
 from src.core.adapters.discord.channels import (
     VIEW_AND_SEND,
@@ -46,8 +45,8 @@ class _AiState:
 
 @dataclass(slots=True)
 class AiReadings:
-    codex_status: CodexRuntimeStatus = CodexRuntimeStatus()
-    rate_limits: CodexRateLimits = CodexRateLimits()
+    codex_status: RuntimeStatus = RuntimeStatus()
+    rate_limits: RateLimits = RateLimits()
     login: DeviceLogin | None = None
     login_task: asyncio.Task[None] | None = None
     confirm_logout: bool = False
@@ -68,20 +67,20 @@ def rate_visible(view: AdminPanelView) -> bool:
     return view.ai_settings.enabled
 
 
-async def load_codex_status(client: CodexService) -> CodexRuntimeStatus:
+async def load_codex_status(client: CodexAccount) -> RuntimeStatus:
     try:
         return await client.get_runtime_status()
     except Exception:
         logging.exception("Admin panel failed to read Codex status.")
-        return CodexRuntimeStatus()
+        return RuntimeStatus()
 
 
-async def load_codex_rate_limits(client: CodexService) -> CodexRateLimits:
+async def load_codex_rate_limits(client: CodexAccount) -> RateLimits:
     try:
         return await client.get_rate_limits()
     except Exception:
         logging.exception("Admin panel failed to read Codex rate limits.")
-        return CodexRateLimits(error="unavailable")
+        return RateLimits(error="unavailable")
 
 
 async def load_ai(view: AdminPanelView, operation: int) -> bool:
@@ -345,7 +344,7 @@ async def _start_login(view: AdminPanelView, interaction: discord.Interaction) -
         readings = view.state(AiReadings)
         try:
             login = await view.codex_client.login_start()
-        except CodexError:
+        except ModelError:
             return lambda: render_ai(view, ("warn", "目前無法開始登入，請稍後再試。"))
         if readings.login_task is not None:
             readings.login_task.cancel()
@@ -400,7 +399,7 @@ async def _logout(view: AdminPanelView, interaction: discord.Interaction) -> Non
         view.state(AiReadings).confirm_logout = False
         try:
             await view.codex_client.logout()
-        except CodexError:
+        except ModelError:
             note = ("warn", "登出失敗，請稍後再試。")
         else:
             note = ("ok", "已登出 Codex。")

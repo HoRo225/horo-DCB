@@ -7,7 +7,7 @@ from dataclasses import dataclass
 _IDENTIFIER = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}\Z")
 
 
-def _identifier(value: object) -> str:
+def model_identifier(value: object) -> str:
     if not isinstance(value, str) or _IDENTIFIER.fullmatch(value) is None:
         raise ValueError("invalid model identifier")
     return value
@@ -41,7 +41,7 @@ def parse_model_choice(value: object) -> ModelChoice:
     if not isinstance(value, dict) or set(value) != {"model", "effort"}:
         raise ValueError("invalid model choice")
     effort = value["effort"]
-    return ModelChoice(_identifier(value["model"]), None if effort is None else _identifier(effort))
+    return ModelChoice(model_identifier(value["model"]), None if effort is None else model_identifier(effort))
 
 
 def parse_model_settings(value: object) -> ModelSettings:
@@ -89,39 +89,3 @@ def with_effort(settings: ModelSettings, effort: str, catalog: Iterable[ModelInf
         return ModelChoice(choice.model, effort if info and effort in info.supported_efforts else None)
 
     return ModelSettings(choose(settings.primary), choose(settings.fallback) if settings.fallback else None)
-
-
-def parse_model_list(entries: object) -> tuple[ModelInfo, ...]:
-    if not isinstance(entries, list) or not entries or len(entries) > 1000:
-        raise ValueError("invalid model catalog")
-    result: list[ModelInfo] = []
-    seen: set[str] = set()
-    for raw in entries:
-        if not isinstance(raw, dict):
-            raise ValueError("invalid model catalog entry")
-        model = _identifier(raw.get("model"))
-        name = raw.get("displayName")
-        if not isinstance(name, str) or not name.strip() or len(name) > 200 or model in seen:
-            raise ValueError("invalid model catalog name")
-        efforts = raw.get("supportedReasoningEfforts")
-        modalities = raw.get("inputModalities") or []
-        if (
-            not isinstance(efforts, list)
-            or len(efforts) > 25
-            or not isinstance(modalities, list)
-            or len(modalities) > 25
-            or any(not isinstance(option, dict) for option in efforts)
-        ):
-            raise ValueError("invalid model capabilities")
-        supported = tuple(_identifier(option.get("reasoningEffort")) for option in efforts)
-        inputs = tuple(_identifier(item) for item in modalities)
-        default = _identifier(raw.get("defaultReasoningEffort"))
-        if (
-            len(set(supported)) != len(supported)
-            or len(set(inputs)) != len(inputs)
-            or (supported and default not in supported)
-        ):
-            raise ValueError("inconsistent model capabilities")
-        seen.add(model)
-        result.append(ModelInfo(model, name, default, supported, inputs))
-    return tuple(result)

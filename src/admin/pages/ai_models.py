@@ -10,7 +10,7 @@ from typing import TYPE_CHECKING
 import discord
 
 from src.admin.pages.common import footer_note, spacer
-from src.codex.model_settings import (
+from src.ai import (
     DEFAULT_MODEL_SETTINGS,
     ModelChoice,
     ModelInfo,

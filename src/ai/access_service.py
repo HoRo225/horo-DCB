@@ -6,15 +6,15 @@ from collections.abc import Callable
 from typing import Literal
 
 from src.ai.access import AiSettings
-from src.codex.service import CodexService
-from src.codex.protocol import CodexError, scope_matches
+from src.ai.app.ports import ModelError, TextModel
+from src.ai.domain.conversation import scope_matches
 from src.core.app.supervisor import TaskGroup, cancel_all, wait_until
 
 AccessChangeOutcome = Literal["unchanged", "updated"]
 
 
 class AiAccessService:
-    def __init__(self, access: AiSettings, client: CodexService, tasks: TaskGroup, *, role_ids_for_user: Callable[[int], frozenset[int] | None] | None = None) -> None:
+    def __init__(self, access: AiSettings, client: TextModel, tasks: TaskGroup, *, role_ids_for_user: Callable[[int], frozenset[int] | None] | None = None) -> None:
         self.access = access
         self.client = client
         self._tasks = tasks
@@ -32,7 +32,7 @@ class AiAccessService:
             return True
         try:
             await self.client.cancel(self.access.guild_id)
-        except CodexError:
+        except ModelError:
             logging.exception("AI was disabled but requests in flight could not be stopped.")
             return False
         return True
@@ -81,7 +81,7 @@ class AiAccessService:
                         )
                     try:
                         await self.client.cancel_revoked(guild_id, in_removed)
-                    except CodexError:
+                    except ModelError:
                         logging.exception("AI requests in removed allowlist channels did not stop in time.")
                 self.access.set_allowlist(guild_id, selected, roles=roles, operation_id=operation_id)
                 if roles and removed:

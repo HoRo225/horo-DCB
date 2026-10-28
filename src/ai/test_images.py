@@ -24,7 +24,7 @@ from src.ai.images import (
     read_message_media,
     select_message_media,
 )
-from src.codex.protocol import MAX_IMAGE_BYTES
+from src.ai.domain.conversation import MAX_IMAGE_BYTES
 
 CDN = "https://cdn.discordapp.com"
 PNG = b"\x89PNG\r\n\x1a\n" + b"\0" * 8

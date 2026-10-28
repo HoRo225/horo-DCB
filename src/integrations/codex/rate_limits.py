@@ -1,22 +1,8 @@
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass
 
-
-@dataclass(frozen=True, slots=True)
-class CodexRateWindow:
-    slot: str
-    used_percent: int | float
-    window_minutes: int | None
-    resets_at: int | None
-
-
-@dataclass(frozen=True, slots=True)
-class CodexRateLimits:
-    fetched_at: int | None = None
-    windows: tuple[CodexRateWindow, ...] = ()
-    error: str | None = "unavailable"
+from src.ai import RateLimits, RateWindow
 
 
 def _rate_optional_int(value: object) -> int | None:
@@ -27,7 +13,7 @@ def _rate_optional_int(value: object) -> int | None:
     return value
 
 
-def _rate_window(slot: str, value: object) -> CodexRateWindow:
+def _rate_window(slot: str, value: object) -> RateWindow:
     if not isinstance(value, dict) or slot not in ("primary", "secondary"):
         raise ValueError("invalid rate-limit window")
     used = value.get("usedPercent")
@@ -37,10 +23,10 @@ def _rate_window(slot: str, value: object) -> CodexRateWindow:
         raise ValueError("invalid rate-limit percentage")
     minutes = _rate_optional_int(value.get("windowDurationMins"))
     reset = _rate_optional_int(value.get("resetsAt"))
-    return CodexRateWindow(slot, used, minutes, reset)
+    return RateWindow(slot, used, minutes, reset)
 
 
-def normalize_rate_limits(raw: object, *, fetched_at: int) -> CodexRateLimits:
+def normalize_rate_limits(raw: object, *, fetched_at: int) -> RateLimits:
     if not isinstance(raw, dict):
         raise ValueError("invalid rate-limit response")
     timestamp = _rate_optional_int(fetched_at)
@@ -58,10 +44,10 @@ def normalize_rate_limits(raw: object, *, fetched_at: int) -> CodexRateLimits:
         if not isinstance(snapshot, dict):
             raise ValueError("missing rate-limit snapshot")
         if snapshot.get("limitId") not in (None, "codex"):
-            return CodexRateLimits(timestamp, (), None)
+            return RateLimits(timestamp, (), None)
     windows = tuple(
         _rate_window(slot, snapshot[slot])
         for slot in ("primary", "secondary")
         if snapshot.get(slot) is not None
     )
-    return CodexRateLimits(timestamp, windows, None)
+    return RateLimits(timestamp, windows, None)

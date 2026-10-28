@@ -1,10 +1,8 @@
-from __future__ import annotations
-
 import asyncio
 import unittest
 
-from src.codex.admission import MAX_ACTIVE_KEYS, Admission
-from src.codex.protocol import CodexError
+from src.ai import MAX_ACTIVE_KEYS, ModelError
+from src.integrations.codex.admission import Admission
 
 A = "guild:1:channel:2:user:3"
 B = "guild:1:thread:9"
@@ -34,7 +32,7 @@ class AdmissionTest(unittest.IsolatedAsyncioTestCase):
 
     async def claim_error(self, key: str, **kwargs: object) -> str:
         kwargs.setdefault("deadline", self.deadline)
-        with self.assertRaises(CodexError) as caught:
+        with self.assertRaises(ModelError) as caught:
             async with self.admission.claim(key, **kwargs):
                 pass
         return caught.exception.code

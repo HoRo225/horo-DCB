@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import sqlite3
 
-from src.codex.model_settings import DEFAULT_MODEL_SETTINGS, ModelSettings, parse_model_settings
+from src.ai.domain.models import DEFAULT_MODEL_SETTINGS, ModelSettings, parse_model_settings
 from src.core.adapters.sqlite.operations import OperationStore
 from src.core.adapters.sqlite.settings import SettingsStore
 from src.core.domain.ids import is_positive_int

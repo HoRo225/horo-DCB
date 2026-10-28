@@ -15,7 +15,7 @@ import discord
 from src.ai.access import AiSettings
 from src.ai.domain.intent import Intent, envelope_schema, parse_envelope
 from src.ai.domain.prompts import intent_instructions
-from src.codex.service import CodexService
+from src.ai.app.ports import ModelError, TextModel
 from src.ai.formatting import codex_error_text
 from src.ai.images import (
     ImageAttachmentError,
@@ -33,11 +33,10 @@ from src.ai.message_context import (
     visible_message_text,
 )
 from src.ai.output import AiProgress, reply, reply_notice, send_ai_answer
-from src.codex.protocol import (
+from src.ai.domain.conversation import (
     CLEANUP_SECONDS,
     MAX_PROMPT_CHARACTERS,
     WORK_TIMEOUT_SECONDS,
-    CodexError,
     conversation_key,
 )
 from src.ai.query_views import help_view
@@ -117,7 +116,7 @@ async def handle_message(
     *,
     live: LiveGuild,
     bot_user_id: int,
-    codex: CodexService,
+    codex: TextModel,
     access: AiSettings,
     cleanups: TaskGroup,
     actions: ActionEngine | None = None,
@@ -206,7 +205,7 @@ class AiRequest:
         mentions_bot: bool,
         referenced_message: Any,
         bot_name: str,
-        codex: CodexService,
+        codex: TextModel,
         access: AiSettings,
         text_display_enabled: bool,
         actions: ActionEngine | None = None,
@@ -327,14 +326,14 @@ class AiRequest:
                     summary = await self.codex.summarize(self.key, public, job=self.job, models=models, request_id=self.id)
                 if await self.can_send():
                     await self.actions.explain(self.source, summary.text, grant=self._granted)
-            except (CodexError, TimeoutError):
+            except (ModelError, TimeoutError):
                 logging.warning("AI result explanation unavailable; the confirmed receipt remains.")
         return True
 
     async def send_error(self, exc: Exception, *, deadline: float) -> None:
         self.outcome = (
             exc.code
-            if isinstance(exc, CodexError)
+            if isinstance(exc, ModelError)
             else "timeout"
             if isinstance(exc, TimeoutError)
             else "invalid_request"
@@ -363,7 +362,7 @@ class AiRequest:
     async def _prepare(self) -> tuple[str, tuple[str, ...]]:
         message = self.message
         if not await self.can_send():
-            raise CodexError("revoked")
+            raise ModelError("revoked")
         if len(self.content) > MAX_PROMPT_CHARACTERS:
             raise ImageAttachmentError(f"問題最多 {MAX_PROMPT_CHARACTERS:,} 個字元，請縮短後再試。")
         if (
@@ -405,7 +404,7 @@ class AiRequest:
             media_note=describe_media(media_items, skipped, broken, timed_out),
         )
         if not await self.can_send():
-            raise CodexError("revoked")
+            raise ModelError("revoked")
         return prompt, images
 
     async def run(self) -> None:
@@ -416,7 +415,7 @@ class AiRequest:
             try:
                 models = self.access.models
             except sqlite3.Error, ValueError:
-                raise CodexError("model_configuration_invalid") from None
+                raise ModelError("model_configuration_invalid") from None
             async with codex.accepted_request(
                     self.key,
                 still_current=self._current,
@@ -470,18 +469,18 @@ class AiRequest:
                             )
                         if not job.current:
                             self.outcome = "revoked"
-                except (ImageAttachmentError, CodexError, TimeoutError) as exc:
+                except (ImageAttachmentError, ModelError, TimeoutError) as exc:
                     await self.send_error(exc, deadline=job.deadline)
         except asyncio.CancelledError:
             self.outcome = "cancelled"
-        except CodexError as exc:
+        except ModelError as exc:
             self.ms["queue"] = (time.monotonic() - self.queued_at) * 1000
             await self.send_error(exc, deadline=self.accepted_deadline)
         except discord.HTTPException, aiohttp.ClientError, TimeoutError:
             self.outcome = "unavailable"
         except Exception:
             logging.exception("AI request id=%s failed unexpectedly.", self.id)
-            await self.send_error(CodexError("unavailable"), deadline=self.accepted_deadline)
+            await self.send_error(ModelError("unavailable"), deadline=self.accepted_deadline)
         finally:
             await self._cleanup()
 

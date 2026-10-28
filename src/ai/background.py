@@ -10,17 +10,16 @@ from typing import TYPE_CHECKING, Any
 
 import discord
 
-from src.codex.admission import MAX_ACTIVE_KEYS
-from src.codex.instructions import PERSONA
-from src.codex.protocol import WORK_TIMEOUT_SECONDS, conversation_key
+from src.ai.domain.conversation import MAX_ACTIVE_KEYS, WORK_TIMEOUT_SECONDS, conversation_key
+from src.ai.domain.prompts import PERSONA
 
 if TYPE_CHECKING:
     from src.ai.access import AiSettings
-    from src.codex.service import CodexService
+    from src.ai.app.ports import TextModel
 
 
 async def ask(
-    codex: CodexService,
+    codex: TextModel,
     settings: AiSettings,
     key: str,
     prompt: str,

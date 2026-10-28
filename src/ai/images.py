@@ -10,14 +10,13 @@ from typing import Any
 import aiohttp
 import discord
 
-from src.ai.frames import extract_frames
-from src.codex.protocol import (
+from src.ai.domain.conversation import (
     MAX_IMAGE_ATTACHMENTS,
     MAX_IMAGE_BYTES,
     MAX_IMAGE_TOTAL_BYTES,
-    image_signature_matches,
     safe_https_hostname,
 )
+from src.ai.frames import extract_frames
 
 IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp", ".gif", ".svg"}
 _CUSTOM_EMOJI = re.compile(r"<a?:[A-Za-z0-9_~]+:([1-9][0-9]*)>")
@@ -29,6 +28,18 @@ SUPPORTED_IMAGE_TYPES = {
     "image/webp": {".webp"},
     "image/gif": {".gif"},
 }
+
+
+def image_signature_matches(content_type: str, data: bytes) -> bool:
+    if content_type == "image/png":
+        return data.startswith(b"\x89PNG\r\n\x1a\n")
+    if content_type == "image/jpeg":
+        return data.startswith(b"\xff\xd8\xff")
+    if content_type == "image/webp":
+        return len(data) >= 12 and data[:4] == b"RIFF" and data[8:12] == b"WEBP"
+    if content_type == "image/gif":
+        return data.startswith((b"GIF87a", b"GIF89a"))
+    return False
 
 
 class ImageAttachmentError(ValueError):

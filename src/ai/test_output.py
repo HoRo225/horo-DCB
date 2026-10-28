@@ -11,7 +11,7 @@ from src.ai.formatting import (
     split_markdown,
     truncation_notice,
 )
-from src.codex.protocol import MAX_PROMPT_CHARACTERS
+from src.ai.domain.conversation import MAX_PROMPT_CHARACTERS
 
 
 class SplitMarkdownTests(unittest.TestCase):

@@ -1,10 +1,8 @@
-from __future__ import annotations
-
 import asyncio
 import unittest
 from unittest.mock import patch
 
-from src.codex.rpc import (
+from src.integrations.codex.rpc import (
     OPT_OUT_NOTIFICATIONS,
     SERVER_REQUEST_REPLIES,
     AppServerClient,
@@ -13,12 +11,12 @@ from src.codex.rpc import (
     Phase,
     RpcError,
 )
-from src.codex.testing_server import FakeAppServer, FakeRpcError
+from tests.support.codex_server import FakeAppServer, FakeRpcError
 
 
 class RpcTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self) -> None:
-        for patcher in (patch("src.codex.rpc.RECONNECT_DELAYS", (0.01,)), patch("src.codex.rpc.OVERLOADED_DELAYS", (0.01, 0.01))):
+        for patcher in (patch("src.integrations.codex.rpc.RECONNECT_DELAYS", (0.01,)), patch("src.integrations.codex.rpc.OVERLOADED_DELAYS", (0.01, 0.01))):
             patcher.start()
             self.addCleanup(patcher.stop)
         self.server = FakeAppServer()
@@ -111,7 +109,8 @@ class RpcTests(unittest.IsolatedAsyncioTestCase):
             await self.server.ask("item/fileChange/requestApproval", {"threadId": "t1", "turnId": "u"})
             request = await asyncio.wait_for(events.next(), 2)
             self.assertTrue(request.server_request)
-            self.assertTrue(other._queue.empty())
+            with self.assertRaises(TimeoutError):
+                await asyncio.wait_for(other.next(), 0.05)
         self.assertEqual([event.method for event in self.global_events], ["account/updated"])
 
     async def test_disconnect_fails_requests_and_turns_then_reinitializes(self) -> None:

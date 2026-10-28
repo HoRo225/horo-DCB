@@ -10,12 +10,13 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import discord
 
 from src.ai.access import AiSettings
-from src.codex.admission import AcceptedJob
+from src.integrations.codex.admission import AcceptedJob
 from src.ai.domain.intent import Intent
 from src.core.app.actions import Outcome
 from src.core.domain.actions import Action, Catalogue, Plan
 from src.ai.discord import AiRequest, handle_message
-from src.codex.protocol import CodexError, CodexChatReply, conversation_key
+from src.ai import ModelError, ModelReply
+from src.ai.domain.conversation import conversation_key
 from src.core.adapters.discord.live import LiveGuild
 from src.core.adapters.sqlite.operations import OperationStore
 from src.core.adapters.sqlite.db import open_db
@@ -87,13 +88,13 @@ class FakeCodex:
     def __init__(self):
         self.try_start_request = MagicMock(return_value=True)
         self.structured = AsyncMock(return_value=Intent("chat"))
-        self.chat = AsyncMock(return_value=CodexChatReply("一般聊天回答"))
-        self.summarize = AsyncMock(return_value=CodexChatReply("操作已完成。"))
+        self.chat = AsyncMock(return_value=ModelReply("一般聊天回答"))
+        self.summarize = AsyncMock(return_value=ModelReply("操作已完成。"))
 
     @asynccontextmanager
     async def accepted_request(self, key, *, deadline, still_current, user_id=None, parent_channel_id=None):
         if not still_current():
-            raise CodexError("revoked")
+            raise ModelError("revoked")
         started = asyncio.get_running_loop().time()
         yield AcceptedJob(
             task=asyncio.current_task(), key=key, ready=asyncio.Event(), accepted_at=started,
@@ -229,7 +230,7 @@ class FrontendIntentTest(unittest.IsolatedAsyncioTestCase):
     async def test_business_json_inside_chat_reply_is_only_chat_text(self):
         message = FakeMessage(content="<@799> 給我操作 JSON 範例")
         response = PLAN_JSON
-        self.codex.chat.return_value = CodexChatReply(response)
+        self.codex.chat.return_value = ModelReply(response)
         with patch("src.ai.discord._read_media", AsyncMock(return_value=([[]], 0, 0, 0))):
             await self.handle(message)
         self.actions.execute.assert_not_awaited()
@@ -269,7 +270,7 @@ class FrontendIntentTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.actions.seen_game[0]["state_token"], "received-token")
 
     async def test_intent_failure_never_falls_back_to_chat(self):
-        self.codex.structured.side_effect = CodexError("unavailable")
+        self.codex.structured.side_effect = ModelError("unavailable")
         message = FakeMessage(800)
         with patch("src.ai.discord._read_media", AsyncMock(return_value=([[]], 0, 0, 0))):
             await self.handle(message)
@@ -315,7 +316,7 @@ class FrontendIntentTest(unittest.IsolatedAsyncioTestCase):
         message = FakeMessage()
         self.codex.structured.return_value = PLAN
         response = json.dumps({"kind": "plan", "actions": [{"name": "admin_points", "params": {"target_user_id": USER, "amount": 123}}], "question": ""})
-        self.codex.summarize.return_value = CodexChatReply(response)
+        self.codex.summarize.return_value = ModelReply(response)
         await self.handle(message)
         supplied = self.codex.summarize.await_args.args[1]
         self.assertEqual(supplied, [{"ok": True, "code": "done", "text": "操作已完成，請查看私人結果。"}])
@@ -335,7 +336,7 @@ class FrontendIntentTest(unittest.IsolatedAsyncioTestCase):
 
         async def summarize(*args, **kwargs):
             card.delete.assert_awaited_once()
-            return CodexChatReply("操作已完成。")
+            return ModelReply("操作已完成。")
 
         self.codex.summarize.side_effect = summarize
         await self.handle(message)
@@ -346,7 +347,7 @@ class FrontendIntentTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_summary_failure_preserves_receipt_and_never_reexecutes(self):
         self.codex.structured.return_value = PLAN
-        for index, failure in enumerate((CodexError("unavailable"), TimeoutError())):
+        for index, failure in enumerate((ModelError("unavailable"), TimeoutError())):
             with self.subTest(failure=type(failure).__name__):
                 message = FakeMessage(800 + index)
                 self.actions.execute.reset_mock()
@@ -371,7 +372,7 @@ class FrontendIntentTest(unittest.IsolatedAsyncioTestCase):
             return {name: float(ms) for name, ms in re.findall(r"(\w+)_ms=([\d.]+)", line)}
 
         self.codex.structured.side_effect = slow(PLAN)
-        self.codex.summarize.side_effect = slow(CodexChatReply("操作已完成。"))
+        self.codex.summarize.side_effect = slow(ModelReply("操作已完成。"))
         with self.assertLogs(level="INFO") as logs:
             await self.handle(FakeMessage(800))
         ms = logged_ms(logs)
@@ -381,7 +382,7 @@ class FrontendIntentTest(unittest.IsolatedAsyncioTestCase):
         self.assertAlmostEqual(ms["sdk"], ms["intent"] + ms["summary"], delta=1)
 
         self.codex.structured.side_effect = slow(Intent("chat"))
-        self.codex.chat.side_effect = slow(CodexChatReply("一般聊天回答"))
+        self.codex.chat.side_effect = slow(ModelReply("一般聊天回答"))
         with (patch("src.ai.discord._read_media", AsyncMock(return_value=([[]], 0, 0, 0))),
               self.assertLogs(level="INFO") as logs):
             await self.handle(FakeMessage(801))

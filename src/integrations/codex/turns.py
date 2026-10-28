@@ -7,14 +7,21 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
-from src.codex.protocol import CodexError, normalize_reply_image_urls, truncate_progress_summary
-from src.codex.rpc import RpcError, ThreadEvents
+from src.ai import ModelError, normalize_reply_image_urls
+from src.integrations.codex.rpc import RpcError, ThreadEvents
 
 _IMAGE_RESULT_REF = re.compile(r"^turn[0-9]+image[0-9]+$")
 _MARKDOWN_IMAGE_URL = re.compile(r"!\[[^\]]*\]\((https://[^\s)]+)\)")
 _CITATION = re.compile("[^]*")
 ISOLATED_ITEMS = frozenset({"userMessage", "agentMessage", "reasoning"})
 TERMINAL = frozenset({"completed", "failed", "interrupted"})
+MAX_PROGRESS_SUMMARY_CHARACTERS = 2000
+
+
+def truncate_progress_summary(summary: str) -> str:
+    if len(summary) <= MAX_PROGRESS_SUMMARY_CHARACTERS:
+        return summary
+    return "…" + summary[-(MAX_PROGRESS_SUMMARY_CHARACTERS - 1) :]
 
 
 def _result_image_url(result: object) -> str | None:
@@ -57,13 +64,13 @@ class TurnResult:
     web_searches: list[dict[str, Any]] = field(default_factory=list)
 
 
-def normalize_error(error: object) -> CodexError:
-    if isinstance(error, CodexError):
+def normalize_error(error: object) -> ModelError:
+    if isinstance(error, ModelError):
         return error
     info = None
     if isinstance(error, RpcError):
         if error.overloaded:
-            return CodexError("model_capacity")
+            return ModelError("model_capacity")
         details = f"{error.message} {error.data}"
     elif isinstance(error, dict):
         info = error.get("codexErrorInfo")
@@ -73,26 +80,26 @@ def normalize_error(error: object) -> CodexError:
     if info is not None:
         name = (info if isinstance(info, str) else json.dumps(info)).replace("_", "").casefold()
         if "serveroverloaded" in name:
-            return CodexError("model_capacity")
+            return ModelError("model_capacity")
         if any(marker in name for marker in ("usagelimitexceeded", "ratelimitexceeded")):
-            return CodexError("usage_limit_or_unavailable")
+            return ModelError("usage_limit_or_unavailable")
         if "modelnotfound" in name:
-            return CodexError("model_configuration_invalid")
+            return ModelError("model_configuration_invalid")
         if "unauthorized" in name or re.search(r"statuscode\W+401\b", name):
-            return CodexError("auth_required")
-        return CodexError("unavailable")
+            return ModelError("auth_required")
+        return ModelError("unavailable")
     details = details.casefold()
     if any(marker in details for marker in (
         "authentication", "chatgpt login", "invalid_grant", "login required", "not logged in", "refresh token", "unauthorized",
     )):
-        return CodexError("auth_required")
+        return ModelError("auth_required")
     if any(marker in details for marker in ("at capacity", "server overloaded", "server_overloaded", "serveroverloaded")):
-        return CodexError("model_capacity")
+        return ModelError("model_capacity")
     if any(marker in details for marker in (
         "credits", "quota", "rate limit", "rate_limit", "too many requests", "usage limit", "usage_limit", "usagelimit",
     )):
-        return CodexError("usage_limit_or_unavailable")
-    return CodexError("unavailable")
+        return ModelError("usage_limit_or_unavailable")
+    return ModelError("unavailable")
 
 
 def _record_message(result: TurnResult, item: dict[str, Any]) -> None:

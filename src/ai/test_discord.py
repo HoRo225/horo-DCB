@@ -13,9 +13,8 @@ from src.ai.cog import AiCog
 from src.ai.background import DATA_RULE, PERSONA, ask, ask_once, clean_reply
 from src.ai.discord import TIPPED, handle_message
 from src.ai.formatting import codex_error_text
-from src.codex.instructions import CHAT_INSTRUCTIONS
-from src.codex.model_settings import DEFAULT_MODEL_SETTINGS
-from src.codex.protocol import MAX_PROMPT_CHARACTERS, CodexError, CodexChatReply
+from src.ai import CHAT_INSTRUCTIONS, DEFAULT_MODEL_SETTINGS, ModelError, ModelReply
+from src.ai.domain.conversation import MAX_PROMPT_CHARACTERS
 from src.core.adapters.discord.live import LiveGuild
 from src.core.app.supervisor import REQUEST
 from src.testing import AI_CLEANUPS, group, text as _text
@@ -54,8 +53,8 @@ class _Access:
 class _Codex:
     def __init__(self, *, allow: bool = True, admission_error=None, work_seconds=5.0) -> None:
         self.try_start_request = MagicMock(return_value=allow)
-        self.chat = AsyncMock(return_value=CodexChatReply("最終答案"))
-        self.generate_once = AsyncMock(return_value=CodexChatReply("最終答案"))
+        self.chat = AsyncMock(return_value=ModelReply("最終答案"))
+        self.generate_once = AsyncMock(return_value=ModelReply("最終答案"))
         self.quota_full = MagicMock(return_value=False)
         self.admission_error = admission_error
         self.work_seconds = work_seconds
@@ -223,7 +222,7 @@ class HandleMessageTests(unittest.IsolatedAsyncioTestCase):
     async def test_restarted_conversation_is_noted_before_answer(self) -> None:
         message = _message()
         codex = _Codex()
-        codex.chat.return_value = CodexChatReply("最終答案", restarted=True)
+        codex.chat.return_value = ModelReply("最終答案", restarted=True)
         await _handle(message, codex)
         self.assertIn(
             "-# ℹ️ 已開始新的對話（先前的無法接續）\n最終答案",
@@ -233,7 +232,7 @@ class HandleMessageTests(unittest.IsolatedAsyncioTestCase):
     async def test_all_notes_share_one_line_and_one_icon(self) -> None:
         message = _message()
         codex = _Codex()
-        codex.chat.return_value = CodexChatReply("最終答案", restarted=True)
+        codex.chat.return_value = ModelReply("最終答案", restarted=True)
         await handle_message(message, live=_live(message), bot_user_id=BOT, cleanups=AI_CLEANUPS, codex=codex, access=_Access(), bot=SimpleNamespace())
         self.assertEqual(
             _text(message.channel.send.await_args.kwargs["view"]),
@@ -275,7 +274,7 @@ class HandleMessageTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_busy_service_turns_progress_card_into_error(self) -> None:
         message = _message()
-        codex = _Codex(admission_error=CodexError("busy"))
+        codex = _Codex(admission_error=ModelError("busy"))
         await _handle(message, codex)
         self.assertIn(
             codex_error_text("busy", "霍蘿"), _text(message.progress.edit.await_args.kwargs["view"])
@@ -287,14 +286,14 @@ class HandleMessageTests(unittest.IsolatedAsyncioTestCase):
         message = _message()
         message.progress.edit.side_effect = discord.HTTPException(MagicMock(status=500), "down")
         with self.assertLogs(level="ERROR") as logs:
-            await _handle(message, _Codex(admission_error=CodexError("busy")))
+            await _handle(message, _Codex(admission_error=ModelError("busy")))
         self.assertIn("Failed to send Discord AI status reply.", "\n".join(logs.output))
         message.progress.delete.assert_awaited_once()
 
     async def test_busy_without_progress_card_replies_in_channel(self) -> None:
         message = _message()
         message.reply.side_effect = TimeoutError
-        await _handle(message, _Codex(admission_error=CodexError("busy")))
+        await _handle(message, _Codex(admission_error=ModelError("busy")))
         sent = message.channel.send.await_args.kwargs
         self.assertIn(codex_error_text("busy", "霍蘿"), _text(sent["view"]))
         self.assertFalse(sent["reference"].fail_if_not_exists)
@@ -307,7 +306,7 @@ class HandleMessageTests(unittest.IsolatedAsyncioTestCase):
 
         async def revoke(*args, **kwargs):
             access.current = False
-            return CodexChatReply("不該送出")
+            return ModelReply("不該送出")
 
         codex.chat.side_effect = revoke
         await _handle(message, codex, access)
@@ -348,7 +347,7 @@ class HandleMessageTests(unittest.IsolatedAsyncioTestCase):
 
         async def slow(*args, **kwargs):
             await asyncio.sleep(0.2)
-            return CodexChatReply("慢慢來的答案")
+            return ModelReply("慢慢來的答案")
 
         codex.chat.side_effect = slow
         await _handle(message, codex)
@@ -454,7 +453,7 @@ class AskTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(codex.generate_once.await_args.kwargs["effort"])
         self.assertEqual(await ask(codex, _Access(), "key", "問題", lambda: True, effort="low"), "最終答案")
         self.assertEqual(codex.generate_once.await_args.kwargs["effort"], "low")
-        codex.generate_once.side_effect = CodexError("unavailable")
+        codex.generate_once.side_effect = ModelError("unavailable")
         with self.assertLogs(level="ERROR"):
             self.assertIsNone(await ask(codex, _Access(), "key", "問題", lambda: True))
 

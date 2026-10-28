@@ -10,24 +10,34 @@ from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from typing import Any
 
-from src.codex.admission import AcceptedJob, Admission
-from src.codex.conversations import ConversationStore
-from src.codex.instructions import CHAT_INSTRUCTIONS, ONCE_INSTRUCTIONS, SUMMARY_INSTRUCTIONS
-from src.codex.model_settings import ModelChoice, ModelInfo, ModelSettings, parse_model_list, resolve_model_settings, with_effort
-from src.codex.protocol import (
+from src.ai import (
+    CHAT_INSTRUCTIONS,
     CLEANUP_SECONDS,
     MAX_CHAT_BUDGET_MS,
-    CodexArchiveResult,
-    CodexChatReply,
-    CodexError,
-    CodexRuntimeStatus,
+    ONCE_INSTRUCTIONS,
+    SUMMARY_INSTRUCTIONS,
+    ArchiveResult,
+    DeviceLogin,
+    Job,
+    ModelChoice,
+    ModelError,
+    ModelInfo,
+    ModelReply,
+    ModelSettings,
+    RateLimits,
+    RuntimeStatus,
+    resolve_model_settings,
     scope_matches,
+    with_effort,
 )
-from src.codex.rate_limits import CodexRateLimits, normalize_rate_limits
-from src.codex.rpc import AppServerClient, ConnectionLost, Notification, Phase, RpcError, ThreadEvents
-from src.codex.turns import TurnResult, collect_turn, extract_reply_image_urls, normalize_error
 from src.core.app.config import CODEX_WORKSPACE
 from src.core.app.supervisor import cancel_all, track
+from src.integrations.codex.admission import Admission
+from src.integrations.codex.conversations import ConversationStore
+from src.integrations.codex.models import parse_model_list
+from src.integrations.codex.rate_limits import normalize_rate_limits
+from src.integrations.codex.rpc import AppServerClient, ConnectionLost, Notification, Phase, RpcError, ThreadEvents
+from src.integrations.codex.turns import TurnResult, collect_turn, extract_reply_image_urls, normalize_error
 
 CLIENT_VERSION = "1.0.0"
 SERVICE_NAME = "horo-dcb"
@@ -100,18 +110,11 @@ SUMMARY = Mode("summary", SUMMARY_INSTRUCTIONS, 30_000, effort="medium", fallbac
 ONCE = Mode("once", ONCE_INSTRUCTIONS, MAX_CHAT_BUDGET_MS)
 
 
-@dataclass(frozen=True, slots=True)
-class DeviceLogin:
-    login_id: str
-    verification_url: str
-    user_code: str
-
-
 def _nested_id(response: object, field: str) -> str:
     value = response.get(field) if isinstance(response, dict) else None
     identifier = value.get("id") if isinstance(value, dict) else None
     if not isinstance(identifier, str) or not identifier:
-        raise CodexError("unavailable")
+        raise ModelError("unavailable")
     return identifier
 
 
@@ -121,13 +124,13 @@ class CodexService:
         self._store = store
         self._admission = Admission()
         self._cooldowns: dict[int, float] = {}
-        self._job_models: dict[tuple[AcceptedJob, str | None], ModelSettings] = {}
+        self._job_models: dict[tuple[Job, str | None], ModelSettings] = {}
         self._closing: list[tuple[int, int | None, bool]] = []
         self._resetting: set[str] = set()
         self._logins: dict[str, asyncio.Future[bool]] = {}
         self._tasks: set[asyncio.Task[Any]] = set()
         self._archive_loop: asyncio.Task[None] | None = None
-        self._rate_cache = CodexRateLimits()
+        self._rate_cache = RateLimits()
         self._rate_next = 0.0
         self._quota_full = False
         self._quota_due = 0.0
@@ -135,7 +138,7 @@ class CodexService:
 
     async def start(self) -> None:
         if self._admission.closed:
-            raise CodexError("unavailable")
+            raise ModelError("unavailable")
         self._client.start()
         if self._archive_loop is None:
             self._archive_loop = track(self._tasks, asyncio.create_task(self._retry_archives()), log=True)
@@ -184,7 +187,7 @@ class CodexService:
         parent_channel_id: int | None = None,
     ):
         if self._scope_blocked(key, parent_channel_id):
-            raise CodexError("busy")
+            raise ModelError("busy")
         async with self._admission.claim(
             key,
             queue_timeout_seconds=QUEUE_TIMEOUT_SECONDS,
@@ -202,29 +205,29 @@ class CodexService:
     async def cancel(self, guild_id: int, user_id: int | None = None) -> None:
         await self._admission.cancel(guild_id=guild_id, user_id=user_id)
 
-    async def cancel_revoked(self, guild_id: int, predicate: Callable[[AcceptedJob], bool]) -> None:
+    async def cancel_revoked(self, guild_id: int, predicate: Callable[[Job], bool]) -> None:
         await self._admission.cancel_where(lambda job: job.key.startswith(f"guild:{guild_id}:") and predicate(job))
 
-    def _require_job(self, key: str, job: AcceptedJob) -> None:
+    def _require_job(self, key: str, job: Job) -> None:
         current = asyncio.current_task()
         if job.task is not current or self._admission.jobs.get(current) is not job or job.key != key:
-            raise CodexError("invalid_request")
+            raise ModelError("invalid_request")
         if self._admission.closed:
-            raise CodexError("unavailable")
+            raise ModelError("unavailable")
         if not job.current:
-            raise CodexError("revoked")
+            raise ModelError("revoked")
 
     async def _call(self, method: str, params: dict[str, object] | None = None) -> Any:
         try:
             return await self._client.request(method, params)
         except ConnectionLost:
-            raise CodexError("unavailable") from None
+            raise ModelError("unavailable") from None
         except TimeoutError:
-            raise CodexError("timeout") from None
+            raise ModelError("timeout") from None
         except RpcError as exc:
             raise normalize_error(exc) from None
 
-    async def get_runtime_status(self) -> CodexRuntimeStatus:
+    async def get_runtime_status(self) -> RuntimeStatus:
         client = self._client
         account = None
         if self._admission.closed or client.phase is Phase.CLOSED:
@@ -243,7 +246,7 @@ class CodexService:
                 account = response.get("account") if isinstance(response, dict) else None
                 reason = "ready" if isinstance(account, dict) else "auth_required"
         plan = account.get("planType") if isinstance(account, dict) else None
-        return CodexRuntimeStatus(
+        return RuntimeStatus(
             reason=reason,
             authenticated=isinstance(account, dict),
             plan=plan if isinstance(plan, str) else None,
@@ -252,22 +255,22 @@ class CodexService:
             last_error=self.last_error,
         )
 
-    async def get_rate_limits(self) -> CodexRateLimits:
+    async def get_rate_limits(self) -> RateLimits:
         now = asyncio.get_running_loop().time()
         if now < self._rate_next:
             return self._rate_cache
         if not self._client.ready:
-            return CodexRateLimits(error="unavailable")
+            return RateLimits(error="unavailable")
         try:
             async with asyncio.timeout(STATUS_SECONDS):
                 raw = await self._client.request("account/rateLimits/read", None)
             limits = normalize_rate_limits(raw, fetched_at=int(time.time()))
         except TimeoutError:
-            return CodexRateLimits(error="timeout")
+            return RateLimits(error="timeout")
         except ValueError:
-            limits = CodexRateLimits(error="invalid_response")
+            limits = RateLimits(error="invalid_response")
         except (RpcError, ConnectionLost):
-            limits = CodexRateLimits(error="unavailable")
+            limits = RateLimits(error="unavailable")
         self._rate_cache, self._rate_next = limits, now + RATE_CACHE_SECONDS
         return limits
 
@@ -295,7 +298,7 @@ class CodexService:
             response = await self._call("model/list", params)
             data = response.get("data") if isinstance(response, dict) else None
             if not isinstance(data, list):
-                raise CodexError("unavailable")
+                raise ModelError("unavailable")
             entries.extend(data)
             cursor = response.get("nextCursor")
             if not isinstance(cursor, str) or not cursor:
@@ -304,22 +307,22 @@ class CodexService:
         try:
             return parse_model_list(entries)
         except (TypeError, ValueError):
-            raise CodexError("unavailable") from None
+            raise ModelError("unavailable") from None
 
-    async def _resolve(self, job: AcceptedJob, selected: ModelSettings, effort: str | None) -> ModelSettings:
+    async def _resolve(self, job: Job, selected: ModelSettings, effort: str | None) -> ModelSettings:
         if resolved := self._job_models.get((job, effort)):
             return resolved
         try:
             async with asyncio.timeout_at(job.work_deadline):
                 catalog = await self.get_models()
         except TimeoutError:
-            raise CodexError("timeout") from None
+            raise ModelError("timeout") from None
         try:
             if effort is not None:
                 selected = with_effort(selected, effort, catalog)
             resolved = resolve_model_settings(selected, catalog)
         except ValueError:
-            raise CodexError("model_configuration_invalid") from None
+            raise ModelError("model_configuration_invalid") from None
         self._require_job(job.key, job)
         self._job_models[(job, effort)] = resolved
         return resolved
@@ -330,29 +333,29 @@ class CodexService:
         text: str,
         images: tuple[str, ...],
         *,
-        job: AcceptedJob,
+        job: Job,
         models: ModelSettings,
         on_progress: Callable[[str, str], None] | None = None,
         request_id: str | None = None,
-    ) -> CodexChatReply:
+    ) -> ModelReply:
         self._require_job(key, job)
         try:
             result, restarted = await self._turn(CHAT, key, text, images, job, models, on_progress, request_id)
-        except CodexError as exc:
+        except ModelError as exc:
             if exc.code != "stalled":
                 raise
             if on_progress is not None:
                 on_progress("reconnecting", "")
             remaining = min(job.work_deadline - asyncio.get_running_loop().time(), STALL_RECOVERY_SECONDS)
             if not await self._client.wait_ready(remaining):
-                raise CodexError("unavailable") from None
+                raise ModelError("unavailable") from None
             self._require_job(key, job)
             result, restarted = await self._turn(CHAT, key, text, images, job, models, on_progress, request_id)
-        return CodexChatReply(result.text.strip(), extract_reply_image_urls(result.web_searches, result.text), restarted)
+        return ModelReply(result.text.strip(), extract_reply_image_urls(result.web_searches, result.text), restarted)
 
     async def structured[T](
         self, key: str, payload: Mapping[str, object], *, instructions: str, schema: Mapping[str, object],
-        parse: Callable[[object], T], job: AcceptedJob, models: ModelSettings, request_id: str | None = None,
+        parse: Callable[[object], T], job: Job, models: ModelSettings, request_id: str | None = None,
     ) -> T:
         self._require_job(key, job)
         prompt = json.dumps(payload, ensure_ascii=False, allow_nan=False)
@@ -362,27 +365,27 @@ class CodexService:
             return parse(json.loads(result.text, object_pairs_hook=_unique_fields))
         except ValueError as exc:
             logging.warning("Codex structured reply rejected: %s", str(exc)[:200])
-            raise CodexError("unavailable") from None
+            raise ModelError("unavailable") from None
 
     async def summarize(
-        self, key: str, safe_results: list[dict[str, object]], *, job: AcceptedJob,
+        self, key: str, safe_results: list[dict[str, object]], *, job: Job,
         models: ModelSettings, request_id: str | None = None,
-    ) -> CodexChatReply:
+    ) -> ModelReply:
         self._require_job(key, job)
         prompt = json.dumps({"results": safe_results}, ensure_ascii=False, allow_nan=False)
         result, _restarted = await self._turn(SUMMARY, key, prompt, (), job, models, None, request_id)
-        return CodexChatReply(result.text.strip())
+        return ModelReply(result.text.strip())
 
     async def generate_once(
-        self, key: str, text: str, *, job: AcceptedJob, models: ModelSettings,
+        self, key: str, text: str, *, job: Job, models: ModelSettings,
         request_id: str | None = None, effort: str | None = None,
-    ) -> CodexChatReply:
+    ) -> ModelReply:
         self._require_job(key, job)
         result, _restarted = await self._turn(ONCE, key, text, (), job, models, None, request_id, effort)
-        return CodexChatReply(result.text.strip())
+        return ModelReply(result.text.strip())
 
     async def _turn(
-        self, mode: Mode, key: str, text: str, images: tuple[str, ...], job: AcceptedJob,
+        self, mode: Mode, key: str, text: str, images: tuple[str, ...], job: Job,
         models: ModelSettings, on_progress: Callable[[str, str], None] | None,
         request_id: str | None, effort: str | None = None,
     ) -> tuple[TurnResult, bool]:
@@ -396,7 +399,7 @@ class CodexService:
                 choices += (settings.fallback,)
             deadline = min(job.work_deadline, started + mode.cap_ms / 1000)
             if deadline <= loop.time():
-                raise CodexError("timeout")
+                raise ModelError("timeout")
             restarted = False
             async with asyncio.timeout_at(deadline):
                 for attempt, choice in enumerate(choices):
@@ -406,7 +409,7 @@ class CodexService:
                     restarted = restarted or fresh
                     if not mode.persistent and result.untrusted:
                         logging.warning("Codex %s turn not trusted: %s", mode.name, result.untrusted)
-                        raise CodexError("unavailable")
+                        raise ModelError("unavailable")
                     if result.status == "failed":
                         error = normalize_error(result.error)
                         if (
@@ -420,20 +423,20 @@ class CodexService:
                     break
             if result.status != "completed" or not result.text.strip():
                 logging.warning("Codex %s turn unusable: status=%s text=%s", mode.name, result.status, bool(result.text.strip()))
-                raise CodexError("unavailable")
+                raise ModelError("unavailable")
             outcome = "success"
             return result, restarted
         except asyncio.CancelledError:
             outcome = "cancelled"
             raise
-        except CodexError as exc:
+        except ModelError as exc:
             outcome = exc.code
             raise
         except TimeoutError:
             outcome = "timeout"
-            raise CodexError("timeout") from None
+            raise ModelError("timeout") from None
         except ConnectionLost:
-            raise CodexError("unavailable") from None
+            raise ModelError("unavailable") from None
         except RpcError as exc:
             error = normalize_error(exc)
             outcome = error.code
@@ -509,7 +512,7 @@ class CodexService:
             except TimeoutError:
                 logging.error("Codex turn got no upstream event in %.0fs; interrupting.", FIRST_EVENT_SECONDS)
                 await self._interrupt(thread_id, turn_id, collector)
-                raise CodexError("stalled") from None
+                raise ModelError("stalled") from None
             return await asyncio.shield(collector)
         except asyncio.CancelledError:
             await self._interrupt(thread_id, turn_id, collector)
@@ -536,7 +539,7 @@ class CodexService:
             async with asyncio.timeout(CLEANUP_SECONDS):
                 await self._client.request("thread/unsubscribe", {"threadId": thread_id})
 
-    async def reset_conversation(self, key: str) -> CodexArchiveResult:
+    async def reset_conversation(self, key: str) -> ArchiveResult:
         self._resetting.add(key)
         try:
             await self._admission.cancel_where(lambda job: job.key == key)
@@ -547,7 +550,7 @@ class CodexService:
 
     async def archive_scope(
         self, guild_id: int, channel_id: int | None = None, *, include_children: bool = False,
-    ) -> CodexArchiveResult:
+    ) -> ArchiveResult:
         scope = (guild_id, channel_id, include_children)
         self._closing.append(scope)
         try:
@@ -560,7 +563,7 @@ class CodexService:
             self._closing.remove(scope)
         return await self._archive(thread_ids)
 
-    async def _archive(self, thread_ids: list[str]) -> CodexArchiveResult:
+    async def _archive(self, thread_ids: list[str]) -> ArchiveResult:
         archived = 0
         for thread_id in thread_ids:
             try:
@@ -575,7 +578,7 @@ class CodexService:
                 continue
             self._store.archive_confirmed(thread_id)
             archived += 1
-        return CodexArchiveResult(len(thread_ids), archived, len(thread_ids) - archived)
+        return ArchiveResult(len(thread_ids), archived, len(thread_ids) - archived)
 
     async def _retry_archives(self) -> None:
         while True:
@@ -588,7 +591,7 @@ class CodexService:
         fields = tuple(response.get(name) if isinstance(response, dict) else None
                        for name in ("loginId", "verificationUrl", "userCode"))
         if not all(isinstance(value, str) and value for value in fields):
-            raise CodexError("unavailable")
+            raise ModelError("unavailable")
         login = DeviceLogin(*fields)
         self._logins[login.login_id] = asyncio.get_running_loop().create_future()
         return login
@@ -606,7 +609,7 @@ class CodexService:
     async def login_cancel(self, login_id: str) -> None:
         if (future := self._logins.pop(login_id, None)) is not None:
             future.cancel()
-        with contextlib.suppress(CodexError):
+        with contextlib.suppress(ModelError):
             await self._call("account/login/cancel", {"loginId": login_id})
 
     async def logout(self) -> None:

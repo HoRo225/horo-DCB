@@ -8,10 +8,9 @@ SCOPED_CHILDREN = {
     "ai/background.py": "awaited at once so the request can tell its own cancellation from the caller's",
     "ai/discord.py": "typing indicator scoped to one request and cancelled when it ends",
     "ai/output.py": "progress card reply and edit loop scoped to one AiProgress; late replies go to its cleanup group",
-    "codex/rpc.py": "connection internals drained by CodexService.close until integrations/codex moves",
-    "codex/service.py": "connection internals drained by CodexService.close until integrations/codex moves",
-    "codex/testing_server.py": "fake app-server used only by tests",
     "core/adapters/discord/watchdog.py": "lag probe scoped to run_watchdog and cancelled when it returns",
+    "integrations/codex/rpc.py": "connection internals drained by CodexService.close",
+    "integrations/codex/service.py": "connection internals drained by CodexService.close",
 }
 
 

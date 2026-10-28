@@ -4,7 +4,7 @@ import sqlite3
 from collections.abc import Iterable
 from dataclasses import dataclass
 
-from src.codex.protocol import scope_matches
+from src.ai import scope_matches
 from src.core.adapters.sqlite.db import transaction
 
 

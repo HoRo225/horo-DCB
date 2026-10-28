@@ -7,9 +7,10 @@ from pathlib import Path
 
 import aiohttp
 
-from src.codex.model_settings import DEFAULT_MODEL_SETTINGS, parse_model_list, resolve_model_settings
-from src.codex.rpc import AppServerClient
+from src.ai import DEFAULT_MODEL_SETTINGS, resolve_model_settings
 from src.core.app.config import CODEX_TOKEN_FILE, CODEX_URL, codex_token
+from src.integrations.codex.models import parse_model_list
+from src.integrations.codex.rpc import AppServerClient
 
 
 async def rejected_status(url: str) -> int | None:

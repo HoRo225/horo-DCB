@@ -16,6 +16,7 @@ from src.admin.pages.effects import render_effects
 from src.admin.pages.overview import render_overview
 from src.admin.pages.steam import render_steam
 from src.admin.pages.voice import render_voice
+from src.admin.ports import CodexAccount
 from src.admin.sessions import PanelSession
 from src.core.adapters.discord.live import LiveGuild
 from src.core.adapters.discord.brand import (
@@ -86,7 +87,7 @@ class AdminPanelView(ErrorNotice, discord.ui.LayoutView):
         self.live = live
         self.guild = interaction.guild
         self.guild_id = self.guild.id
-        self.codex_client = bot.codex
+        self.codex_client: CodexAccount = bot.codex
         self.ai_settings = bot.ai_settings
         self.access_service = bot.access_service
         self.temp_voice = bot.temp_voice

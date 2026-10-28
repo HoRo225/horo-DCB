@@ -6,10 +6,8 @@ from collections.abc import Callable
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 
-from src.codex.protocol import CLEANUP_SECONDS, CodexError, scope_matches
+from src.ai import CLEANUP_SECONDS, MAX_ACTIVE_KEYS, ModelError, scope_matches
 from src.core.app.supervisor import cancel_all, consume_task_exception, wait_until
-
-MAX_ACTIVE_KEYS = 4
 
 
 @dataclass(eq=False, slots=True)
@@ -61,18 +59,18 @@ class Admission:
         parent_channel_id: int | None = None,
     ):
         if self.closed:
-            raise CodexError("unavailable")
+            raise ModelError("unavailable")
         immediate = len(self.active_keys) < MAX_ACTIVE_KEYS and key not in self.active_keys
         if not immediate and (
             len(self.waiting) >= self.max_waiters or any(job.key == key for job in self.waiting)
         ):
-            raise CodexError("busy")
+            raise ModelError("busy")
         task = asyncio.current_task()
         assert task is not None
         loop = asyncio.get_running_loop()
         accepted_at = loop.time()
         if deadline <= accepted_at:
-            raise CodexError("timeout")
+            raise ModelError("timeout")
         job = AcceptedJob(
             task=task,
             key=key,
@@ -95,11 +93,11 @@ class Admission:
                     min(queue_timeout_seconds, max(0, deadline - loop.time())),
                 )
             except TimeoutError:
-                raise CodexError("timeout") from None
+                raise ModelError("timeout") from None
             if not job.current:
-                raise CodexError("revoked")
+                raise ModelError("revoked")
             if loop.time() >= deadline:
-                raise CodexError("timeout")
+                raise ModelError("timeout")
             yield job
         finally:
             self.jobs.pop(task, None)
@@ -140,4 +138,4 @@ class Admission:
         for task in targets - pending:
             consume_task_exception(task)
         if pending:
-            raise CodexError("unavailable")
+            raise ModelError("unavailable")

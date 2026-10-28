@@ -14,8 +14,8 @@ from src.ai.actions import ai_actions
 from src.ai.cog import AiCog
 from src.ai.access import AiSettings
 from src.ai.access_service import AiAccessService
-from src.codex.conversations import ConversationStore
-from src.codex.service import CodexService
+from src.integrations.codex.conversations import ConversationStore
+from src.integrations.codex.service import CodexService
 from src.core.adapters.discord.brand import load_app_emojis, report_interaction_error, sync_discord_brand
 from src.core.app.config import CODEX_URL, AppConfig
 from src.core.adapters.discord.channels import member_role_ids

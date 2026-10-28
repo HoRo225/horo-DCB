@@ -6,7 +6,7 @@ from typing import Any
 import aiohttp
 import discord
 
-from src.codex.protocol import MAX_PROMPT_CHARACTERS
+from src.ai.domain.conversation import MAX_PROMPT_CHARACTERS
 
 
 def clean_bot_mention(content: str, bot_user_id: int) -> str:

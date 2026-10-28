@@ -5,8 +5,7 @@ from unittest.mock import AsyncMock
 from src.ai.access import AiSettings
 from src.ai.access_service import AiAccessService
 from src.ai.actions import ai_actions
-from src.codex.model_settings import ModelInfo
-from src.codex.protocol import CodexError
+from src.ai import ModelError, ModelInfo
 from src.core.adapters.discord.brand import ICONS
 from src.core.app.ports import Actor, Source
 from src.core.app.supervisor import WORK, TaskGroup
@@ -44,7 +43,7 @@ class AiActionTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(self.access.enabled)
 
     async def test_a_failed_stop_still_disables_and_is_reported(self) -> None:
-        self.codex.cancel.side_effect = CodexError("unavailable")
+        self.codex.cancel.side_effect = ModelError("unavailable")
         with self.assertLogs(level="ERROR"):
             self.assertFalse(await self.access.set_enabled(False))
         self.assertFalse(self.settings.enabled)
@@ -54,7 +53,7 @@ class AiActionTests(unittest.IsolatedAsyncioTestCase):
         await self.specs["ai_models"].validate(SOURCE, good)
         with self.assertRaises(ValueError):
             await self.specs["ai_models"].validate(SOURCE, {"primary": {"model": "gone", "effort": None}, "fallback": None})
-        self.models.side_effect = CodexError("unavailable")
+        self.models.side_effect = ModelError("unavailable")
         with self.assertRaises(ValueError):
             await self.specs["ai_models"].validate(SOURCE, good)
         with self.assertRaises(ValueError):

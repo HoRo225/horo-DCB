@@ -8,12 +8,12 @@ from discord.ext import commands
 from discord import app_commands
 
 from src.ai import discord as ai_discord
-from src.codex.protocol import CodexError
+from src.ai.app.ports import ModelError
 from src.core.adapters.discord.channels import is_text_channel, member_role_ids
 from src.core.adapters.discord.live import LiveGuild, can_send
 from src.core.adapters.discord.brand import send_notice
 from src.core.app.actions import ActionEngine
-from src.codex.protocol import conversation_key
+from src.ai.domain.conversation import conversation_key
 from src.core.app.supervisor import TaskGroup
 
 if TYPE_CHECKING:
@@ -78,7 +78,7 @@ class AiCog(commands.Cog):
         key = conversation_key(interaction.guild_id, channel.id, interaction.user.id, is_thread=is_thread)
         try:
             result = await bot.codex.reset_conversation(key)
-        except CodexError:
+        except ModelError:
             await send_notice(interaction, "對話重設未能確認，請稍後再試。")
             return
         note = "已開始新的對話。"
@@ -98,7 +98,7 @@ class AiCog(commands.Cog):
             return
         try:
             await bot.codex.cancel(after.guild.id, after.id)
-        except CodexError:
+        except ModelError:
             logging.exception("Codex revoked member cleanup failed.")
 
     @commands.Cog.listener()

@@ -55,17 +55,6 @@ class ImportBoundaryTests(unittest.TestCase):
         modules = loaded_modules("src.ai.background")
         self.assertTrue({"src.ai.discord", "src.ai.images", "src.ai.output"}.isdisjoint(modules))
 
-    def test_codex_does_not_import_ai(self) -> None:
-        pattern = re.compile(r"^\s*(?:(?:from|import)\s+(?:src\.ai|\.\.ai)\b|from\s+(?:src|\.\.)\s+import\s+.*\bai\b)", re.M)
-        for sample in ("import src.ai.discord", "from ..ai.output import x", "from src import ai", "from .. import brand, ai"):
-            self.assertIsNotNone(pattern.search(sample), sample)
-        self.assertIsNone(pattern.search("from src import brand, aiohttp_utils"))
-        for path in (Path(__file__).parent / "codex").glob("*.py"):
-            if path.name.startswith("test_"):
-                continue
-            with self.subTest(path.name):
-                self.assertIsNone(pattern.search(path.read_text(encoding="utf-8")))
-
     def test_nothing_imports_the_codex_sdk_or_pydantic(self) -> None:
         pattern = re.compile(r"^\s*(?:from|import)\s+(?:openai_codex|pydantic)\b", re.M)
         for sample in ("import pydantic", "from openai_codex.models import x", "    import openai_codex"):
@@ -79,8 +68,9 @@ class ImportBoundaryTests(unittest.TestCase):
 
     def test_frame_worker_loads_no_ai_layers(self) -> None:
         modules = loaded_modules("src.ai.frames")
-        for module in ("src.codex.protocol", "src.codex.model_settings", "src.core.app.config"):
-            self.assertNotIn(module, modules)
+        self.assertNotIn("discord", modules)
+        self.assertNotIn("src.core.app.config", modules)
+        self.assertFalse({module for module in modules if module.startswith("src.integrations")})
 
     def test_shared_layers_load_no_features(self) -> None:
         features = ("games", "voice", "steam", "ai", "admin")

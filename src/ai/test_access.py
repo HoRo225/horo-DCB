@@ -8,13 +8,12 @@ from unittest.mock import AsyncMock
 from src import testing
 from src.ai.access import AiSettings
 from src.ai.access_service import AiAccessService
-from src.codex.conversations import ConversationStore
-from src.codex.service import CodexService
-from src.codex.protocol import CodexError
+from src.integrations.codex.conversations import ConversationStore
+from src.integrations.codex.service import CodexService
+from src.ai import DEFAULT_MODEL_SETTINGS, ModelChoice, ModelError, ModelSettings
 from src.core.adapters.sqlite.db import open_db
 from src.testing import put_setting
 from src.ai.access import AI_ENABLED, AI_MODELS
-from src.codex.model_settings import DEFAULT_MODEL_SETTINGS, ModelChoice, ModelSettings
 
 
 class AiSettingsTests(unittest.TestCase):
@@ -147,7 +146,7 @@ class AiAccessServiceTests(unittest.IsolatedAsyncioTestCase):
         client.archive_scope.assert_not_awaited()
 
     async def test_cancel_timeout_still_saves_and_resumes(self) -> None:
-        self.client.cancel_revoked.side_effect = CodexError("unavailable")
+        self.client.cancel_revoked.side_effect = ModelError("unavailable")
         with self.assertLogs(level="ERROR"):
             outcome = await self.service.change(1, frozenset({10}), roles=False)
         self.assertEqual(outcome, "updated")

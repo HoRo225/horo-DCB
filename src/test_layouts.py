@@ -12,12 +12,9 @@ from src.admin.pages.games import render_games
 from src.admin.pages.steam import SteamQuery, render_steam
 from src.admin.pages.voice import render_voice
 from src.admin.panel import PAGES, AdminPanelView
-from src.codex.model_settings import ModelChoice, ModelInfo, ModelSettings
-from src.codex.protocol import CodexRuntimeStatus
+from src.ai import DeviceLogin, ModelChoice, ModelInfo, ModelSettings, RateLimits, RateWindow, RuntimeStatus
 from src.ai.query_views import help_view
 from src.core.adapters.discord.receipts import receipt_view
-from src.codex.rate_limits import CodexRateLimits, CodexRateWindow
-from src.codex.service import DeviceLogin
 from src.bot import HoroBot
 from src.core.adapters.discord.brand import ICONS, WHITE, full_rules, notice_view
 from src.games import slots
@@ -102,11 +99,11 @@ class LayoutBudgetTest(unittest.IsolatedAsyncioTestCase):
             interaction.guild.get_role.return_value = None
             bot.get_guild = MagicMock(return_value=interaction.guild)
             view = AdminPanelView(bot, bot.live, bot.admin_panels.begin((G, OWNER)), interaction)
-            view.state(AiReadings).codex_status = CodexRuntimeStatus(
+            view.state(AiReadings).codex_status = RuntimeStatus(
                 reason="auth_required", plan="plus", runtime_version="1.0", thread_count=3, last_error="auth_required",
             )
-            view.state(AiReadings).rate_limits = CodexRateLimits(
-                int(time.time()), (CodexRateWindow("primary", 20, 300, None),), None
+            view.state(AiReadings).rate_limits = RateLimits(
+                int(time.time()), (RateWindow("primary", 20, 300, None),), None
             )
             view.state(SteamQuery).result = SteamFetchResult(
                 frozenset(),
@@ -134,7 +131,7 @@ class LayoutBudgetTest(unittest.IsolatedAsyncioTestCase):
             readings.login = DeviceLogin("login-1", "https://auth.openai.com/codex/device", "ABCD-1234")
             render_ai(view, ("warn", "註" * 60))
             fits("render_ai with device code", view)
-            readings.codex_status = CodexRuntimeStatus(reason="ready", authenticated=True, plan="plus", last_error="timeout")
+            readings.codex_status = RuntimeStatus(reason="ready", authenticated=True, plan="plus", last_error="timeout")
             readings.confirm_logout = True
             render_ai(view, ("warn", "註" * 60))
             fits("render_ai confirming logout", view)

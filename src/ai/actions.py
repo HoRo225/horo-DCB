@@ -5,8 +5,8 @@ from collections.abc import Awaitable, Callable, Iterable, Mapping
 from src.ai.access import AiSettings
 from src.ai.access_service import AiAccessService
 from src.ai.query_views import help_view
-from src.codex.model_settings import ModelInfo, parse_model_settings, resolve_model_settings
-from src.codex.protocol import CodexError
+from src.ai.domain.models import ModelInfo, parse_model_settings, resolve_model_settings
+from src.ai.app.ports import ModelError
 from src.core.app.actions import ActionGroup, ActionSpec, Configure, Query, Step
 from src.core.app.ports import Actor, Source
 from src.core.domain.actions import REGULAR_ROLES, Param, Target
@@ -39,7 +39,7 @@ def ai_actions(
     async def check_models(source: Source, params: Mapping[str, object]) -> None:
         try:
             resolve_model_settings(parse_model_settings(params), await models())
-        except CodexError as exc:
+        except ModelError as exc:
             raise ValueError("model catalogue is unavailable") from exc
 
     async def save_models(step: Step, params: Mapping[str, object]) -> None:

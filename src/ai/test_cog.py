@@ -7,7 +7,7 @@ import discord
 from src import testing
 from src.ai.access import AiSettings
 from src.ai.cog import AiCog
-from src.codex.protocol import conversation_key
+from src.ai.domain.conversation import conversation_key
 from src.core.adapters.discord.live import LiveGuild
 from src.core.adapters.sqlite.db import open_db
 from src.testing import put_setting
