@@ -247,7 +247,7 @@ def render_ai(view: AdminPanelView, note: tuple[str, str] | None = None) -> None
                 view,
                 "ai",
                 "{name}",
-                owner=view.ai_settings,
+                owner=view.access_service,
                 render=render_ai,
                 after=_after_ai_toggle,
             ),
@@ -291,15 +291,9 @@ def render_ai(view: AdminPanelView, note: tuple[str, str] | None = None) -> None
 
 
 async def _after_ai_toggle(
-    view: AdminPanelView, _interaction: discord.Interaction, operation: int, enabled: bool
+    view: AdminPanelView, _interaction: discord.Interaction, operation: int, enabled: bool, stopped: object
 ) -> tuple[str, str] | None:
-    note = None
-    if not enabled:
-        try:
-            await view.codex_client.cancel(view.guild_id)
-        except CodexError:
-            logging.exception("Admin panel could not stop AI requests after disabling.")
-            note = ("warn", "部分進行中的請求未能即時停止。")
+    note = None if stopped else ("warn", "部分進行中的請求未能即時停止。")
     if not await load_ai(view, operation):
         logging.warning("AI status refresh after toggle failed; showing previous status.")
     return note

@@ -1,7 +1,12 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
+from contextlib import AbstractContextManager
 from dataclasses import dataclass
 from typing import Protocol
+
+from src.core.domain.actions import Target
+from src.core.domain.records import OperationRecord, RequestRecord
 
 
 class Owner(Protocol):
@@ -30,6 +35,20 @@ class Source:
     role_mentions: frozenset[int]
 
 
+@dataclass(frozen=True, slots=True)
+class Named:
+    id: int
+    name: str
+
+
+@dataclass(frozen=True, slots=True)
+class Mentions:
+    channel_ids: frozenset[int]
+    role_ids: frozenset[int]
+    channels: tuple[Named, ...]
+    roles: tuple[Named, ...]
+
+
 class Presence(Protocol):
     def unavailable_reason(self, guild_id: int | None) -> str | None: ...
 
@@ -38,3 +57,28 @@ class Presence(Protocol):
     async def fresh_actor(self, channel_id: int, user_id: int) -> Actor | None: ...
 
     def send_problem(self, channel_id: int, user_id: int) -> str | None: ...
+
+    def act_problem(self, guild_id: int | None, channel_id: int, actor: Actor) -> str | None: ...
+
+    def target_problem(self, target: Target, value: object, actor: Actor, *, preflight: bool) -> str | None: ...
+
+    def mentions(self, source: Source, actor: Actor) -> Mentions: ...
+
+
+class OperationLog(Protocol):
+    def atomic(self) -> AbstractContextManager[None]: ...
+
+    def get_request(self, message_id: int) -> RequestRecord | None: ...
+
+    def register_request(
+        self, message_id: int, actor_id: int, guild_id: int, channel_id: int, plan: object,
+    ) -> RequestRecord: ...
+
+    def finish_request(self, request_id: str, status: str) -> None: ...
+
+    def get(self, operation_id: str | None) -> OperationRecord | None: ...
+
+    def complete(
+        self, operation_id: str | None, kind: str, inputs: Mapping[str, object], result: object,
+        *, resource_id: str | None = None, status: str = "done",
+    ) -> None: ...

@@ -6,11 +6,11 @@ import sqlite3
 import discord
 from discord.ext import commands
 
+from src.admin.actions import admin_actions
 from src.admin.cog import AdminCog
 from src.admin.sessions import PanelSessionRegistry
-from src.action_service import ActionService
 from src.core.adapters.sqlite.operations import OperationStore
-from src.ai.private_results import PrivateResultButton
+from src.ai.actions import ai_actions
 from src.ai.cog import AiCog
 from src.ai.access import AiSettings
 from src.ai.access_service import AiAccessService
@@ -19,18 +19,23 @@ from src.codex.service import CodexService
 from src.core.adapters.discord.brand import load_app_emojis, report_interaction_error, sync_discord_brand
 from src.core.app.config import CODEX_URL, AppConfig
 from src.core.adapters.discord.channels import member_role_ids
-from src.core.adapters.discord.effects import EffectResolver
+from src.core.adapters.discord.effects import EffectResolver, effect_actions
 from src.core.adapters.discord.live import LiveGuild
+from src.core.adapters.discord.receipts import DiscordReceipts
+from src.core.app.actions import ActionEngine, ActionRegistry
+from src.games.actions import game_actions
 from src.games.cog import GamesCog
 from src.games.operations import EFFECT_KINDS as GAME_EFFECT_KINDS, GameOperations
 from src.games.store import GameStore
 from src.core.adapters.sqlite.db import DB_PATH, hold_lock, open_db
+from src.steam.actions import steam_actions
 from src.steam.cog import SteamCog
 from src.steam.notifier import SteamFreeGamesNotifier
 from src.core.adapters.discord.shutdown import Shutdown
 from src.core.app.effects import EffectRegistry
 from src.core.app.maintenance import Maintenance
 from src.core.app.supervisor import PRESENTATION, REQUEST, SCHEDULED, WORK, Supervisor
+from src.voice.actions import voice_actions
 from src.voice.cog import VoiceCog
 from src.voice.manager import TempVoiceManager
 from src.core.adapters.discord.watchdog import install_stack_dump_signal, run_watchdog
@@ -77,13 +82,24 @@ class HoroBot(commands.Bot):
         self.admin_panels = PanelSessionRegistry(
             supervisor.group("admin", PRESENTATION), supervisor.group("admin", WORK),
         )
-        self.actions = ActionService(self, db, supervisor.group("actions", WORK), live)
+        registry = ActionRegistry()
+        self.receipts = DiscordReceipts(self.operations, live, self, registry)
         kinds = EffectRegistry()
         kinds.register(
             *self.temp_voice.effect_kinds(), *self.steam_free_games.effect_kinds(), *GAME_EFFECT_KINDS,
-            *self.actions.effect_kinds(),
+            self.receipts.effect_kind(),
         )
         self.effects = EffectResolver(self.operations, kinds, live, self)
+        registry.register(
+            *game_actions(self.game_operations, live),
+            ai_actions(self.ai_settings, self.access_service, codex.get_models, lambda: self.games.channel_id),
+            voice_actions(self.temp_voice, live),
+            steam_actions(self.steam_free_games, live),
+            admin_actions(lambda: self.ai_settings.enabled, lambda: self.temp_voice.enabled,
+                          lambda: self.steam_free_games.status().running, lambda: len(self.effects.pending())),
+            effect_actions(self.effects),
+        )
+        self.actions = ActionEngine(registry, self.operations, live, self.receipts, supervisor.group("actions", WORK))
         self._watchdog = supervisor.group("watchdog", SCHEDULED)
         self.shutdown = Shutdown(
             supervisor,
@@ -107,13 +123,14 @@ class HoroBot(commands.Bot):
 
     async def add_cogs(self) -> None:
         guild = discord.Object(id=self.guild_id)
-        self.add_dynamic_items(PrivateResultButton)
+        self.add_dynamic_items(self.receipts.private_results.item)
         supervisor, live = self.supervisor, self.live
         for cog in (
             GamesCog(self, supervisor.group("games.cog", SCHEDULED), live),
             VoiceCog(self, live),
             AdminCog(self, live),
-            AiCog(self, live, requests=supervisor.group("ai", REQUEST), cleanups=supervisor.group("ai", PRESENTATION)),
+            AiCog(self, live, requests=supervisor.group("ai", REQUEST), cleanups=supervisor.group("ai", PRESENTATION),
+                  actions=self.actions),
             SteamCog(self),
         ):
             await self.add_cog(cog, guild=guild)

@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import sqlite3
 import uuid
+from contextlib import AbstractContextManager
 from typing import Any
 
 from src.core.adapters.sqlite.db import transaction
@@ -13,6 +14,9 @@ from src.core.domain.records import DiscordEffect, OperationRecord, RequestRecor
 class OperationStore:
     def __init__(self, db: sqlite3.Connection) -> None:
         self.db = db
+
+    def atomic(self) -> AbstractContextManager[None]:
+        return transaction(self.db)
 
     def _writing(self) -> None:
         if not self.db.in_transaction:

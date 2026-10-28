@@ -352,7 +352,8 @@ class SteamFreeGamesNotifierTest(unittest.IsolatedAsyncioTestCase):
     async def test_toggle_off_stops_polling_and_bad_or_closing_toggles_are_refused(self) -> None:
         client = SimpleNamespace(wait_until_ready=AsyncMock(), get_guild=lambda _: self.guild)
         self.notifier.provider.fetch_current_offers.return_value = SteamFetchResult(frozenset(), ())
-        self.notifier.set_enabled(True, client)
+        self.notifier.start(client)
+        self.notifier.set_enabled(True)
         task = self.notifier._task
         await asyncio.sleep(0)
         self.assertTrue(self.status().running)

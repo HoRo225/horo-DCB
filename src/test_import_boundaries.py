@@ -87,7 +87,8 @@ class ImportBoundaryTests(unittest.TestCase):
         for shared in ("core.adapters.sqlite.db", "core.adapters.sqlite.settings", "core.adapters.sqlite.operations",
                        "core.domain.clock", "core.app.supervisor", "core.app.maintenance", "core.app.ports",
                        "core.adapters.discord.shutdown", "core.adapters.discord.brand",
-                       "core.adapters.discord.channels", "core.adapters.discord.live", "core.adapters.discord.effects", "core.app.effects", "core.adapters.discord.watchdog", "core.app.config", "cards"):
+                       "core.adapters.discord.channels", "core.adapters.discord.live", "core.adapters.discord.effects", "core.app.effects",
+                       "core.domain.actions", "core.app.actions", "core.adapters.discord.receipts", "core.adapters.discord.private", "core.adapters.discord.watchdog", "core.app.config", "cards"):
             modules = loaded_modules(f"src.{shared}")
             with self.subTest(shared):
                 self.assertEqual({m for m in modules if m.startswith("src.") and m.split(".")[1] in features}, set())

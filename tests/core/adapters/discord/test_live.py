@@ -1,12 +1,13 @@
 import asyncio
 import unittest
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, MagicMock
 
 import discord
 
 from src.core.adapters.discord.live import LiveGuild
-from src.core.app.ports import Actor
+from src.core.app.ports import Actor, Source
+from src.core.domain.actions import REGULAR_ROLES, TEXT_CHANNEL, Target
 from tests.support.discord import Client, Guild, channel, member, thread
 
 G, OTHER, USER, CHANNEL = 5, 6, 1, 10
@@ -139,6 +140,76 @@ class LiveGuildTests(unittest.IsolatedAsyncioTestCase):
 
         self.guild.fetch_member = AsyncMock(side_effect=reconnect)
         self.assertIsNone(await self.live.find_member(2))
+
+
+def text_channel(channel_id: int, guild: object, name: str, **allowed: bool) -> MagicMock:
+    fake = MagicMock(spec=discord.TextChannel)
+    fake.configure_mock(id=channel_id, guild=guild, type=discord.ChannelType.text, name=name)
+    fake.permissions_for.return_value = discord.Permissions(**allowed)
+    return fake
+
+
+def role(role_id: int, name: str, *, default: bool = False) -> SimpleNamespace:
+    return SimpleNamespace(id=role_id, name=name, is_default=lambda: default)
+
+
+class ActionPresenceTests(unittest.IsolatedAsyncioTestCase):
+    def setUp(self) -> None:
+        self.cached = member(USER, roles=(7,), name="玩家")
+        self.guild = MagicMock(spec=discord.Guild, id=G, unavailable=False)
+        self.lobby = text_channel(CHANNEL, self.guild, "大廳", **SENDABLE)
+        self.hidden = text_channel(11, self.guild, "秘密", send_messages=True)
+        self.roles = [role(G, "@everyone", default=True), role(20, "玩家組"), role(21, "管理組"), role(22, "管理組")]
+        self.guild.channels, self.guild.roles = [self.lobby, self.hidden], self.roles
+        self.guild.get_member.side_effect = lambda user_id: self.cached if user_id == USER else None
+        self.guild.get_channel_or_thread.side_effect = {CHANNEL: self.lobby, 11: self.hidden}.get
+        self.guild.get_channel.side_effect = {CHANNEL: self.lobby, 11: self.hidden}.get
+        self.guild.get_role.side_effect = {item.id: item for item in self.roles}.get
+        self.guild.fetch_member = AsyncMock(return_value=self.cached)
+        self.closing = False
+        self.live = LiveGuild(SimpleNamespace(get_guild=lambda guild_id: self.guild if guild_id == G else None),
+                              G, lambda: self.closing)
+        self.actor = Actor(USER, "玩家", f"https://cdn.example.com/{USER}.png", frozenset({7}), False)
+
+    async def test_act_problem_checks_the_fetched_member_in_the_live_channel(self) -> None:
+        fetched = member(USER, roles=(8,), name="玩家")
+        self.guild.fetch_member.return_value = fetched
+        self.lobby.permissions_for.side_effect = lambda who: discord.Permissions(
+            view_channel=True, send_messages=who is fetched)
+        actor = await self.live.fresh_actor(CHANNEL, USER)
+        self.assertIsNone(self.live.act_problem(G, CHANNEL, actor))
+        self.assertEqual(self.live.act_problem(G, CHANNEL, self.live.actor(CHANNEL, USER)), CANNOT_SEND)
+        self.assertEqual(self.live.act_problem(G, 12, actor), UNCONFIRMED)
+        self.assertEqual(self.live.act_problem(OTHER, CHANNEL, actor), UNCONFIRMED)
+        self.closing = True
+        self.assertEqual(self.live.act_problem(G, CHANNEL, actor), RESTARTING)
+
+    def test_target_problem_names_missing_and_unusable_targets(self) -> None:
+        voice = Target("voice_channel", ("要語音頻道。", "語音頻道不可用。"))
+        cases = (
+            (TEXT_CHANNEL, CHANNEL, None, None),
+            (TEXT_CHANNEL, 11, "指定頻道不存在或目前無法查看，未執行任何操作。", "指定頻道已不存在或無法查看，未執行這項操作。"),
+            (TEXT_CHANNEL, 12, "指定頻道不存在或目前無法查看，未執行任何操作。", "指定頻道已不存在或無法查看，未執行這項操作。"),
+            (voice, CHANNEL, "要語音頻道。", "語音頻道不可用。"),
+            (Target("text_channels", ("要文字頻道。", "文字頻道不可用。")), [CHANNEL, 11], "要文字頻道。", "文字頻道不可用。"),
+            (Target("text_channels", ("要文字頻道。", "文字頻道不可用。")), [12], "指定的頻道或身分組不存在，未執行任何操作。",
+             "指定頻道或身分組已不存在，未執行這項操作。"),
+            (REGULAR_ROLES, [20], None, None),
+            (REGULAR_ROLES, [G], "指定的頻道或身分組不存在，未執行任何操作。", "只能選擇一般身分組，未執行這項操作。"),
+            (REGULAR_ROLES, [30], "指定的頻道或身分組不存在，未執行任何操作。", "指定頻道或身分組已不存在，未執行這項操作。"),
+            (Target("quoted"), "voice.delete:1", None, None),
+        )
+        for target, value, preflight, step in cases:
+            with self.subTest(target=target.kind, value=value):
+                self.assertEqual(self.live.target_problem(target, value, self.actor, preflight=True), preflight)
+                self.assertEqual(self.live.target_problem(target, value, self.actor, preflight=False), step)
+
+    def test_mentions_come_from_the_message_and_unique_names_or_ids_in_it(self) -> None:
+        source = Source(1000, G, CHANNEL, USER, "給玩家組和 11 還有管理組", frozenset(), frozenset({21}))
+        mentions = self.live.mentions(source, self.actor)
+        self.assertEqual((mentions.channel_ids, mentions.role_ids), (frozenset({CHANNEL, 11}), frozenset({20, 21})))
+        self.assertEqual([(item.id, item.name) for item in mentions.channels], [(CHANNEL, "大廳")])
+        self.assertEqual([(item.id, item.name) for item in mentions.roles], [(20, "玩家組"), (21, "管理組")])
 
 
 if __name__ == "__main__":

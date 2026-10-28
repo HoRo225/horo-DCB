@@ -115,7 +115,7 @@ def render_voice(view: AdminPanelView, note: tuple[str, str] | None = None) -> N
 
 
 async def _after_voice_toggle(
-    view: AdminPanelView, interaction: discord.Interaction, operation: int, enabled: bool
+    view: AdminPanelView, interaction: discord.Interaction, operation: int, enabled: bool, _changed: object
 ) -> tuple[str, str] | None:
     if not enabled or (guild := view.live.guild()) is None:
         return None

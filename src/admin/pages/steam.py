@@ -115,7 +115,6 @@ def render_steam(view: AdminPanelView, note: tuple[str, str] | None = None) -> N
                 "Steam 自動通知",
                 owner=view.steam_free_games,
                 render=render_steam,
-                after=_after_steam_toggle,
             ),
         )
     )
@@ -213,13 +212,6 @@ def render_steam(view: AdminPanelView, note: tuple[str, str] | None = None) -> N
         )
     )
     view.set_container(*children, colour=BRAND_COLOUR, note=note, problem=steam.next_step)
-
-
-async def _after_steam_toggle(
-    view: AdminPanelView, interaction: discord.Interaction, _operation: int, enabled: bool
-) -> None:
-    if enabled:
-        view.steam_free_games.start(interaction.client)
 
 
 async def handle_steam_role_select(

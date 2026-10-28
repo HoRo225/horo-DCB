@@ -13,8 +13,9 @@ import aiohttp
 import discord
 
 from src.ai.access import AiSettings
+from src.ai.domain.intent import Intent, envelope_schema, parse_envelope
+from src.ai.domain.prompts import intent_instructions
 from src.codex.service import CodexService
-from src.codex.contracts import parse_intent_decision
 from src.ai.formatting import codex_error_text
 from src.ai.images import (
     ImageAttachmentError,
@@ -42,7 +43,10 @@ from src.codex.protocol import (
 from src.ai.query_views import help_view
 from src.core.adapters.discord.brand import ICONS
 from src.core.adapters.discord.channels import member_role_ids
-from src.core.adapters.discord.live import LiveGuild, can_send as member_can_send
+from src.core.adapters.discord.live import LiveGuild, can_send as member_can_send, message_source
+from src.core.adapters.discord.receipts import receipt_view
+from src.core.app.actions import ActionEngine
+from src.core.app.ports import Actor
 from src.core.app.supervisor import TaskGroup
 
 IMAGE_TIMEOUT_SECONDS = 30.0
@@ -116,7 +120,7 @@ async def handle_message(
     codex: CodexService,
     access: AiSettings,
     cleanups: TaskGroup,
-    actions: Any = None,
+    actions: ActionEngine | None = None,
     bot: Any = None,
 ) -> None:
     if message.author.bot or message.webhook_id is not None:
@@ -144,7 +148,7 @@ async def handle_message(
     ):
         return
     text_display_enabled = access.text_display
-    received_context = actions.snapshot(message) if actions is not None and key is not None else None
+    received_context = actions.context(message_source(message)) if actions is not None and key is not None else None
     referenced_message = None
     if not mentions_bot:
         referenced_message = await get_referenced_message(message)
@@ -168,7 +172,7 @@ async def handle_message(
         except discord.HTTPException:
             logging.exception("Failed to send the help card.")
         return
-    replay = actions is not None and actions.records.get_request(message.id) is not None
+    replay = actions is not None and actions.has_request(message.id)
     if not replay and not codex.try_start_request(message.author.id):
         await reply_notice(message, "你發問得太快了，請稍候幾秒再試。", text_display_enabled)
         return
@@ -205,7 +209,7 @@ class AiRequest:
         codex: CodexService,
         access: AiSettings,
         text_display_enabled: bool,
-        actions: Any = None,
+        actions: ActionEngine | None = None,
         received_context: dict | None = None,
         bot: Any = None,
         cleanups: TaskGroup,
@@ -231,7 +235,8 @@ class AiRequest:
         self.allowed_channel_id = message.channel.parent_id if isinstance(message.channel, discord.Thread) else message.channel.id
         self.channel_generation = access.channel_generation(self.allowed_channel_id)
         self.actions = actions
-        self.context = received_context if received_context is not None else actions.snapshot(message) if actions is not None else {}
+        self.source = message_source(message) if actions is not None else None
+        self.context = received_context if received_context is not None else actions.context(self.source) if actions is not None else {}
         self.job: Any = None
         self.progress = AiProgress(
             can_send=self.can_send, deadline=self.accepted_deadline, name=bot_name, cleanups=cleanups,
@@ -267,42 +272,49 @@ class AiRequest:
     def _current(self) -> bool:
         return self.access.is_current(self.generation, self.allowed_channel_id, self.channel_generation)
 
+    def _granted(self, actor: Actor) -> bool:
+        return self.access.denial_reason(self.message.guild.id, self.allowed_channel_id, actor.role_ids) is None
+
     async def _intent_route(self, models) -> bool:
         if self.actions is None or not self.content.strip():
             return False
         if len(self.content) > MAX_PROMPT_CHARACTERS:
             raise ImageAttachmentError(f"問題最多 {MAX_PROMPT_CHARACTERS:,} 個字元，請縮短後再試。")
-        prior = self.actions.records.get_request(self.message.id)
+        prior = self.actions.prior(self.message.id)
         if prior is not None:
-            decision = parse_intent_decision(prior.plan["decision"])
-            game_snapshot = prior.plan.get("game")
+            intent, received = Intent("plan", prior[0]), prior[1]
         else:
+            catalogue = self.actions.catalogue
             with self._timed("sdk"), self._timed("intent"):
-                decision = await self.codex.intent(self.key, self.content, self.context,
-                                                  job=self.job, models=models, request_id=self.id)
-            game_snapshot = self.context.get("game")
-        if decision.kind == "chat":
+                intent = await self.codex.structured(
+                    self.key, {"direct_text": self.content, "context": self.context},
+                    instructions=intent_instructions(catalogue.hints()), schema=envelope_schema(catalogue),
+                    parse=lambda raw: parse_envelope(raw, catalogue), job=self.job, models=models, request_id=self.id,
+                )
+            received = self.context
+        if intent.kind == "chat":
             return False
         await self.progress.stop()
         self.output_started = True
-        if decision.kind == "clarification":
+        if intent.kind == "clarification":
             if await self.can_send():
-                await reply_notice(self.message, decision.question, self.text_display_enabled, tone=None)
+                await reply_notice(self.message, intent.question, self.text_display_enabled, tone=None)
             self.outcome = "clarification"
             return True
-        if self.bot is not None and [action.name for action in decision.actions] == ["help"]:
+        if self.bot is not None and [action.name for action in intent.plan.actions] == ["help"]:
             if await self.can_send():
                 await reply(self.message, view=help_view(self.bot.games.channel_id))
             self.outcome = "help"
             return True
-        results = await self.actions.execute_plan(self.message, decision, game_snapshot=game_snapshot,
-                                                 deadline=self.job.work_deadline)
+        outcome = await self.actions.execute(self.source, intent.plan, received=received,
+                                             deadline=self.job.work_deadline, grant=self._granted)
+        results = outcome.results
         self.outcome = "operations"
-        if not self.actions.was_sent(self.message.id):
+        if not outcome.published:
             if await self.can_send():
                 if self.text_display_enabled:
                     public = [{key: value for key, value in result.items() if key != "private_ref"} for result in results]
-                    await reply(self.message, view=self.actions._receipt_view(public))
+                    await reply(self.message, view=receipt_view(public))
                 else:
                     await reply_notice(self.message, "\n".join(result["text"] for result in results), self.text_display_enabled)
             return True
@@ -314,7 +326,7 @@ class AiRequest:
                 with self._timed("sdk"), self._timed("summary"):
                     summary = await self.codex.summarize(self.key, public, job=self.job, models=models, request_id=self.id)
                 if await self.can_send():
-                    await self.actions.update_receipt(self.message, summary.text)
+                    await self.actions.explain(self.source, summary.text, grant=self._granted)
             except (CodexError, TimeoutError):
                 logging.warning("AI result explanation unavailable; the confirmed receipt remains.")
         return True

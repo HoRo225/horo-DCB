@@ -15,6 +15,7 @@ from src.admin.panel import PAGES, AdminPanelView
 from src.codex.model_settings import ModelChoice, ModelInfo, ModelSettings
 from src.codex.protocol import CodexRuntimeStatus
 from src.ai.query_views import help_view
+from src.core.adapters.discord.receipts import receipt_view
 from src.codex.rate_limits import CodexRateLimits, CodexRateWindow
 from src.codex.service import DeviceLogin
 from src.bot import HoroBot
@@ -195,7 +196,8 @@ class LayoutBudgetTest(unittest.IsolatedAsyncioTestCase):
             receipt = [{"ok": n % 2 == 0, "text": "果" * 200, "private_ref": f"ref{n}"} for n in range(3)] + [
                 {"ok": True, "text": "果" * 200}]
             for said in ("", "說" * 1500):
-                fits(f"ai receipt explained={bool(said)}", bot.actions._receipt_view(receipt, said))
+                fits(f"ai receipt explained={bool(said)}", receipt_view(receipt, said, buttons=bot.receipts.private_results.make_buttons(
+                    item["private_ref"] for item in receipt if "private_ref" in item)))
             fits("notice", notice_view("註" * 2000, title="標" * 100))
 
 

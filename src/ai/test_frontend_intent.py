@@ -11,7 +11,9 @@ import discord
 
 from src.ai.access import AiSettings
 from src.codex.admission import AcceptedJob
-from src.codex.contracts import Action, IntentDecision
+from src.ai.domain.intent import Intent
+from src.core.app.actions import Outcome
+from src.core.domain.actions import Action, Catalogue, Plan
 from src.ai.discord import AiRequest, handle_message
 from src.codex.protocol import CodexError, CodexChatReply, conversation_key
 from src.core.adapters.discord.live import LiveGuild
@@ -23,7 +25,8 @@ from src.testing import AI_CLEANUPS
 from src.ai.access import AI_CHANNEL_IDS, AI_ENABLED, AI_ROLE_IDS, AI_TEXT_DISPLAY
 
 GUILD, CHANNEL_A, CHANNEL_B, USER, ROLE, BOT = 700, 701, 702, 710, 720, 799
-PLAN = IntentDecision("plan", (Action("steam_query", {}),))
+PLAN = Intent("plan", Plan((Action("steam_query", {}),)))
+PLAN_JSON = json.dumps({"kind": "plan", "actions": [{"name": "steam_query", "params": {}}], "question": ""})
 
 
 class FakeGuild:
@@ -83,7 +86,7 @@ class FakeMessage:
 class FakeCodex:
     def __init__(self):
         self.try_start_request = MagicMock(return_value=True)
-        self.intent = AsyncMock(return_value=IntentDecision("chat"))
+        self.structured = AsyncMock(return_value=Intent("chat"))
         self.chat = AsyncMock(return_value=CodexChatReply("一般聊天回答"))
         self.summarize = AsyncMock(return_value=CodexChatReply("操作已完成。"))
 
@@ -102,40 +105,52 @@ class FakeCodex:
 class FakeActions:
     def __init__(self, db):
         self.records = OperationStore(db)
-        self.guilds = {}
+        self.catalogue = Catalogue([], [])
+        self.guilds, self.messages = {}, {}
         self.bot = SimpleNamespace(get_guild=self.guilds.get)
         self.game = {"state_token": "received-token", "game": "blackjack", "legal_actions": ["hit"], "busy": False}
         self.snapshot_calls, self.mutation_count, self.seen_game = 0, 0, []
         self.results = [{"ok": True, "code": "done", "text": "操作已完成，請查看私人結果。", "private_ref": "PRIVATE_REF_TOKEN"}]
         self.completed, self.receipts = {}, {}
-        self.execute_plan = AsyncMock(side_effect=self._execute)
-        self.update_receipt = AsyncMock(side_effect=self._update)
+        self.execute = AsyncMock(side_effect=self._execute)
+        self.explain = AsyncMock(side_effect=self._explain)
 
-    def snapshot(self, message):
-        self.snapshot_calls += 1
+    def attach(self, message):
+        self.messages[message.id] = message
         live = self.guilds.setdefault(message.guild.id, message.guild)
         live.channels.setdefault(message.channel.id, message.channel)
         live.members.setdefault(message.author.id, message.author)
-        return {"actor_id": message.author.id, "guild_id": message.guild.id, "channel_id": message.channel.id,
+
+    def has_request(self, message_id):
+        return self.records.get_request(message_id) is not None
+
+    def prior(self, message_id):
+        request = self.records.get_request(message_id)
+        if request is None:
+            return None
+        actions = tuple(Action(item["name"], item["params"]) for item in request.plan["decision"]["actions"])
+        return Plan(actions), {"game": request.plan["game"]}
+
+    def context(self, source):
+        self.snapshot_calls += 1
+        return {"actor_id": source.actor_id, "guild_id": source.guild_id, "channel_id": source.channel_id,
                 "allowed_actions": ["steam_query", "hit"], "game": copy.deepcopy(self.game)}
 
-    async def _execute(self, message, decision, *, game_snapshot, deadline):
-        self.seen_game.append(copy.deepcopy(game_snapshot))
-        if self.records.get_request(message.id) is not None:
-            return copy.deepcopy(self.completed[message.id])
-        request = self.records.register_request(message.id, message.author.id, message.guild.id, message.channel.id,
-                                                {"decision": decision.to_payload(), "game": game_snapshot})
+    async def _execute(self, source, plan, *, received, deadline, grant):
+        self.seen_game.append(copy.deepcopy(received.get("game")))
+        if self.records.get_request(source.message_id) is not None:
+            return Outcome(copy.deepcopy(self.completed[source.message_id]), source.message_id in self.receipts)
+        decision = {"kind": "plan", "actions": plan.to_payload(), "question": ""}
+        request = self.records.register_request(source.message_id, source.actor_id, source.guild_id, source.channel_id,
+                                                {"decision": decision, "game": received.get("game")})
         self.mutation_count += 1
-        self.completed[message.id] = copy.deepcopy(self.results)
+        self.completed[source.message_id] = copy.deepcopy(self.results)
         self.records.finish_request(request.request_id, "done")
-        self.receipts[message.id] = await message.channel.send("確定操作回執")
-        return copy.deepcopy(self.results)
+        self.receipts[source.message_id] = await self.messages[source.message_id].channel.send("確定操作回執")
+        return Outcome(copy.deepcopy(self.results), True)
 
-    def was_sent(self, message_id):
-        return message_id in self.receipts
-
-    async def _update(self, message, explanation):
-        await self.receipts[message.id].edit(content=explanation)
+    async def _explain(self, source, text, *, grant):
+        await self.receipts[source.message_id].edit(content=text)
 
 
 class FrontendIntentTest(unittest.IsolatedAsyncioTestCase):
@@ -150,33 +165,35 @@ class FrontendIntentTest(unittest.IsolatedAsyncioTestCase):
         self.live = LiveGuild(self.actions.bot, GUILD, lambda: False)
 
     async def handle(self, message):
+        self.actions.attach(message)
         await handle_message(message, live=self.live, bot_user_id=BOT, cleanups=AI_CLEANUPS, codex=self.codex, access=self.access, actions=self.actions)
 
     def request(self, message):
+        self.actions.attach(message)
         return AiRequest(message, live=self.live, key=conversation_key(GUILD, message.channel.id, USER, is_thread=False),
                          content=message.content.replace(f"<@{BOT}>", "").strip(), mentions_bot=True,
                          referenced_message=None, bot_name="HoRo", codex=self.codex, access=self.access,
                          text_display_enabled=False, actions=self.actions, cleanups=AI_CLEANUPS)
 
     async def test_plan_and_clarification_never_fetch_or_send_quoted_media_to_intent(self):
-        for index, decision in enumerate((PLAN, IntentDecision("clarification", question="請指定金額。"))):
+        for index, decision in enumerate((PLAN, Intent("clarification", question="請指定金額。"))):
             with self.subTest(kind=decision.kind):
                 message = FakeMessage(800 + index)
                 quote = message.with_untrusted_quote_and_images()
-                self.codex.intent.reset_mock()
-                self.actions.execute_plan.reset_mock()
-                self.codex.intent.return_value = decision
+                self.codex.structured.reset_mock()
+                self.actions.execute.reset_mock()
+                self.codex.structured.return_value = decision
                 with patch("src.ai.discord._read_media", AsyncMock()) as media:
                     await self.handle(message)
-                args = self.codex.intent.await_args.args
-                self.assertEqual(args[1], "查 Steam")
-                serialized = json.dumps(args[2], ensure_ascii=False)
+                payload = self.codex.structured.await_args.args[1]
+                self.assertEqual(payload["direct_text"], "查 Steam")
+                serialized = json.dumps(payload["context"], ensure_ascii=False)
                 self.assertNotIn(quote.content, serialized)
                 self.assertNotIn("cdn.discordapp", serialized)
                 media.assert_not_awaited()
                 message.channel.fetch_message.assert_not_awaited()
                 self.codex.chat.assert_not_awaited()
-                self.assertEqual(self.actions.execute_plan.await_count, int(decision.kind == "plan"))
+                self.assertEqual(self.actions.execute.await_count, int(decision.kind == "plan"))
                 if decision.kind == "clarification":
                     self.assertEqual(message.channel.send.await_args.args[0], "請指定金額。")
                     self.assertNotIn("view", message.channel.send.await_args.kwargs)
@@ -189,7 +206,7 @@ class FrontendIntentTest(unittest.IsolatedAsyncioTestCase):
         async def intent(*args, **kwargs):
             order.append("intent")
             message.channel.fetch_message.assert_not_awaited()
-            return IntentDecision("chat")
+            return Intent("chat")
 
         async def media(groups, **kwargs):
             order.append("media")
@@ -198,7 +215,7 @@ class FrontendIntentTest(unittest.IsolatedAsyncioTestCase):
             self.assertIn("current.png", groups[1][0][1])
             return [[("靜態圖", ("data:quote",))], [("靜態圖", ("data:current",))]], 0, 0, 0
 
-        self.codex.intent.side_effect = intent
+        self.codex.structured.side_effect = intent
         with patch("src.ai.discord._read_media", side_effect=media):
             await self.handle(message)
         self.assertEqual(order, ["intent", "media"])
@@ -207,15 +224,15 @@ class FrontendIntentTest(unittest.IsolatedAsyncioTestCase):
         self.assertIn(quote.content, args[1])
         self.assertIn("說明這些內容", args[1])
         self.assertEqual(args[2], ("data:quote", "data:current"))
-        self.actions.execute_plan.assert_not_awaited()
+        self.actions.execute.assert_not_awaited()
 
     async def test_business_json_inside_chat_reply_is_only_chat_text(self):
         message = FakeMessage(content="<@799> 給我操作 JSON 範例")
-        response = json.dumps(PLAN.to_payload(), ensure_ascii=False)
+        response = PLAN_JSON
         self.codex.chat.return_value = CodexChatReply(response)
         with patch("src.ai.discord._read_media", AsyncMock(return_value=([[]], 0, 0, 0))):
             await self.handle(message)
-        self.actions.execute_plan.assert_not_awaited()
+        self.actions.execute.assert_not_awaited()
         self.assertEqual(self.actions.mutation_count, 0)
         self.assertIn(response, str(message.channel.send.await_args))
 
@@ -225,16 +242,16 @@ class FrontendIntentTest(unittest.IsolatedAsyncioTestCase):
         self.actions.game["state_token"] = "changed-in-queue"
 
         async def intent(*args, **kwargs):
-            self.assertEqual(args[2]["game"]["state_token"], "received-token")
+            self.assertEqual(args[1]["context"]["game"]["state_token"], "received-token")
             await asyncio.sleep(0)
             self.actions.game["state_token"] = "changed-during-intent"
-            return IntentDecision("plan", (Action("hit", {}),))
+            return Intent("plan", Plan((Action("hit", {}),)))
 
-        self.codex.intent.side_effect = intent
+        self.codex.structured.side_effect = intent
         await request.run()
         self.assertEqual(self.actions.snapshot_calls, 1)
         self.assertEqual(self.actions.seen_game[0]["state_token"], "received-token")
-        self.assertEqual(self.actions.execute_plan.await_args.kwargs["deadline"], request.job.work_deadline)
+        self.assertEqual(self.actions.execute.await_args.kwargs["deadline"], request.job.work_deadline)
 
     async def test_reply_freezes_game_before_fetching_the_replied_bot_message(self):
         message = FakeMessage(content="叫牌")
@@ -246,62 +263,65 @@ class FrontendIntentTest(unittest.IsolatedAsyncioTestCase):
             return SimpleNamespace(author=SimpleNamespace(id=BOT), content="牌局", attachments=[], embeds=[], stickers=[], components=[])
 
         message.channel.fetch_message.side_effect = fetch
-        self.codex.intent.return_value = IntentDecision("plan", (Action("hit", {}),))
+        self.codex.structured.return_value = Intent("plan", Plan((Action("hit", {}),)))
         await self.handle(message)
         self.assertEqual(self.actions.snapshot_calls, 1)
         self.assertEqual(self.actions.seen_game[0]["state_token"], "received-token")
 
     async def test_intent_failure_never_falls_back_to_chat(self):
-        self.codex.intent.side_effect = CodexError("unavailable")
+        self.codex.structured.side_effect = CodexError("unavailable")
         message = FakeMessage(800)
         with patch("src.ai.discord._read_media", AsyncMock(return_value=([[]], 0, 0, 0))):
             await self.handle(message)
-        self.actions.execute_plan.assert_not_awaited()
+        self.actions.execute.assert_not_awaited()
         self.codex.chat.assert_not_awaited()
 
     async def test_a_lone_help_action_replies_the_public_help_card(self):
         bot = SimpleNamespace(games=SimpleNamespace(channel_id=99))
-        self.codex.intent.return_value = IntentDecision("plan", (Action("help", {}),))
+        self.codex.structured.return_value = Intent("plan", Plan((Action("help", {}),)))
         message = FakeMessage(content="<@799> 你能幫我做哪些事")
+        self.actions.attach(message)
         await handle_message(message, live=self.live, bot_user_id=BOT, cleanups=AI_CLEANUPS, codex=self.codex, access=self.access, actions=self.actions, bot=bot)
-        self.actions.execute_plan.assert_not_awaited()
+        self.actions.execute.assert_not_awaited()
         self.codex.chat.assert_not_awaited()
         self.assertIsNone(self.actions.records.get_request(message.id))
         self.assertIn("<#99>", text(message.channel.send.await_args.kwargs["view"]))
-        self.codex.intent.return_value = IntentDecision("plan", (Action("steam_query", {}), Action("help", {})))
-        await handle_message(FakeMessage(801), live=self.live, bot_user_id=BOT, cleanups=AI_CLEANUPS, codex=self.codex, access=self.access, actions=self.actions, bot=bot)
-        self.actions.execute_plan.assert_awaited_once()
+        self.codex.structured.return_value = Intent("plan", Plan((Action("steam_query", {}), Action("help", {}))))
+        other = FakeMessage(801)
+        self.actions.attach(other)
+        await handle_message(other, live=self.live, bot_user_id=BOT, cleanups=AI_CLEANUPS, codex=self.codex, access=self.access, actions=self.actions, bot=bot)
+        self.actions.execute.assert_awaited_once()
 
     async def test_results_without_a_receipt_reply_in_receipt_style_without_private_buttons(self):
         results = [{"ok": True, "code": "done", "text": "已查詢Steam 免費遊戲。", "private_ref": "UNBOUND"},
                    {"ok": False, "code": "forbidden", "text": "此操作僅限伺服器管理員使用。"}]
-        self.codex.intent.return_value = PLAN
-        self.actions.execute_plan = AsyncMock(return_value=results)
-        self.actions._receipt_view = MagicMock(return_value=discord.ui.LayoutView())
+        self.codex.structured.return_value = PLAN
+        self.actions.execute = AsyncMock(return_value=Outcome(results, False))
+        receipt_view = MagicMock(return_value=discord.ui.LayoutView())
         for display in (True, False):
-            with self.subTest(display=display):
+            with self.subTest(display=display), patch("src.ai.discord.receipt_view", receipt_view):
                 put_setting(self.db, AI_TEXT_DISPLAY, display)
                 message = FakeMessage(800 + display)
                 await self.handle(message)
                 sent = message.channel.send.await_args
                 if display:
-                    self.assertIs(sent.kwargs["view"], self.actions._receipt_view.return_value)
+                    self.assertIs(sent.kwargs["view"], receipt_view.return_value)
                 else:
                     self.assertEqual(sent.args[0], "已查詢Steam 免費遊戲。\n此操作僅限伺服器管理員使用。")
-        self.actions._receipt_view.assert_called_once_with([{"ok": True, "code": "done", "text": "已查詢Steam 免費遊戲。"}, results[1]])
+        receipt_view.assert_called_once_with([{"ok": True, "code": "done", "text": "已查詢Steam 免費遊戲。"}, results[1]])
         self.codex.summarize.assert_not_awaited()
 
     async def test_summary_receives_only_public_results_and_only_edits_existing_receipt(self):
         message = FakeMessage()
-        self.codex.intent.return_value = PLAN
-        response = json.dumps(IntentDecision("plan", (Action("admin_points", {"target_user_id": USER, "amount": 123}),)).to_payload())
+        self.codex.structured.return_value = PLAN
+        response = json.dumps({"kind": "plan", "actions": [{"name": "admin_points", "params": {"target_user_id": USER, "amount": 123}}], "question": ""})
         self.codex.summarize.return_value = CodexChatReply(response)
         await self.handle(message)
         supplied = self.codex.summarize.await_args.args[1]
         self.assertEqual(supplied, [{"ok": True, "code": "done", "text": "操作已完成，請查看私人結果。"}])
         self.assertNotIn("PRIVATE_REF_TOKEN", json.dumps(supplied))
         self.assertEqual(self.actions.mutation_count, 1)
-        self.actions.execute_plan.assert_awaited_once()
+        self.actions.execute.assert_awaited_once()
         message.channel.send.assert_awaited_once()
         message.posted.edit.assert_awaited_once_with(content=response)
         self.codex.chat.assert_not_awaited()
@@ -311,7 +331,7 @@ class FrontendIntentTest(unittest.IsolatedAsyncioTestCase):
         message = FakeMessage()
         card = SimpleNamespace(delete=AsyncMock(), edit=AsyncMock())
         message.reply = AsyncMock(return_value=card)
-        self.codex.intent.return_value = PLAN
+        self.codex.structured.return_value = PLAN
 
         async def summarize(*args, **kwargs):
             card.delete.assert_awaited_once()
@@ -325,15 +345,15 @@ class FrontendIntentTest(unittest.IsolatedAsyncioTestCase):
         message.posted.edit.assert_awaited_once_with(content="操作已完成。")
 
     async def test_summary_failure_preserves_receipt_and_never_reexecutes(self):
-        self.codex.intent.return_value = PLAN
+        self.codex.structured.return_value = PLAN
         for index, failure in enumerate((CodexError("unavailable"), TimeoutError())):
             with self.subTest(failure=type(failure).__name__):
                 message = FakeMessage(800 + index)
-                self.actions.execute_plan.reset_mock()
+                self.actions.execute.reset_mock()
                 self.codex.summarize.side_effect = failure
                 with self.assertLogs(level="WARNING"):
                     await self.handle(message)
-                self.actions.execute_plan.assert_awaited_once()
+                self.actions.execute.assert_awaited_once()
                 message.channel.send.assert_awaited_once_with("確定操作回執")
                 message.posted.edit.assert_not_awaited()
         self.assertEqual(self.actions.mutation_count, 2)
@@ -350,7 +370,7 @@ class FrontendIntentTest(unittest.IsolatedAsyncioTestCase):
             line = next(line for line in logs.output if "AI request id=" in line)
             return {name: float(ms) for name, ms in re.findall(r"(\w+)_ms=([\d.]+)", line)}
 
-        self.codex.intent.side_effect = slow(PLAN)
+        self.codex.structured.side_effect = slow(PLAN)
         self.codex.summarize.side_effect = slow(CodexChatReply("操作已完成。"))
         with self.assertLogs(level="INFO") as logs:
             await self.handle(FakeMessage(800))
@@ -360,7 +380,7 @@ class FrontendIntentTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(ms["chat"], 0)
         self.assertAlmostEqual(ms["sdk"], ms["intent"] + ms["summary"], delta=1)
 
-        self.codex.intent.side_effect = slow(IntentDecision("chat"))
+        self.codex.structured.side_effect = slow(Intent("chat"))
         self.codex.chat.side_effect = slow(CodexChatReply("一般聊天回答"))
         with (patch("src.ai.discord._read_media", AsyncMock(return_value=([[]], 0, 0, 0))),
               self.assertLogs(level="INFO") as logs):
@@ -373,14 +393,14 @@ class FrontendIntentTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_duplicate_source_replays_saved_plan_and_original_game_without_new_intent(self):
         message = FakeMessage()
-        self.codex.intent.return_value = PLAN
+        self.codex.structured.return_value = PLAN
         self.codex.try_start_request.side_effect = [True, False]
         await self.handle(message)
         original = self.actions.records.get_request(message.id)
         self.actions.game["state_token"] = "a-new-table"
-        self.codex.intent.side_effect = AssertionError("duplicate source must not be reinterpreted")
+        self.codex.structured.side_effect = AssertionError("duplicate source must not be reinterpreted")
         await self.handle(message)
-        self.codex.intent.assert_awaited_once()
+        self.codex.structured.assert_awaited_once()
         self.codex.summarize.assert_awaited_once()
         self.assertEqual(self.actions.mutation_count, 1)
         self.assertEqual(self.actions.records.get_request(message.id), original)
@@ -393,9 +413,9 @@ class FrontendIntentTest(unittest.IsolatedAsyncioTestCase):
         message.with_untrusted_quote_and_images()
         with patch("src.ai.discord._read_media", AsyncMock()) as media:
             await self.handle(message)
-        self.codex.intent.assert_not_awaited()
+        self.codex.structured.assert_not_awaited()
         self.codex.chat.assert_not_awaited()
-        self.actions.execute_plan.assert_not_awaited()
+        self.actions.execute.assert_not_awaited()
         media.assert_not_awaited()
         self.assertIn("4,000", str(message.channel.send.await_args))
 

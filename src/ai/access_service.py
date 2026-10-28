@@ -22,6 +22,21 @@ class AiAccessService:
         self._closed = False
         self._role_ids_for_user = role_ids_for_user
 
+    @property
+    def enabled(self) -> bool:
+        return self.access.enabled
+
+    async def set_enabled(self, value: bool, *, operation_id: str | None = None) -> bool:
+        was_enabled = self.access.enabled
+        if not self.access.set_enabled(value, operation_id=operation_id) or not was_enabled or value:
+            return True
+        try:
+            await self.client.cancel(self.access.guild_id)
+        except CodexError:
+            logging.exception("AI was disabled but requests in flight could not be stopped.")
+            return False
+        return True
+
     async def change(
         self,
         guild_id: int,

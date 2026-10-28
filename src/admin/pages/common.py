@@ -126,7 +126,7 @@ def feature_button(
     attr: str = "enabled",
     render: Callable[[AdminPanelView, tuple[str, str]], None],
     after: Callable[
-        [AdminPanelView, discord.Interaction, int, bool], Awaitable[tuple[str, str] | None]
+        [AdminPanelView, discord.Interaction, int, bool, object], Awaitable[tuple[str, str] | None]
     ]
     | None = None,
 ) -> discord.ui.Button:
@@ -146,10 +146,10 @@ def feature_button(
             setter = owner.set_display if attr == "text_display" else owner.set_enabled
             result = setter(enabled, operation_id=interaction_operation_id(interaction))
             if inspect.isawaitable(result):
-                await result
+                result = await result
             name = label.format(name=view.bot_name)
             note = ("ok", f"{_join('已開啟' if enabled else '已關閉', name)}。")
-            if after is not None and (extra := await after(view, interaction, operation, enabled)):
+            if after is not None and (extra := await after(view, interaction, operation, enabled, result)):
                 note = (extra[0], f"{note[1]} {extra[1]}")
             return lambda: render(view, note)
 

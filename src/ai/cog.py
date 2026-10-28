@@ -12,6 +12,7 @@ from src.codex.protocol import CodexError
 from src.core.adapters.discord.channels import is_text_channel, member_role_ids
 from src.core.adapters.discord.live import LiveGuild, can_send
 from src.core.adapters.discord.brand import send_notice
+from src.core.app.actions import ActionEngine
 from src.codex.protocol import conversation_key
 from src.core.app.supervisor import TaskGroup
 
@@ -20,9 +21,13 @@ if TYPE_CHECKING:
 
 
 class AiCog(commands.Cog):
-    def __init__(self, bot: HoroBot, live: LiveGuild, *, requests: TaskGroup, cleanups: TaskGroup) -> None:
+    def __init__(
+        self, bot: HoroBot, live: LiveGuild, *, requests: TaskGroup, cleanups: TaskGroup,
+        actions: ActionEngine | None = None,
+    ) -> None:
         self.bot = bot
         self._live = live
+        self._actions = actions
         self._requests = requests
         self._cleanups = cleanups
 
@@ -42,7 +47,7 @@ class AiCog(commands.Cog):
                 codex=bot.codex,
                 access=bot.ai_settings,
                 cleanups=self._cleanups,
-                actions=getattr(bot, "actions", None),
+                actions=self._actions,
                 bot=bot,
             )
 

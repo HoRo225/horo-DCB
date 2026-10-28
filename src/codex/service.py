@@ -5,15 +5,14 @@ import contextlib
 import json
 import logging
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from typing import Any
 
 from src.codex.admission import AcceptedJob, Admission
-from src.codex.contracts import IntentDecision, intent_schema, parse_intent_json
 from src.codex.conversations import ConversationStore
-from src.codex.instructions import CHAT_INSTRUCTIONS, INTENT_INSTRUCTIONS, ONCE_INSTRUCTIONS, SUMMARY_INSTRUCTIONS
+from src.codex.instructions import CHAT_INSTRUCTIONS, ONCE_INSTRUCTIONS, SUMMARY_INSTRUCTIONS
 from src.codex.model_settings import ModelChoice, ModelInfo, ModelSettings, parse_model_list, resolve_model_settings, with_effort
 from src.codex.protocol import (
     CLEANUP_SECONDS,
@@ -64,6 +63,13 @@ def feature_config(*, isolated: bool = False) -> dict[str, object]:
     }
 
 
+def _unique_fields(items: list[tuple[str, object]]) -> dict[str, object]:
+    fields = dict(items)
+    if len(fields) != len(items):
+        raise ValueError("duplicate field")
+    return fields
+
+
 @dataclass(frozen=True, slots=True)
 class Mode:
     name: str
@@ -71,7 +77,7 @@ class Mode:
     cap_ms: int
     effort: str | None = None
     fallback: bool = True
-    output_schema: bool = False
+    output_schema: Mapping[str, object] | None = None
 
     @property
     def persistent(self) -> bool:
@@ -90,7 +96,6 @@ class Mode:
 
 
 CHAT = Mode("chat", CHAT_INSTRUCTIONS, MAX_CHAT_BUDGET_MS)
-INTENT = Mode("intent", INTENT_INSTRUCTIONS, 60_000, effort="medium", output_schema=True)
 SUMMARY = Mode("summary", SUMMARY_INSTRUCTIONS, 30_000, effort="medium", fallback=False)
 ONCE = Mode("once", ONCE_INSTRUCTIONS, MAX_CHAT_BUDGET_MS)
 
@@ -345,17 +350,18 @@ class CodexService:
             result, restarted = await self._turn(CHAT, key, text, images, job, models, on_progress, request_id)
         return CodexChatReply(result.text.strip(), extract_reply_image_urls(result.web_searches, result.text), restarted)
 
-    async def intent(
-        self, key: str, text: str, context: dict[str, object], *, job: AcceptedJob,
-        models: ModelSettings, request_id: str | None = None,
-    ) -> IntentDecision:
+    async def structured[T](
+        self, key: str, payload: Mapping[str, object], *, instructions: str, schema: Mapping[str, object],
+        parse: Callable[[object], T], job: AcceptedJob, models: ModelSettings, request_id: str | None = None,
+    ) -> T:
         self._require_job(key, job)
-        prompt = json.dumps({"direct_text": text, "context": context}, ensure_ascii=False, allow_nan=False)
-        result, _restarted = await self._turn(INTENT, key, prompt, (), job, models, None, request_id)
+        prompt = json.dumps(payload, ensure_ascii=False, allow_nan=False)
+        mode = Mode("structured", instructions, 60_000, effort="medium", output_schema=schema)
+        result, _restarted = await self._turn(mode, key, prompt, (), job, models, None, request_id)
         try:
-            return parse_intent_json(result.text)
+            return parse(json.loads(result.text, object_pairs_hook=_unique_fields))
         except ValueError as exc:
-            logging.warning("Codex intent reply rejected: %s", str(exc)[:200])
+            logging.warning("Codex structured reply rejected: %s", str(exc)[:200])
             raise CodexError("unavailable") from None
 
     async def summarize(
@@ -457,7 +463,7 @@ class CodexService:
                     "model": choice.model,
                     "effort": choice.effort,
                     "summary": "auto",
-                    **({"outputSchema": intent_schema()} if mode.output_schema else {}),
+                    **({"outputSchema": mode.output_schema} if mode.output_schema is not None else {}),
                 })
                 turn_id = _nested_id(response, "turn")
                 progress = on_progress if mode.persistent else None

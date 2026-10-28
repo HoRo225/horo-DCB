@@ -6,7 +6,6 @@ import discord
 
 from src import testing
 from src.ai.cog import AiCog
-from src.ai.private_results import PrivateResultButton
 from src.bot import HoroBot
 from src.core.app.supervisor import REQUEST
 from src.games.views import GamePickSelect, RulesButton, lobby_view
@@ -68,7 +67,7 @@ class HoroBotTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("on_interaction", self.bot.extra_events)
         self.assertEqual(
             set(self.bot._connection._view_store._dynamic_items.values()),
-            {GamePickSelect, RulesButton, PrivateResultButton, SteamClaim},
+            {GamePickSelect, RulesButton, self.bot.receipts.private_results.item, SteamClaim},
         )
 
     async def test_hub_custom_ids_reach_registered_handlers(self) -> None:

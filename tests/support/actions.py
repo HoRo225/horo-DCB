@@ -7,14 +7,21 @@ from unittest.mock import AsyncMock, MagicMock
 
 import discord
 
-from src.action_service import ActionService
 from src.ai.access import AiSettings
-from src.codex.contracts import Action, IntentDecision
+from src.ai.access_service import AiAccessService
+from src.ai.actions import ai_actions
 from src.core.adapters.discord.live import LiveGuild
+from src.core.adapters.discord.receipts import DiscordReceipts
 from src.core.adapters.sqlite.db import open_db
+from src.core.adapters.sqlite.operations import OperationStore
+from src.core.app.actions import ActionEngine, ActionRegistry
+from src.core.app.ports import Source
 from src.core.app.supervisor import WORK, TaskGroup
+from src.core.domain.actions import Action, Plan
+from src.games.actions import game_actions
 from src.games.operations import GameOperations
 from src.games.store import GameStore
+from src.voice.actions import voice_actions
 
 GUILD, CHANNEL, ACTOR, ROLE, RECEIPT = 5, 10, 1, 7, 3000
 
@@ -45,7 +52,7 @@ class ActionHarness:
         self.games.set_channel(CHANNEL)
         self.voice = SimpleNamespace(reconcile=AsyncMock())
         self.client = SimpleNamespace(
-            games=self.games, ai_settings=self.ai, temp_voice=self.voice,
+            games=self.games,
             get_guild=lambda guild_id: self.guild if guild_id == GUILD else None,
             get_channel=lambda channel_id: self.channel if channel_id == CHANNEL else None,
             get_partial_messageable=lambda channel_id: SimpleNamespace(
@@ -53,13 +60,20 @@ class ActionHarness:
             ),
         )
         self.live = LiveGuild(self.client, GUILD, lambda: False)
-        self.client.game_operations = self.game_operations = GameOperations(
-            self.client, TaskGroup("test.games", WORK), self.live,
-        )
+        self.game_operations = GameOperations(self.client, TaskGroup("test.games", WORK), self.live)
+        self.access = AiAccessService(self.ai, SimpleNamespace(cancel=AsyncMock()), TaskGroup("test.access", WORK))
         self.restart()
 
     def restart(self) -> None:
-        self.service = ActionService(self.client, self.db, TaskGroup("test.actions", WORK), self.live)
+        registry = ActionRegistry()
+        registry.register(
+            *game_actions(self.game_operations, self.live),
+            ai_actions(self.ai, self.access, AsyncMock(return_value=()), lambda: self.games.channel_id),
+            voice_actions(self.voice, self.live),
+        )
+        operations = OperationStore(self.db)
+        receipts = DiscordReceipts(operations, self.live, self.client, registry)
+        self.service = ActionEngine(registry, operations, self.live, receipts, TaskGroup("test.actions", WORK))
 
     def admin(self) -> None:
         self.member.guild_permissions = discord.Permissions(administrator=True)
@@ -69,10 +83,13 @@ class ActionHarness:
 
     async def execute(self, *actions: tuple[str, dict], message_id: int = 1000, game: dict | None = None,
                       content: str = "") -> list[dict]:
-        source = SimpleNamespace(id=message_id, author=self.member, guild=self.guild, channel=self.channel,
-                                 content=content)
-        decision = IntentDecision("plan", tuple(Action(name, params) for name, params in actions))
-        return await self.service.execute_plan(source, decision, game_snapshot=game)
+        source = Source(message_id, GUILD, CHANNEL, ACTOR, content, frozenset(), frozenset())
+        plan = Plan(tuple(Action(name, params) for name, params in actions))
+        outcome = await self.service.execute(
+            source, plan, received={"game": game}, deadline=None,
+            grant=lambda actor: self.ai.denial_reason(GUILD, CHANNEL, actor.role_ids) is None,
+        )
+        return outcome.results
 
     def rows(self) -> dict[str, list[tuple]]:
         tables = {

@@ -516,9 +516,10 @@ class AdminPanelTest(unittest.IsolatedAsyncioTestCase):
         self.assertIn("Steam 自動通知未開啟，未修改身分組設定。", self.screen(await self.choose(roles, role)))
         self.assertEqual(steam.status().role_ids, ())
 
+        steam.start(self.bot)
         with patch.object(steam, "start") as start:
             clicked = await self.click(self.button("開啟 Steam 自動通知"))
-        start.assert_called_once_with(clicked.client)
+        start.assert_called_once_with(self.bot)
         self.assertTrue(steam.enabled)
         self.assertIn("✅ 已開啟 Steam 自動通知。", self.screen(clicked))
         self.assertFalse(roles.disabled)
@@ -688,7 +689,7 @@ class AdminPanelTest(unittest.IsolatedAsyncioTestCase):
             self.assertTrue(still_current())
             return False
 
-        with patch.object(self.bot.actions, "retry_effect", side_effect=retry) as retried:
+        with patch.object(self.bot.receipts, "resend", side_effect=retry) as retried:
             await self.click(self.button("已查核未送達，重送"))
             retried.assert_not_awaited()
             shown = self.screen(await self.click(self.button("確定要重送？無法復原")))

@@ -70,9 +70,7 @@ class SteamFreeGamesNotifier:
     def _mark_posted(self, effect: DiscordEffect) -> None:
         self._db.execute("INSERT OR IGNORE INTO steam_posted (app_id) VALUES (?)", (effect.payload["offer"]["app_id"],))
 
-    def set_enabled(
-        self, value: bool, client: discord.Client | None = None, *, operation_id: str | None = None,
-    ) -> None:
+    def set_enabled(self, value: bool, *, operation_id: str | None = None) -> None:
         if self._closing:
             raise SteamConfigurationError("Bot 正在關閉，無法修改 Steam 通知設定。")
         if type(value) is not bool:
@@ -81,8 +79,6 @@ class SteamFreeGamesNotifier:
             "steam.set_enabled", {"enabled": value}, {STEAM_ENABLED: value}, operation_id=operation_id,
         ):
             return
-        if client is not None:
-            self._client = client
         if value and self._client is not None:
             self.start(self._client)
         elif not value and self._task is not None:

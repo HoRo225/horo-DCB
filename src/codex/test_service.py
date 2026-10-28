@@ -6,9 +6,8 @@ import unittest
 from unittest.mock import patch
 
 from src import testing
-from src.codex.contracts import Action, IntentDecision, intent_schema
 from src.codex.conversations import ConversationStore
-from src.codex.instructions import CHAT_INSTRUCTIONS, INTENT_INSTRUCTIONS, SUMMARY_INSTRUCTIONS
+from src.codex.instructions import CHAT_INSTRUCTIONS, SUMMARY_INSTRUCTIONS
 from src.codex.model_settings import ModelChoice, ModelSettings
 from src.codex.protocol import CodexError
 from src.codex.service import CodexService, feature_config
@@ -17,7 +16,15 @@ from src.codex.testing_server import FakeAppServer, answer, silent
 KEY = "guild:1:channel:2:user:3"
 THREAD_KEY = "guild:1:thread:9"
 SETTINGS = ModelSettings(ModelChoice("gpt-test"), ModelChoice("gpt-backup"))
-PLAN = IntentDecision("plan", (Action("help", {}),))
+PLAN = {"kind": "plan", "actions": [{"name": "help", "params": {}}], "question": ""}
+INSTRUCTIONS = "只回傳符合 schema 的 JSON。"
+SCHEMA = {"type": "object", "required": ["kind", "actions", "question"]}
+
+
+def nonempty(raw: object) -> object:
+    if not isinstance(raw, dict) or not raw.get("actions"):
+        raise ValueError("empty plan")
+    return raw
 PNG = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg=="
 OVERLOADED = {"message": "busy", "codexErrorInfo": "serverOverloaded"}
 
@@ -50,7 +57,9 @@ class ServiceTests(unittest.IsolatedAsyncioTestCase):
                                                                 on_progress=progress), key, parent)
 
     async def intent(self):
-        return await self.run_job(lambda job: self.service.intent(KEY, "說明", {"actions": ["help"]}, job=job, models=SETTINGS))
+        return await self.run_job(lambda job: self.service.structured(
+            KEY, {"direct_text": "說明", "context": {"actions": ["help"]}}, instructions=INSTRUCTIONS, schema=SCHEMA,
+            parse=nonempty, job=job, models=SETTINGS))
 
     async def test_chat_starts_a_persistent_thread_with_persona_and_image_input(self) -> None:
         self.server.script = answer(("commentary", "我查一下"), ("final_answer", "最終答案"), ("partial_answer", "補充"))
@@ -142,16 +151,16 @@ class ServiceTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_intent_is_ephemeral_isolated_and_released(self) -> None:
         self.store.bind(KEY, "shared-history", None)
-        self.server.script = answer(("final_answer", json.dumps(PLAN.to_payload())))
+        self.server.script = answer(("final_answer", json.dumps(PLAN)))
         self.assertEqual(await self.intent(), PLAN)
         (start,) = self.server.params("thread/start")
         self.assertTrue(start["ephemeral"])
-        self.assertEqual(start["baseInstructions"], INTENT_INSTRUCTIONS)
+        self.assertEqual(start["baseInstructions"], INSTRUCTIONS)
         self.assertNotIn("developerInstructions", start)
         self.assertEqual(start["config"], feature_config(isolated=True))
         (turn,) = self.server.params("turn/start")
         self.assertEqual(json.loads(turn["input"][0]["text"]), {"direct_text": "說明", "context": {"actions": ["help"]}})
-        self.assertEqual(turn["outputSchema"], intent_schema())
+        self.assertEqual(turn["outputSchema"], SCHEMA)
         self.assertEqual(turn["effort"], "medium")
         await self.server.wait_for(lambda: self.server.params("thread/unsubscribe") == [{"threadId": turn["threadId"]}])
         self.assertEqual(self.store.get(KEY).thread_id, "shared-history")
@@ -160,9 +169,9 @@ class ServiceTests(unittest.IsolatedAsyncioTestCase):
     async def test_tools_or_server_requests_reject_the_whole_plan(self) -> None:
         async def asks(server, ws, thread_id, turn_id, params):
             await server.ask("item/commandExecution/requestApproval", {"threadId": thread_id, "turnId": turn_id, "itemId": "x"})
-            await answer(("final_answer", json.dumps(PLAN.to_payload())))(server, ws, thread_id, turn_id, params)
+            await answer(("final_answer", json.dumps(PLAN)))(server, ws, thread_id, turn_id, params)
 
-        hostile = (answer(("final_answer", json.dumps(PLAN.to_payload())), items=({"type": "commandExecution", "id": "c"},)), asks)
+        hostile = (answer(("final_answer", json.dumps(PLAN)), items=({"type": "commandExecution", "id": "c"},)), asks)
         for script in hostile:
             with self.subTest(script=script):
                 self.server.script = script
@@ -171,10 +180,15 @@ class ServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual([reply["result"] for reply in self.server.replies.values()], [{"decision": "decline"}])
 
     async def test_invalid_intent_json_is_unavailable(self) -> None:
-        self.server.script = answer(("final_answer", '{"kind":"plan","actions":[],"question":""}'))
-        with self.assertLogs(level="WARNING"), self.assertRaises(CodexError) as caught:
-            await self.intent()
-        self.assertEqual(caught.exception.code, "unavailable")
+        for reply in ('{"kind":"plan","actions":[],"question":""}',
+                      '{"kind":"plan","actions":[{"name":"help","params":{}}],"question":"","kind":"chat"}',
+                      '{"kind":"plan","actions":[{"name":"help","params":{"a":1,"a":2}}],"question":""}',
+                      "not json"):
+            with self.subTest(reply=reply):
+                self.server.script = answer(("final_answer", reply))
+                with self.assertLogs(level="WARNING"), self.assertRaises(CodexError) as caught:
+                    await self.intent()
+                self.assertEqual(caught.exception.code, "unavailable")
 
     async def test_capacity_failure_falls_back_once_without_output(self) -> None:
         scripts = [answer(status="failed", error=OVERLOADED), answer(("final_answer", "備援回覆"))]

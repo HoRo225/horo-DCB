@@ -1,18 +1,23 @@
 from __future__ import annotations
 
 import asyncio
+import re
 from collections.abc import Callable
 
 import aiohttp
 import discord
 
-from src.core.adapters.discord.channels import member_role_ids
-from src.core.app.ports import Actor
+from src.core.adapters.discord.channels import is_text_channel, is_voice_channel, member_role_ids, text_channel_problem
+from src.core.app.ports import Actor, Mentions, Named, Source
+from src.core.domain.actions import Target
 
 RESTARTING = "Bot 正在重新啟動，請稍後再試。"
 OTHER_GUILD = "此 Bot 只服務 .env 的 DISCORD_GUILD_ID 伺服器。"
 UNCONFIRMED = "目前無法確認最新的伺服器或頻道狀態，請稍後再試。"
 CANNOT_SEND = "你目前無法在這個頻道執行操作。"
+MISSING_CHANNEL = ("指定頻道不存在或目前無法查看，未執行任何操作。", "指定頻道已不存在或無法查看，未執行這項操作。")
+MISSING_TARGET = ("指定的頻道或身分組不存在，未執行任何操作。", "指定頻道或身分組已不存在，未執行這項操作。")
+LITERAL_ID = re.compile(r"(?<!\d)[1-9]\d{0,18}(?!\d)")
 
 
 def can_send(channel: discord.abc.GuildChannel | discord.Thread, member: discord.Member) -> bool:
@@ -26,6 +31,18 @@ def can_send(channel: discord.abc.GuildChannel | discord.Thread, member: discord
 
 def default_avatar_url(user_id: int) -> str:
     return f"https://cdn.discordapp.com/embed/avatars/{(user_id >> 22) % 6}.png"
+
+
+def message_source(message: discord.Message) -> Source:
+    return Source(
+        message_id=message.id,
+        guild_id=message.guild.id,
+        channel_id=message.channel.id,
+        actor_id=message.author.id,
+        content=getattr(message, "content", ""),
+        channel_mentions=frozenset(item.id for item in getattr(message, "channel_mentions", ())),
+        role_mentions=frozenset(item.id for item in getattr(message, "role_mentions", ())),
+    )
 
 
 def as_actor(member: discord.Member) -> Actor:
@@ -43,6 +60,7 @@ class LiveGuild:
         self._client = client
         self.guild_id = guild_id
         self._closing = closing
+        self._fetched: dict[int, discord.Member] = {}
 
     def unavailable_reason(self, guild_id: int | None) -> str | None:
         if self._closing():
@@ -106,6 +124,7 @@ class LiveGuild:
             return None
         if self.channel(channel_id) is None:
             return None
+        self._fetched[user_id] = member
         return as_actor(member)
 
     def send_problem(self, channel_id: int, user_id: int) -> str | None:
@@ -117,3 +136,76 @@ class LiveGuild:
         if not can_send(channel, member):
             return CANNOT_SEND
         return None
+
+    def _member_for(self, actor: Actor) -> discord.Member | None:
+        fetched = self._fetched.get(actor.user_id)
+        return fetched if fetched is not None and as_actor(fetched) == actor else self.member(actor.user_id)
+
+    def act_problem(self, guild_id: int | None, channel_id: int, actor: Actor) -> str | None:
+        guild = self.guild()
+        if guild is None or guild_id != guild.id:
+            return UNCONFIRMED
+        channel, member = guild.get_channel_or_thread(channel_id), self._member_for(actor)
+        if channel is None or member is None or (isinstance(member, discord.Member) and member.guild is not guild):
+            return UNCONFIRMED
+        if reason := self.unavailable_reason(guild.id):
+            return reason
+        if not can_send(channel, member):
+            return CANNOT_SEND
+        return None
+
+    def target_problem(self, target: Target, value: object, actor: Actor, *, preflight: bool) -> str | None:
+        guild, member = self.guild(), self._member_for(actor)
+        if guild is None or member is None:
+            return UNCONFIRMED
+        stage = 0 if preflight else 1
+        unusable = target.unusable[stage]
+        match target.kind:
+            case "text_channel" | "voice_channel":
+                channel = guild.get_channel_or_thread(value)
+                if channel is None or not channel.permissions_for(member).view_channel:
+                    return MISSING_CHANNEL[stage]
+                if target.kind == "text_channel" and text_channel_problem(channel, guild):
+                    return unusable
+                if target.kind == "voice_channel" and not is_voice_channel(channel):
+                    return unusable
+            case "text_channels":
+                for identifier in value:
+                    channel = guild.get_channel(identifier)
+                    if channel is None:
+                        return MISSING_TARGET[stage]
+                    if not is_text_channel(channel) or not channel.permissions_for(member).view_channel:
+                        return unusable
+            case "role" | "roles":
+                for identifier in value if isinstance(value, list) else [value]:
+                    role = guild.get_role(identifier)
+                    if role is None:
+                        return MISSING_TARGET[stage]
+                    if role.is_default():
+                        return unusable
+        return None
+
+    def mentions(self, source: Source, actor: Actor) -> Mentions:
+        guild, member = self.guild(), self._member_for(actor)
+        if guild is None or member is None:
+            return Mentions(frozenset(), frozenset(), (), ())
+        content = source.content
+        literals = {int(value) for value in LITERAL_ID.findall(content)}
+        chosen = {"channels": {source.channel_id, *source.channel_mentions}, "roles": set(source.role_mentions)}
+        for category, candidates in (("channels", guild.channels), ("roles", guild.roles)):
+            by_name: dict[str, set[int]] = {}
+            for item in candidates:
+                if item.id in literals:
+                    chosen[category].add(item.id)
+                name = getattr(item, "name", None)
+                if isinstance(name, str) and 2 <= len(name) <= 100 and name in content:
+                    by_name.setdefault(name, set()).add(item.id)
+            chosen[category].update(next(iter(ids)) for ids in by_name.values() if len(ids) == 1)
+        return Mentions(
+            channel_ids=frozenset(chosen["channels"]),
+            role_ids=frozenset(chosen["roles"]),
+            channels=tuple(Named(item.id, item.name) for item in guild.channels
+                           if item.id in chosen["channels"] and item.permissions_for(member).view_channel)[:25],
+            roles=tuple(Named(item.id, item.name) for item in guild.roles
+                        if item.id in chosen["roles"] and not item.is_default())[:25],
+        )
