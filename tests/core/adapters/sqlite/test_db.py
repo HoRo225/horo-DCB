@@ -35,7 +35,7 @@ class TransactionTests(unittest.TestCase):
         legacy = re.compile(r"with (self\.)?_?db:|with games\.db:")
         offenders = [
             str(path) for path in SRC.rglob("*.py")
-            if not path.name.startswith("test_") and legacy.search(path.read_text(encoding="utf-8"))
+            if legacy.search(path.read_text(encoding="utf-8"))
         ]
         self.assertEqual(offenders, [])
 

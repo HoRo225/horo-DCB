@@ -2,8 +2,5 @@
 .git
 **/__pycache__
 *.md
-src/**/test_*.py
-src/testing.py
 secrets
 docker
-src/codex/testing_server.py
