@@ -4,6 +4,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import discord
 
+from src.core.adapters.discord.brand import BRAND_COLOUR, ICONS, WARN_COLOUR
 from src.core.adapters.discord.live import LiveGuild
 from src.core.app.ports import Actor
 from src.core.app.supervisor import SCHEDULED, TaskGroup
@@ -34,6 +35,24 @@ class SteamQueryTests(unittest.IsolatedAsyncioTestCase):
                 query = spec(steam_actions(steam, SimpleNamespace()), "steam_query")
                 self.assertTrue(query.admin)
                 self.assertIn(shown, text((await query.effect.render(ADMIN))["view"]))
+
+    async def test_query_card_keeps_its_title_offer_list_and_thumbnails(self) -> None:
+        offers = tuple(SteamOffer(n, f"遊戲{n}", "NT$1", "", (), f"https://cdn.example.com/{n}.jpg") for n in range(4))
+        for failed, accent in ((0, BRAND_COLOUR), (1, WARN_COLOUR)):
+            with self.subTest(failed=failed):
+                steam = SimpleNamespace(fetch_current_offers=AsyncMock(
+                    return_value=SteamFetchResult(frozenset(), offers, failed_app_count=failed)))
+                shown = await spec(steam_actions(steam, SimpleNamespace()), "steam_query").effect.render(ADMIN)
+                [card] = shown["view"].children
+                self.assertEqual((card.accent_colour, shown["attachments"]), (accent, []))
+                title, *listed = card.children
+                self.assertEqual(title.content, f"## {ICONS['steam']} Steam 免費遊戲")
+                sections = [item for item in listed if isinstance(item, discord.ui.Section)]
+                self.assertEqual([section.accessory.media.url for section in sections],
+                                 [f"https://cdn.example.com/{n}.jpg" for n in range(3)])
+                self.assertEqual([section.children[0].content.split("\n")[0] for section in sections],
+                                 ["**遊戲0**", "**遊戲1**", "**遊戲2**"])
+                self.assertEqual(len(listed), 3 + failed)
 
 
 class SteamChannelTests(unittest.IsolatedAsyncioTestCase):

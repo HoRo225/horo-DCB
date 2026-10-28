@@ -68,6 +68,9 @@ class Harness:
     def sent(self) -> str:
         return text(self.message.channel.send.await_args.kwargs["view"])
 
+    def answered(self) -> str:
+        return self.message.channel.send.await_args.args[0]
+
 
 class EntryTests(unittest.IsolatedAsyncioTestCase):
     async def test_unmentioned_message_is_ignored(self) -> None:
@@ -115,12 +118,6 @@ class EntryTests(unittest.IsolatedAsyncioTestCase):
                 await harness.send()
                 self.assertIn(expected, harness.sent())
                 self.assertNotIn("<#", harness.sent())
-
-    async def test_plain_text_notice_when_cards_are_off(self) -> None:
-        harness = Harness(make_message(), role_ids=(51,), text_display=False)
-        await harness.send()
-        self.assertEqual(harness.message.channel.send.await_args.args[0],
-                         "你目前沒有使用霍蘿 AI 的身分組，需要的話請找管理員。")
 
     async def test_reply_ping_outside_allowlist_stays_silent(self) -> None:
         reference = SimpleNamespace(message_id=1, channel_id=CHANNEL, resolved=None)
@@ -175,46 +172,45 @@ class AnswerTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(harness.model.chat.await_args.args[1:3], ("你好", ()))
         self.assertEqual(harness.model.chat.await_args.kwargs["instructions"], CHAT_INSTRUCTIONS)
         self.assertEqual(harness.model.accepted, [f"guild:{GUILD}:channel:{CHANNEL}:user:{USER}"])
-        sent = harness.message.channel.send.await_args.kwargs
-        self.assertIn("最終答案", text(sent["view"]))
-        self.assertFalse(sent["reference"].fail_if_not_exists)
+        sent = harness.message.channel.send.await_args
+        self.assertTrue(sent.args[0].endswith("最終答案"))
+        self.assertNotIn("view", sent.kwargs)
+        self.assertFalse(sent.kwargs["reference"].fail_if_not_exists)
         harness.message.progress.edit.assert_not_awaited()
         harness.message.progress.delete.assert_awaited_once()
 
     async def test_answer_notifies_only_the_asker(self) -> None:
-        for display in (True, False):
-            with self.subTest(display=display):
-                harness = Harness(make_message(), text_display=display)
-                await harness.send()
-                sent = harness.message.channel.send.await_args
-                self.assertEqual(sent.args[:1], (None,) if display else (f"-# ℹ️ {TIP}\n最終答案",))
-                self.assertEqual(discord.AllowedMentions.none().merge(sent.kwargs["allowed_mentions"]).to_dict(),
-                                 {"parse": [], "replied_user": True})
+        harness = Harness(make_message())
+        await harness.send()
+        sent = harness.message.channel.send.await_args
+        self.assertEqual(sent.args[:1], (f"-# ℹ️ {TIP}\n最終答案",))
+        self.assertEqual(discord.AllowedMentions.none().merge(sent.kwargs["allowed_mentions"]).to_dict(),
+                         {"parse": [], "replied_user": True})
 
     async def test_notes_share_one_line_and_the_tip_comes_once(self) -> None:
         harness = Harness(make_message())
         harness.model.chat.return_value = ModelReply("最終答案", restarted=True)
         await harness.send()
-        self.assertEqual(harness.sent(), f"-# ℹ️ 已開始新的對話（先前的無法接續） · {TIP}\n最終答案")
+        self.assertEqual(harness.answered(), f"-# ℹ️ 已開始新的對話（先前的無法接續） · {TIP}\n最終答案")
         await harness.send()
-        self.assertEqual(harness.sent(), "-# ℹ️ 已開始新的對話（先前的無法接續）\n最終答案")
+        self.assertEqual(harness.answered(), "-# ℹ️ 已開始新的對話（先前的無法接續）\n最終答案")
         harness.model.chat.return_value = ModelReply("最終答案")
         await harness.send()
-        self.assertEqual(harness.sent(), "最終答案")
+        self.assertEqual(harness.answered(), "最終答案")
 
     async def test_typing_failure_still_sends_answer(self) -> None:
         harness = Harness(make_message())
         response = MagicMock(status=500, reason="down")
         harness.message.channel.typing = MagicMock(side_effect=discord.HTTPException(response, "down"))
         await harness.send()
-        self.assertIn("最終答案", harness.sent())
+        self.assertIn("最終答案", harness.answered())
 
     async def test_progress_card_timeout_still_sends_answer(self) -> None:
         harness = Harness(make_message())
         harness.message.reply.side_effect = TimeoutError
         with self.assertLogs(level="ERROR"):
             await harness.send()
-        self.assertIn("最終答案", harness.sent())
+        self.assertIn("最終答案", harness.answered())
         harness.message.progress.edit.assert_not_awaited()
 
     async def test_chat_may_outlive_work_deadline_before_job_deadline(self) -> None:
@@ -227,7 +223,7 @@ class AnswerTests(unittest.IsolatedAsyncioTestCase):
 
         harness.model.chat.side_effect = slow
         await harness.send()
-        self.assertIn("慢慢來的答案", harness.sent())
+        self.assertIn("慢慢來的答案", harness.answered())
 
     async def test_reply_to_bot_without_ping_carries_its_text_and_media(self) -> None:
         referenced = SimpleNamespace(
@@ -241,7 +237,7 @@ class AnswerTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(images, (f"img:{STICKER_URL}",))
         self.assertTrue(prompt.startswith("【被回覆的訊息】\n被回覆文字"))
         self.assertIn("這是什麼", prompt)
-        self.assertIn("最終答案", harness.sent())
+        self.assertIn("最終答案", harness.answered())
 
     async def test_media_deadline_is_bounded_by_the_work_deadline(self) -> None:
         harness = Harness(make_message())
@@ -357,7 +353,7 @@ class FailureTests(unittest.IsolatedAsyncioTestCase):
         _key, prompt, images = harness.model.chat.await_args.args
         self.assertEqual(images, ())
         self.assertIn("另有 1 個媒體無法讀取", prompt)
-        self.assertIn("最終答案", harness.sent())
+        self.assertIn("最終答案", harness.answered())
 
 
 if __name__ == "__main__":

@@ -15,7 +15,6 @@ if TYPE_CHECKING:
     from src.games.adapters.discord.access import DiscordPlayers
     from src.games.adapters.discord.presenter import DiscordTables
 
-HUB_STATUS = "選一個遊戲，和樂奈玩一局"
 RETIRED = "這個遊戲已下架，請重新從遊戲大廳選擇。"
 
 
@@ -31,14 +30,19 @@ def pick_select() -> discord.ui.Select:
     ])
 
 
-def lobby_view(*, banner: bool = True) -> discord.ui.LayoutView:
+def hub_status(host: str) -> str:
+    return f"選一個遊戲，和{discord.utils.escape_markdown(host)}玩一局"
+
+
+def lobby_view(host: str, *, banner: bool = True) -> discord.ui.LayoutView:
+    status = hub_status(host)
     if banner:
         title = [
             discord.ui.MediaGallery(discord.MediaGalleryItem("attachment://hub.png", description="遊戲大廳橫幅")),
-            discord.ui.TextDisplay(f"-# {HUB_STATUS}"),
+            discord.ui.TextDisplay(f"-# {status}"),
         ]
     else:
-        title = [card_title(f"{ICONS['games']} 遊戲大廳", HUB_STATUS)]
+        title = [card_title(f"{ICONS['games']} 遊戲大廳", status)]
     view = LobbyView(timeout=None)
     view.add_item(discord.ui.Container(*title, accent_colour=BRAND_COLOUR))
     view.add_item(discord.ui.ActionRow(pick_select()))

@@ -4,7 +4,7 @@ from collections.abc import Mapping
 
 import discord
 
-from src.core.adapters.discord.brand import BRAND_COLOUR, ICONS, WARN_COLOUR, card_title
+from src.core.adapters.discord.brand import BRAND_COLOUR, ICONS, WARN_COLOUR, card_title, info_card
 from src.core.adapters.discord.channels import text_channel_problem
 from src.core.adapters.discord.live import LiveGuild
 from src.core.app.actions import ActionGroup, ActionSpec, Configure, Query, Step
@@ -39,16 +39,15 @@ def steam_actions(steam: Steam, live: LiveGuild) -> ActionGroup:
 
     async def offers(actor: Actor) -> Mapping[str, object]:
         result = await steam.fetch_current_offers()
-        view = discord.ui.LayoutView(timeout=None)
-        body = [offer_summary(offer) for offer in result.offers[:3]] if result else []
+        body =[offer_summary(offer) for offer in result.offers[:3]] if result else []
         failed = result is None or result.failed_app_count > 0
         if not body:
             body = [discord.ui.TextDisplay("目前無法取得 Steam 資料，請稍後再試。" if failed else "目前沒有符合條件的遊戲。")]
         elif failed:
             body.append(discord.ui.TextDisplay(
                 f"{ICONS['warn']} 資料不完整：{result.failed_app_count} 款遊戲詳細資料無法取得，結果可能有缺漏。"))
-        view.add_item(discord.ui.Container(card_title(f"{ICONS['steam']} Steam 免費遊戲"), *body,
-                                           accent_colour=WARN_COLOUR if failed else BRAND_COLOUR))
+        view = info_card(card_title(f"{ICONS['steam']} Steam 免費遊戲"), *body,
+                         colour=WARN_COLOUR if failed else BRAND_COLOUR)
         return {"view": view, "attachments": []}
 
     return ActionGroup("steam", (

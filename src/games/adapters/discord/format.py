@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import discord
 
-from src.core.adapters.discord.brand import APP_EMOJIS, ERROR_COLOUR, GOLD_COLOUR, NEUTRAL_COLOUR
+from src.core.adapters.discord.brand import APP_EMOJIS, GOLD_COLOUR, LOSS_COLOUR, NEUTRAL_COLOUR
 from src.games.domain import slots
 from src.games.domain.blackjack import Card, total
 
@@ -19,8 +19,8 @@ BANNERS = {
     "win": ("你贏了", GOLD_COLOUR),
     "blackjack": ("Blackjack！", GOLD_COLOUR),
     "push": ("打平", NEUTRAL_COLOUR),
-    "lose": ("你輸了", ERROR_COLOUR),
-    "bust": ("爆牌，你輸了", ERROR_COLOUR),
+    "lose": ("你輸了", LOSS_COLOUR),
+    "bust": ("爆牌，你輸了", LOSS_COLOUR),
 }
 
 
@@ -48,9 +48,3 @@ def points_text(cards: list[Card], *, blackjack: bool = False) -> str:
     if points > 21:
         return f"{points} 點 · 爆牌"
     return f"軟 {points} 點" if soft and points < 21 else f"{points} 點"
-
-
-def seat(text: str, avatar: str | None) -> discord.ui.Item:
-    if avatar is None:
-        return discord.ui.TextDisplay(text)
-    return discord.ui.Section(text, accessory=discord.ui.Thumbnail(avatar))

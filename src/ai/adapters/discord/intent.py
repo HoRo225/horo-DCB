@@ -25,6 +25,9 @@ async def route_intent(request: AiRequest, models: ModelSettings) -> bool:
     services = request.services
     actions, model = services.actions, services.model
     prior = actions.prior(request.message.id)
+    if prior is not None and not prior[0].actions:
+        request.outcome = "operations"
+        return True
     if prior is not None:
         intent, received = Intent("plan", prior[0]), prior[1]
     else:
@@ -43,12 +46,12 @@ async def route_intent(request: AiRequest, models: ModelSettings) -> bool:
     request.output_started = True
     if intent.kind == "clarification":
         if await request.can_send():
-            await reply_notice(request.message, intent.question, request.text_display_enabled, tone=None)
+            await reply_notice(request.message, intent.question, tone=None)
         request.outcome = "clarification"
         return True
     if [action.name for action in intent.plan.actions] == ["help"]:
         if await request.can_send():
-            await reply(request.message, view=help_view(services.games.channel_id))
+            await reply(request.message, view=help_view(services.games.channel_id, request.bot_name))
         request.outcome = "help"
         return True
     outcome = await actions.execute(request.source, intent.plan, received=received,
@@ -57,12 +60,8 @@ async def route_intent(request: AiRequest, models: ModelSettings) -> bool:
     request.outcome = "operations"
     if not outcome.published:
         if await request.can_send():
-            if request.text_display_enabled:
-                public = [{key: value for key, value in result.items() if key != "private_ref"} for result in results]
-                await reply(request.message, view=receipt_view(public))
-            else:
-                await reply_notice(request.message, "\n".join(result["text"] for result in results),
-                                   request.text_display_enabled)
+            public = [{key: value for key, value in result.items() if key != "private_ref"} for result in results]
+            await reply(request.message, view=receipt_view(public))
         return True
     await request.progress.finish()
     if prior is None and request.job.current and await request.can_send():

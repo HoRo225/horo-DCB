@@ -12,11 +12,11 @@ from src.core.domain.actions import Catalogue
 
 class MemoryAiStore:
     def __init__(
-        self, *, enabled: bool = True, text_display: bool = True, channel_ids: tuple[int, ...] = (),
+        self, *, enabled: bool = True, channel_ids: tuple[int, ...] = (),
         role_ids: tuple[int, ...] = (), models: dict[str, object] | None = None,
     ) -> None:
         self.values: dict[str, object] = {
-            "enabled": enabled, "text_display": text_display, "channels": sorted(channel_ids),
+            "enabled": enabled, "channels": sorted(channel_ids),
             "roles": sorted(role_ids), "models": models,
         }
         self.saved: list[tuple[str, object, str | None]] = []
@@ -38,12 +38,6 @@ class MemoryAiStore:
 
     def set_enabled(self, value: bool, *, operation_id: str | None) -> bool:
         return self._save("enabled", value, operation_id)
-
-    def text_display(self) -> bool:
-        return self._get("text_display")
-
-    def set_display(self, value: bool, *, operation_id: str | None) -> bool:
-        return self._save("text_display", value, operation_id)
 
     def channel_ids(self) -> list[int]:
         return list(self._get("channels"))

@@ -67,7 +67,7 @@ class StartupTests(unittest.IsolatedAsyncioTestCase):
     async def test_every_persistent_custom_id_reaches_a_registered_handler(self) -> None:
         await self.start()
         patterns = self.bot._connection._view_store._dynamic_items
-        views = [lobby_view(), build_offer_view(SteamOffer(730, "G", "", "", (), None))]
+        views = [lobby_view("HoRo"), build_offer_view(SteamOffer(730, "G", "", "", (), None))]
         ids = {custom_id for view in views for item in view.walk_children()
                if (custom_id := getattr(item, "custom_id", None))}
         self.assertIn("horo:game:pick", ids)

@@ -12,6 +12,7 @@ BRAND_COLOUR = discord.Colour(0x7E6BD6)
 GOLD_COLOUR = discord.Colour(0xE8C45C)
 WARN_COLOUR = discord.Colour(0xE8833A)
 ERROR_COLOUR = discord.Colour(0xE05A5A)
+LOSS_COLOUR = discord.Colour(0x9C6B9E)
 NEUTRAL_COLOUR = discord.Colour(0x80848E)
 
 ICONS = {
@@ -101,8 +102,9 @@ def bar(fraction: float, width: int = 10) -> str:
     return "▰" * filled + "▱" * (width - filled)
 
 
-def rana_says(line: str) -> str:
-    head = f"{APP_EMOJIS['rana']} **樂奈**" if "rana" in APP_EMOJIS else "**樂奈**"
+def rana_says(line: str, name: str = "樂奈") -> str:
+    name = f"**{discord.utils.escape_markdown(name)}**"
+    head = f"{APP_EMOJIS['rana']} {name}" if "rana" in APP_EMOJIS else name
     return "\n".join(f"> {part}" for part in f"{head}　{line}".split("\n"))
 
 
@@ -201,9 +203,9 @@ def card_title(
     return discord.ui.Section(text, accessory=accessory)
 
 
-def info_card(*items: discord.ui.Item) -> discord.ui.LayoutView:
+def info_card(*items: discord.ui.Item, colour: discord.Colour = BRAND_COLOUR) -> discord.ui.LayoutView:
     view = discord.ui.LayoutView(timeout=None)
-    view.add_item(discord.ui.Container(*items, accent_colour=BRAND_COLOUR))
+    view.add_item(discord.ui.Container(*items, accent_colour=colour))
     return view
 
 

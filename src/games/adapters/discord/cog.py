@@ -49,8 +49,12 @@ class GamesCog(commands.Cog):
         self.bot.add_dynamic_items(self.pick, self.rules)
         for table in self._play.restore():
             self._tasks.spawn(self._redraw(table))
-        self._tasks.spawn(self._lobby.refresh())
+        self._tasks.spawn(self._refresh_lobby())
         self._tasks.spawn(self._sweep())
+
+    async def _refresh_lobby(self) -> None:
+        await self.bot.wait_until_ready()
+        await self._lobby.refresh()
 
     async def _redraw(self, table: LiveTable) -> None:
         await self.bot.wait_until_ready()

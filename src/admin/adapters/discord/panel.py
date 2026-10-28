@@ -282,7 +282,7 @@ class AdminPanelView(ErrorNotice, discord.ui.LayoutView):
 
     @property
     def bot_name(self) -> str:
-        return self.guild.me.display_name
+        return self.services.live.bot_name()
 
     @property
     def bot_name_md(self) -> str:

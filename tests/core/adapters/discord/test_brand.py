@@ -10,11 +10,13 @@ from src.core.adapters.discord.brand import (
     ERROR_COLOUR,
     GOLD_COLOUR,
     ICONS,
+    LOSS_COLOUR,
     NEUTRAL_COLOUR,
     WARN_COLOUR,
     WHITE,
     bar,
     card_title,
+    info_card,
     load_app_emojis,
     note_text,
     notice_view,
@@ -152,6 +154,14 @@ class FormatTests(unittest.TestCase):
             self.assertEqual(rana_says("一\n二"), "> **樂奈**　一\n> 二")
             APP_EMOJIS["rana"] = "<:rana:1>"
             self.assertEqual(rana_says("好"), "> <:rana:1> **樂奈**　好")
+            self.assertEqual(rana_says("好", "睦_頭"), "> <:rana:1> **睦\\_頭**　好")
+
+    def test_info_card_takes_an_accent(self):
+        self.assertEqual(accent(info_card(discord.ui.TextDisplay("x"))), BRAND_COLOUR)
+        self.assertEqual(accent(info_card(discord.ui.TextDisplay("x"), colour=WARN_COLOUR)), WARN_COLOUR)
+
+    def test_loss_is_its_own_colour(self):
+        self.assertNotIn(LOSS_COLOUR, (ERROR_COLOUR, BRAND_COLOUR, NEUTRAL_COLOUR, WARN_COLOUR, GOLD_COLOUR))
 
 
 if __name__ == "__main__":

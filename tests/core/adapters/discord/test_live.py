@@ -43,6 +43,15 @@ class LiveGuildTests(unittest.IsolatedAsyncioTestCase):
         self.client.guilds = {G: Guild(OTHER)}
         self.assertIsNone(self.live.guild())
 
+    def test_bot_name_is_the_server_nickname_or_the_account_name(self) -> None:
+        self.guild.me = SimpleNamespace(display_name="霍蘿")
+        self.client.user.name = "HoRo"
+        self.assertEqual(self.live.bot_name(), "霍蘿")
+        self.guild.me = None
+        self.assertEqual(self.live.bot_name(), "HoRo")
+        self.client.guilds = {}
+        self.assertEqual(self.live.bot_name(), "HoRo")
+
     def test_admin_and_avatar_follow_the_cached_member(self) -> None:
         self.assertFalse(self.live.admin(USER))
         self.guild.add(member(2, admin=True))

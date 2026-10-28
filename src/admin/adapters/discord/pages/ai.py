@@ -267,18 +267,6 @@ def render_ai(view: AdminPanelView, note: tuple[str, str] | None = None) -> None
         children.extend((spacer(), rate_item(view)))
     children.extend(
         (
-            spacer(),
-            discord.ui.Section(
-                "### 卡片顯示\n開啟時先顯示思考進度卡片；關閉後只送出一般文字回覆。",
-                accessory=feature_button(
-                    view,
-                    "ai_text_display",
-                    "卡片顯示",
-                    owner=view.services.ai,
-                    attr="text_display",
-                    render=render_ai,
-                ),
-            ),
             discord.ui.Separator(),
             *footer_note(note),
             view.actions(),

@@ -82,10 +82,10 @@ def render_effects(view, note=None):
             await interaction.response.send_modal(ConfirmDelivery(view, view.state(EffectPick).effect_id))
         danger = discord.ButtonStyle.danger
         if picked.confirming:
-            label, icon = {"retry": ("確定要重送？無法復原", "sync"), "skip": ("確定要略過此次？無法復原", "cancel")}[picked.confirming]
+            label, icon = {"retry": ("確定要重送？無法復原", "sync"), "skip": ("確定要略過此次？無法復原", "next")}[picked.confirming]
             buttons = [
                 view.button("effect_sure", label, on_click=lambda i: sure(view, i), style=danger, emoji=ICONS[icon]),
-                view.button("effect_unsure", "取消", on_click=lambda i: ask(view, i, None), emoji=ICONS["back"]),
+                view.button("effect_unsure", "取消", on_click=lambda i: ask(view, i, None), emoji=ICONS["cancel"]),
             ]
         else:
             if can_confirm:
@@ -94,7 +94,7 @@ def render_effects(view, note=None):
                 buttons.append(view.button("effect_retry", "已查核未送達，重送", on_click=lambda i: ask(view, i, "retry"),
                                            style=danger, emoji=ICONS["sync"]))
             buttons.append(view.button("effect_skip", "略過此次", on_click=lambda i: ask(view, i, "skip"), style=danger,
-                                       emoji=ICONS["cancel"]))
+                                       emoji=ICONS["next"]))
     children.extend((discord.ui.Separator(), *footer_note(note), view.actions(*buttons)))
     view.set_container(*children, note=note)
 

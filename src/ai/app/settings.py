@@ -80,15 +80,6 @@ class AiSettings:
         return self._store.save_models(payload, operation_id=operation_id)
 
     @property
-    def text_display(self) -> bool:
-        return self._store.text_display()
-
-    def set_display(self, value: bool, *, operation_id: str | None = None) -> bool:
-        if type(value) is not bool:
-            raise ValueError("invalid AI display switch")
-        return self._store.set_display(value, operation_id=operation_id)
-
-    @property
     def configured(self) -> bool:
         return bool(self.channel_ids and self.role_ids)
 

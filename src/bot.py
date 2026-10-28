@@ -105,7 +105,7 @@ def compose(bot: HoroBot, codex: CodexService, db: sqlite3.Connection, guild_id:
     registry.register(
         *game_actions(play, lobby, live),
         ai_actions(ai_settings, access, codex.get_models),
-        help_actions(lobby),
+        help_actions(lobby, live.bot_name),
         voice_actions(voice, live),
         steam_actions(steam, live),
         admin_actions(lambda: ai_settings.enabled, lambda: voice.enabled,

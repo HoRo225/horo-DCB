@@ -26,7 +26,7 @@ PROMPTS = json.loads((FIXTURES / "prompts.json").read_text(encoding="utf-8"))
 REGISTRATION_ORDER = [
     "open_table", "deal", "again", "hit", "stand", "leave_table",
     "games_roles", "games_channel", "publish_hub",
-    "ai_enabled", "ai_display", "ai_models", "ai_channels", "ai_roles", "help",
+    "ai_enabled", "ai_models", "ai_channels", "ai_roles", "help",
     "voice_enabled", "voice_entry", "voice_sync",
     "steam_enabled", "steam_channel", "steam_roles", "steam_query",
     "admin_status",

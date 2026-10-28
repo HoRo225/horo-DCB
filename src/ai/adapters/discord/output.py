@@ -14,8 +14,6 @@ from src.core.app.supervisor import TaskGroup
 
 DISCORD_MESSAGE_LIMIT = 2_000
 MAX_DISCORD_RESPONSE_CHUNKS = 8
-DISCORD_TEXT_DISPLAY_LIMIT = 4_000
-MAX_TEXT_DISPLAY_RESPONSE_CHUNKS = 4
 PROGRESS_FALLBACK = ("thinking", "{name} 正在思考")
 PROGRESS_OVERRIDES = {
     "searching": ("query", "{name} 正在搜尋網路"),
@@ -41,21 +39,6 @@ def build_ai_native_image_links(image_urls: tuple[str, ...]) -> str:
             return content
         urls.remove(max(reversed(urls), key=len))
     raise AssertionError("image link message cannot fit Discord limit")
-
-
-def build_ai_text_display_view(
-    content: str,
-    *,
-    image_urls: tuple[str, ...] = (),
-) -> discord.ui.LayoutView:
-    view = discord.ui.LayoutView(timeout=None)
-    view.add_item(discord.ui.TextDisplay(content))
-    if image_urls:
-        gallery = discord.ui.MediaGallery()
-        for url in image_urls:
-            gallery.add_item(media=url)
-        view.add_item(gallery)
-    return view
 
 
 def build_ai_progress_view(
@@ -186,56 +169,11 @@ async def reply(message: discord.Message, content: str | None = None, **kwargs: 
     )
 
 
-async def reply_notice(message: discord.Message, text: str, text_display_enabled: bool, tone: str | None = "warn") -> None:
+async def reply_notice(message: discord.Message, text: str, tone: str | None = "warn") -> None:
     try:
-        await reply(
-            message,
-            **({"view": notice_view(text, tone)} if text_display_enabled and tone else {"content": text}),
-        )
+        await reply(message, **({"view": notice_view(text, tone)} if tone else {"content": text}))
     except discord.HTTPException:
         logging.exception("Failed to send AI notice reply.")
-
-
-async def _send_native_ai_chunks(
-    message: discord.Message,
-    chunks: list[str],
-    *,
-    reply_first: bool,
-    image_urls: tuple[str, ...] = (),
-    can_send: Any,
-) -> str:
-    link_message = build_ai_native_image_links(image_urls)
-    if not chunks and not link_message:
-        return "unavailable"
-
-    try:
-        start = 0
-        sent_any = False
-        if reply_first and chunks:
-            if not await can_send():
-                return "revoked"
-            await reply(message, chunks[0], allowed_mentions=ANSWER_MENTIONS)
-            start = 1
-            sent_any = True
-
-        for chunk in chunks[start:]:
-            if not await can_send():
-                return "revoked"
-            await message.channel.send(chunk)
-            sent_any = True
-
-        if link_message:
-            if not await can_send():
-                return "revoked"
-            if not sent_any and reply_first:
-                await reply(message, link_message, allowed_mentions=ANSWER_MENTIONS)
-            else:
-                await message.channel.send(link_message)
-            sent_any = True
-    except discord.HTTPException, aiohttp.ClientError:
-        logging.error("Failed to send Discord AI reply.")
-        return "unavailable"
-    return "success" if sent_any else "unavailable"
 
 
 async def send_ai_answer(
@@ -243,57 +181,25 @@ async def send_ai_answer(
     answer: str,
     *,
     image_urls: tuple[str, ...] = (),
-    text_display_enabled: bool,
     can_send: Any,
 ) -> str:
-    answer = discord_tables(answer)
-    if not text_display_enabled:
-        return await _send_native_ai_chunks(
-            message,
-            split_markdown(
-                answer, DISCORD_MESSAGE_LIMIT, MAX_DISCORD_RESPONSE_CHUNKS - bool(image_urls), truncation_notice()
-            ),
-            reply_first=True,
-            image_urls=image_urls,
-            can_send=can_send,
-        )
-
-    display_chunks = split_markdown(
-        answer, DISCORD_TEXT_DISPLAY_LIMIT, MAX_TEXT_DISPLAY_RESPONSE_CHUNKS, truncation_notice()
+    chunks = split_markdown(
+        discord_tables(answer), DISCORD_MESSAGE_LIMIT, MAX_DISCORD_RESPONSE_CHUNKS - bool(image_urls),
+        truncation_notice(),
     )
-    sent_count = 0
+    if link_message := build_ai_native_image_links(image_urls):
+        chunks.append(link_message)
+    if not chunks:
+        return "unavailable"
     try:
-        for index, chunk in enumerate(display_chunks):
+        for index, chunk in enumerate(chunks):
             if not await can_send():
                 return "revoked"
-            view = build_ai_text_display_view(
-                chunk,
-                image_urls=image_urls if index == 0 else (),
-            )
             if index == 0:
-                await reply(message, view=view, allowed_mentions=ANSWER_MENTIONS)
+                await reply(message, chunk, allowed_mentions=ANSWER_MENTIONS)
             else:
-                await message.channel.send(view=view)
-            sent_count += 1
-    except aiohttp.ClientError:
-        logging.error("Failed to send Discord AI TextDisplay reply.")
+                await message.channel.send(chunk)
+    except discord.HTTPException, aiohttp.ClientError:
+        logging.error("Failed to send Discord AI reply.")
         return "unavailable"
-    except discord.HTTPException as exc:
-        if exc.status != 400:
-            logging.error("Discord AI TextDisplay reply undeliverable.")
-            return "unavailable"
-        logging.error("Failed to send Discord AI TextDisplay reply; falling back to plain text.")
-        remaining = answer if not sent_count else "\n".join(display_chunks[sent_count:])
-        return await _send_native_ai_chunks(
-            message,
-            split_markdown(
-                remaining,
-                DISCORD_MESSAGE_LIMIT,
-                MAX_DISCORD_RESPONSE_CHUNKS - bool(image_urls if not sent_count else ()),
-                truncation_notice(),
-            ),
-            reply_first=not sent_count,
-            image_urls=image_urls if not sent_count else (),
-            can_send=can_send,
-        )
-    return "success" if sent_count else "unavailable"
+    return "success"

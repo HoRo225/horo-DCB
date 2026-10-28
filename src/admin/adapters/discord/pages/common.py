@@ -135,7 +135,6 @@ def feature_button(
     label: str,
     *,
     owner: object,
-    attr: str = "enabled",
     render: Callable[[AdminPanelView, tuple[str, str]], None],
     after: Callable[
         [AdminPanelView, discord.Interaction, int, bool, object], Awaitable[tuple[str, str] | None]
@@ -143,10 +142,10 @@ def feature_button(
     | None = None,
     confirm_off: Callable[[AdminPanelView], tuple[str, str]] | None = None,
 ) -> discord.ui.Button:
-    enabled = getattr(owner, attr)
+    enabled = owner.enabled
 
     async def click(interaction: discord.Interaction) -> None:
-        if confirm_off is None or not getattr(owner, attr):
+        if confirm_off is None or not owner.enabled:
             await toggle(interaction, None)
             return
         title, consequence = confirm_off(view)
@@ -160,11 +159,10 @@ def feature_button(
         view.toggled_at[key] = now
 
         async def work(operation: int) -> Callable[[], None]:
-            enabled = not getattr(owner, attr) if target is None else target
+            enabled = not owner.enabled if target is None else target
             if not view.is_current(operation) or not interaction.permissions.administrator:
                 return lambda: render(view, ("warn", "操作已過期或權限已變更。"))
-            setter = owner.set_display if attr == "text_display" else owner.set_enabled
-            result = setter(enabled, operation_id=interaction_operation_id(interaction))
+            result = owner.set_enabled(enabled, operation_id=interaction_operation_id(interaction))
             if inspect.isawaitable(result):
                 result = await result
             name = label.format(name=view.bot_name)

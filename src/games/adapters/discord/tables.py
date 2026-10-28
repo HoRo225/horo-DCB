@@ -8,13 +8,13 @@ from src.core.adapters.discord.brand import (
     BRAND_COLOUR,
     GOLD_COLOUR,
     ICONS,
+    LOSS_COLOUR,
     NEUTRAL_COLOUR,
-    bot_avatar,
     card_title,
     rana_says,
     tint,
 )
-from src.games.adapters.discord.format import ACTION_LABELS, BANNERS, board, cards_text, points_text, seat, slot_symbol
+from src.games.adapters.discord.format import ACTION_LABELS, BANNERS, board, cards_text, points_text, slot_symbol
 from src.games.app.tables import LiveTable
 from src.games.domain import slots
 from src.games.domain.table import Blackjack, Slots
@@ -25,9 +25,10 @@ type Rows = list[list[discord.ui.Item]]
 
 
 class SeatView(discord.ui.LayoutView):
-    def __init__(self, table: LiveTable) -> None:
+    def __init__(self, table: LiveTable, host: str) -> None:
         super().__init__(timeout=None)
         self.table = table
+        self.host = host
         self.actions: dict[str, str] = {}
         self.render()
 
@@ -62,12 +63,13 @@ class SeatView(discord.ui.LayoutView):
         line = f"🪑 **{self.table.farewell}**　" + "・".join(part for part in parts if part)
         return discord.ui.Container(discord.ui.TextDisplay(line), accent_colour=NEUTRAL_COLOUR)
 
-    def header(self, thumbnail: str | None = None) -> discord.ui.Item:
+    def header(self) -> discord.ui.Item:
         game = self.table.game
-        return card_title(f"{ICONS[game.key]} {game.title}", f"<@{self.table.player_id}>", thumbnail=thumbnail)
+        return card_title(f"{ICONS[game.key]} {game.title}", f"<@{self.table.player_id}>",
+                          thumbnail=self.table.avatar_url)
 
     def tail(self) -> list[str]:
-        return [rana_says(self.table.taunt)] if self.table.taunt else []
+        return [rana_says(self.table.taunt, self.host)] if self.table.taunt else []
 
     def button(
         self, action: str, label: str, style: discord.ButtonStyle = discord.ButtonStyle.secondary, emoji: str | None = None,
@@ -111,10 +113,10 @@ class BlackjackView(SeatView):
         hidden = not hand.done
         dealer = hand.dealer[:1] if hidden else hand.dealer
         dealer_points = f"明牌 {points_text(dealer)}" if hidden else points_text(hand.dealer, blackjack=hand.dealer_blackjack)
+        host = discord.utils.escape_markdown(self.host)
         items += [
-            seat(f"### 樂奈　{dealer_points}\n## {cards_text(dealer, hidden=1 if hidden else 0)}", bot_avatar()),
-            seat(f"### 你　{points_text(hand.player, blackjack=hand.blackjack)}\n## {cards_text(hand.player)}",
-                 self.table.avatar_url),
+            discord.ui.TextDisplay(f"### {host}　{dealer_points}\n## {cards_text(dealer, hidden=1 if hidden else 0)}"),
+            discord.ui.TextDisplay(f"### 你　{points_text(hand.player, blackjack=hand.blackjack)}\n## {cards_text(hand.player)}"),
         ]
         if hand.done:
             return items, [f"# {BANNERS[hand.result()][0]}", *self.tail()], [self.round_row(True)]
@@ -125,21 +127,21 @@ class BlackjackView(SeatView):
 
 class SlotsView(SeatView):
     def __init__(
-        self, table: LiveTable, *, frame: tuple[tuple[str, ...], ...] | None = None,
+        self, table: LiveTable, host: str, *, frame: tuple[tuple[str, ...], ...] | None = None,
     ) -> None:
         self.frame = frame
-        super().__init__(table)
+        super().__init__(table, host)
 
     @property
     def colour(self) -> discord.Colour:
         spin = self.table.state.spin
         if spin is None or self.frame is not None:
             return BRAND_COLOUR
-        return GOLD_COLOUR if spin.multiplier else NEUTRAL_COLOUR
+        return GOLD_COLOUR if spin.multiplier else LOSS_COLOUR
 
     def compose(self) -> tuple[list[discord.ui.Item], list[str], Rows]:
         spin = self.table.state.spin
-        items: list[discord.ui.Item] = [self.header(self.table.avatar_url)]
+        items: list[discord.ui.Item] = [self.header()]
         if self.frame is not None:
             items.append(discord.ui.TextDisplay("\n".join(board(self.frame))))
             return items, [f"### {ICONS[self.table.game.key]} 轉動中…", *self.tail()], []
@@ -155,7 +157,7 @@ class SlotsView(SeatView):
         due = loop.time()
         try:
             for frame, delay in zip(slots.stopping(spin.grid) if spin else (), SPIN_DELAYS):
-                await SeatView.present(SlotsView(self.table, frame=frame), interaction)
+                await SeatView.present(SlotsView(self.table, self.host, frame=frame), interaction)
                 due += delay
                 await asyncio.sleep(max(0.0, due - loop.time()))
         finally:
@@ -165,5 +167,5 @@ class SlotsView(SeatView):
 VIEWS: dict[str, type[SeatView]] = {Blackjack.key: BlackjackView, Slots.key: SlotsView}
 
 
-def seat_view(table: LiveTable) -> SeatView:
-    return VIEWS[table.state.key](table)
+def seat_view(table: LiveTable, host: str) -> SeatView:
+    return VIEWS[table.state.key](table, host)

@@ -1,5 +1,7 @@
 import unittest
 
+from src.core.adapters.sqlite.operations import OperationStore
+from src.core.domain.actions import Action, Plan
 from tests.support.actions import ActionHarness
 
 DONE = '{"code":"done","ok":true,"text":"管理操作已完成。"}'
@@ -19,17 +21,17 @@ class ActionPersistenceGoldenTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_settings_plan_rows(self) -> None:
         self.harness.admin()
-        await self.harness.execute(("ai_display", {"enabled": False}), ("ai_display", {"enabled": True}))
+        await self.harness.execute(("ai_enabled", {"enabled": True}), ("ai_enabled", {"enabled": True}))
         self.assertEqual(self.harness.rows(), {
             "requests": [("<req0>", 1000, 1, 5, 10,
-                          '{"decision":{"actions":[{"name":"ai_display","params":{"enabled":false}},'
-                          '{"name":"ai_display","params":{"enabled":true}}],"kind":"plan","question":""},"game":null}',
+                          '{"decision":{"actions":[{"name":"ai_enabled","params":{"enabled":true}},'
+                          '{"name":"ai_enabled","params":{"enabled":true}}],"kind":"plan","question":""},"game":null}',
                           "done")],
             "operations": [
-                ("<req0>:0", "ai.display", '{"enabled":false}', "done", '{"ok":true}', None),
-                ("<req0>:0:public", "action.public", '{"name":"ai_display","params":{"enabled":false}}', "done", DONE, None),
-                ("<req0>:1", "ai.display", '{"enabled":true}', "done", '{"ok":true}', None),
-                ("<req0>:1:public", "action.public", '{"name":"ai_display","params":{"enabled":true}}', "done", DONE, None),
+                ("<req0>:0", "ai.enabled", '{"enabled":true}', "done", '{"ok":true}', None),
+                ("<req0>:0:public", "action.public", '{"name":"ai_enabled","params":{"enabled":true}}', "done", DONE, None),
+                ("<req0>:1", "ai.enabled", '{"enabled":true}', "done", '{"ok":true}', None),
+                ("<req0>:1:public", "action.public", '{"name":"ai_enabled","params":{"enabled":true}}', "done", DONE, None),
             ],
             "effects": [receipt("<req0>", DONE, DONE)],
         })
@@ -80,7 +82,7 @@ class ActionPersistenceGoldenTests(unittest.IsolatedAsyncioTestCase):
         })
 
     async def test_failed_preflight_writes_nothing(self) -> None:
-        results = await self.harness.execute(("help", {}), ("ai_display", {"enabled": False}))
+        results = await self.harness.execute(("help", {}), ("ai_enabled", {"enabled": False}))
         self.assertEqual(results, [{"ok": False, "code": "forbidden", "text": "此操作僅限伺服器管理員使用。"}])
         self.assertEqual(self.harness.rows(), {"requests": [], "operations": [], "effects": []})
 
@@ -92,6 +94,17 @@ class ActionPersistenceGoldenTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(await self.harness.execute(("help", {})), first)
         self.assertEqual(self.harness.rows(), stored)
         self.harness.channel.send.assert_awaited_once()
+
+    async def test_stored_plan_with_a_retired_action_is_not_replayed(self) -> None:
+        operations = OperationStore(self.harness.db)
+        retired = {"kind": "plan", "question": "",
+                   "actions": [{"name": "ai_display", "params": {"enabled": False}}, {"name": "help", "params": {}}]}
+        operations.register_request(1000, 1, 5, 10, {"decision": retired, "game": None})
+        with self.assertLogs(level="WARNING") as logs:
+            self.assertEqual(self.harness.service.prior(1000), (Plan(()), {"game": None}))
+        self.assertIn("ai_display", " ".join(logs.output))
+        await self.harness.execute(("help", {}), message_id=1001)
+        self.assertEqual(self.harness.service.prior(1001), (Plan((Action("help", {}),)), {"game": None}))
 
 
 if __name__ == "__main__":

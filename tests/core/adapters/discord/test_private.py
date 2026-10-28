@@ -11,7 +11,7 @@ from src.core.app.ports import Source
 from tests.support.testing import interaction, text
 
 LABELS = {"help": "功能說明", "steam_query": "Steam 免費遊戲"}
-EXPIRED = f"{ICONS['deadline']} 私人結果已過期，請再 @樂奈 問一次。"
+EXPIRED = f"{ICONS['deadline']} 私人結果已過期，請再 @霍蘿 問一次。"
 
 
 def source(user_id: int = 1) -> Source:
@@ -22,7 +22,7 @@ class PrivateResultsTest(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
         self.authorize = AsyncMock(return_value=None)
         self.render = AsyncMock(return_value={"view": notice_view("私人團名 9876", "info"), "attachments": []})
-        self.registry = PrivateResults(self.authorize, self.render, LABELS.__getitem__)
+        self.registry = PrivateResults(self.authorize, self.render, LABELS.__getitem__, lambda: "霍蘿")
         self.token = self.registry.issue(source(), "help")
         self.registry.bind_message(self.token, 3000)
 
@@ -64,7 +64,7 @@ class PrivateResultsTest(unittest.IsolatedAsyncioTestCase):
             self.registry.bind_message(expired, 3000)
         with patch("src.core.adapters.discord.private.time.monotonic", return_value=31 * 60):
             await self.registry.show(expired, late := self.click())
-        restarted = PrivateResults(self.authorize, self.render, LABELS.__getitem__)
+        restarted = PrivateResults(self.authorize, self.render, LABELS.__getitem__, lambda: "霍蘿")
         await restarted.show(self.token, after_restart := self.click())
         self.render.assert_not_awaited()
         for clicked in (late, after_restart):

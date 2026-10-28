@@ -235,4 +235,7 @@ CREATE TABLE codex_threads (
 );
 CREATE TABLE codex_pending_archives (thread_id TEXT PRIMARY KEY);
 """,
+    """
+DELETE FROM settings WHERE key = 'feature.ai_text_display';
+""",
 )

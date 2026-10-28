@@ -71,7 +71,6 @@ class AiRequest:
         mentions_bot: bool,
         referenced_message: Any,
         bot_name: str,
-        text_display_enabled: bool,
         received_context: dict[str, object] | None = None,
     ) -> None:
         self.services = services
@@ -81,7 +80,6 @@ class AiRequest:
         self.mentions_bot = mentions_bot
         self.referenced_message = referenced_message
         self.bot_name = bot_name
-        self.text_display_enabled = text_display_enabled
         self.id = secrets.token_hex(4)
         self.queued_at = time.monotonic()
         self.accepted_deadline = asyncio.get_running_loop().time() + WORK_TIMEOUT_SECONDS
@@ -155,7 +153,7 @@ class AiRequest:
             with self.timed("discord"):
                 async with asyncio.timeout(min(CLEANUP_SECONDS, remaining)):
                     if not await self.progress.fail(error_text):
-                        await reply_notice(self.message, error_text, self.text_display_enabled)
+                        await reply_notice(self.message, error_text)
         except discord.HTTPException, aiohttp.ClientError, TimeoutError:
             logging.error("Failed to send Discord AI status reply.")
 
@@ -218,8 +216,7 @@ class AiRequest:
     async def run(self) -> None:
         message, model, progress = self.message, self.services.model, self.progress
         try:
-            if self.text_display_enabled:
-                await progress.start(message)
+            await progress.start(message)
             try:
                 models = self.services.settings.models
             except StoreError, ValueError:
@@ -269,7 +266,6 @@ class AiRequest:
                                 message,
                                 answer,
                                 image_urls=reply.image_urls,
-                                text_display_enabled=self.text_display_enabled,
                                 can_send=self.can_send,
                             )
                         if not job.current:

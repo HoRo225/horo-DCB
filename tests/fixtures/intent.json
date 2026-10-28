@@ -308,34 +308,6 @@
                 "name": {
                   "type": "string",
                   "enum": [
-                    "ai_display"
-                  ]
-                },
-                "params": {
-                  "type": "object",
-                  "properties": {
-                    "enabled": {
-                      "type": "boolean"
-                    }
-                  },
-                  "required": [
-                    "enabled"
-                  ],
-                  "additionalProperties": false
-                }
-              },
-              "required": [
-                "name",
-                "params"
-              ],
-              "additionalProperties": false
-            },
-            {
-              "type": "object",
-              "properties": {
-                "name": {
-                  "type": "string",
-                  "enum": [
                     "voice_enabled"
                   ]
                 },

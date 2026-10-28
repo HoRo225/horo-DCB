@@ -248,6 +248,19 @@ class LifecycleTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(game.presenter.edits[-1].message_id, table.posted.message_id)
         self.assertEqual(game.board.refreshed, [[CHANNEL, 500]])
 
+    async def test_lobby_is_refreshed_only_once_the_bot_knows_its_server_name(self) -> None:
+        harness = CogHarness(self)
+        await harness.game.lobby.publish_hub()
+        ready = asyncio.Event()
+        harness.bot.wait_until_ready = ready.wait
+        harness.clock.sleep = AsyncMock(side_effect=asyncio.CancelledError)
+        await harness.build().cog_load()
+        await asyncio.sleep(0)
+        self.assertEqual(harness.game.board.refreshed, [])
+        ready.set()
+        await asyncio.gather(*harness.tasks.pending(), return_exceptions=True)
+        self.assertEqual(harness.game.board.refreshed, [[CHANNEL, 500]])
+
     async def test_sweep_closes_idle_tables_every_minute(self) -> None:
         harness = CogHarness(self)
         table = await harness.game.open("slots")

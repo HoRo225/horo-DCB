@@ -116,6 +116,17 @@ class TableMessageTests(unittest.IsolatedAsyncioTestCase):
         with self.assertLogs(level="WARNING"):
             self.assertFalse(await self.presenter.delete(CHANNEL, 20))
 
+    async def test_tables_and_lobby_name_the_bot_by_its_server_display_name(self) -> None:
+        guild = Guild(G).add(self.channel)
+        client = Client(guild)
+        tables = DiscordTables(client, LiveGuild(client, G, lambda: False), SimpleNamespace())
+        self.table.taunt = "再來"
+        self.assertIn("**HoRo**　再來", testing.text(tables.view(self.table)))
+        guild.me = SimpleNamespace(display_name="睦")
+        self.assertIn("**睦**　再來", testing.text(tables.view(self.table)))
+        content = await tables.lobby_message(self.picked(fetched=SimpleNamespace(attachments=[]), attach=False))
+        self.assertIn("和睦玩一局", testing.text(content["view"]))
+
     def test_restored_tables_link_to_their_message(self) -> None:
         self.assertEqual(self.presenter.url(CHANNEL, 20), f"https://discord.com/channels/@me/{CHANNEL}/20")
 
@@ -187,7 +198,7 @@ class LobbyBoardTests(unittest.IsolatedAsyncioTestCase):
         self.old = MagicMock(delete=AsyncMock())
         self.channel.get_partial_message.return_value = self.old
         self.guild = Guild(G).add(self.channel)
-        self.guild.me = SimpleNamespace(id=999)
+        self.guild.me = SimpleNamespace(id=999, display_name="睦")
         self.messages = Messages()
         self.client = Client(self.guild)
         self.client.get_partial_messageable = self.messages.get_partial_messageable
@@ -198,6 +209,7 @@ class LobbyBoardTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(await self.board.post(CHANNEL, lambda: True), 60)
         kwargs = self.channel.send.await_args.kwargs
         self.assertEqual((kwargs["file"].filename, galleries(kwargs["view"])), ("hub.png", 1))
+        self.assertIn("和睦玩一局", testing.text(kwargs["view"]))
 
     async def test_hub_without_attach_permission_or_refused_banner_goes_plain(self) -> None:
         self.channel.permissions_for.return_value = discord.Permissions(view_channel=True, send_messages=True)

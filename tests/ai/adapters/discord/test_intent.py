@@ -142,7 +142,7 @@ class FrontendIntentTest(unittest.IsolatedAsyncioTestCase):
         self.addCleanup(self.db.close)
         self.model, self.actions = FakeModel(), FakeActions(self.db)
         self.model.deadline_seconds, self.model.work_seconds = 10, 8
-        self.store = MemoryAiStore(text_display=False, channel_ids=(CHANNEL_A, CHANNEL_B), role_ids=(ROLE,))
+        self.store = MemoryAiStore(channel_ids=(CHANNEL_A, CHANNEL_B), role_ids=(ROLE,))
         self.settings = AiSettings(self.store, self.model, GUILD)
         self.media = FakeMedia()
         self.live = LiveGuild(self.actions.client, GUILD, lambda: False)
@@ -159,7 +159,7 @@ class FrontendIntentTest(unittest.IsolatedAsyncioTestCase):
         self.actions.attach(message)
         return AiRequest(self.services, message, key=conversation_key(GUILD, message.channel.id, USER, is_thread=False),
                          content=message.content.replace(f"<@{BOT}>", "").strip(), mentions_bot=True,
-                         referenced_message=None, bot_name="HoRo", text_display_enabled=False)
+                         referenced_message=None, bot_name="HoRo")
 
     async def test_intent_sees_only_direct_text_and_frozen_context(self):
         self.model.structured.return_value = PLAN
@@ -268,7 +268,7 @@ class FrontendIntentTest(unittest.IsolatedAsyncioTestCase):
         await self.handle(message)
         self.actions.execute.assert_not_awaited()
         self.model.chat.assert_not_awaited()
-        self.assertIn("HoRo 暫時無法回覆", str(message.channel.send.await_args))
+        self.assertIn("HoRo 暫時無法回覆", text(message.posted.edit.await_args.kwargs["view"]))
 
     async def test_a_lone_help_action_replies_the_public_help_card(self):
         self.model.structured.return_value = Intent("plan", Plan((Action("help", {}),)))
@@ -287,20 +287,13 @@ class FrontendIntentTest(unittest.IsolatedAsyncioTestCase):
                    {"ok": False, "code": "forbidden", "text": "此操作僅限伺服器管理員使用。"}]
         self.model.structured.return_value = PLAN
         self.actions.execute = AsyncMock(return_value=Outcome(results, False))
-        for display in (True, False):
-            with self.subTest(display=display):
-                self.store.values["text_display"] = display
-                message = FakeMessage(800 + display)
-                await self.handle(message)
-                sent = message.channel.send.await_args
-                if display:
-                    view = sent.kwargs["view"]
-                    rendered = text(view)
-                    self.assertIn("**完成**　已查詢Steam 免費遊戲。", rendered)
-                    self.assertIn("**未完成**　此操作僅限伺服器管理員使用。", rendered)
-                    self.assertFalse([item for item in view.walk_children() if isinstance(item, discord.ui.Button)])
-                else:
-                    self.assertEqual(sent.args[0], "已查詢Steam 免費遊戲。\n此操作僅限伺服器管理員使用。")
+        message = FakeMessage()
+        await self.handle(message)
+        view = message.channel.send.await_args.kwargs["view"]
+        rendered = text(view)
+        self.assertIn("**完成**　已查詢Steam 免費遊戲。", rendered)
+        self.assertIn("**未完成**　此操作僅限伺服器管理員使用。", rendered)
+        self.assertFalse([item for item in view.walk_children() if isinstance(item, discord.ui.Button)])
         self.model.summarize.assert_not_awaited()
 
     async def test_summary_receives_only_public_results_and_only_edits_existing_receipt(self):
@@ -322,7 +315,6 @@ class FrontendIntentTest(unittest.IsolatedAsyncioTestCase):
         self.model.chat.assert_not_awaited()
 
     async def test_progress_card_goes_once_the_receipt_lands_not_after_the_summary(self):
-        self.store.values["text_display"] = True
         message = FakeMessage()
         card = SimpleNamespace(delete=AsyncMock(), edit=AsyncMock())
         message.reply = AsyncMock(return_value=card)
@@ -402,6 +394,17 @@ class FrontendIntentTest(unittest.IsolatedAsyncioTestCase):
         self.model.try_start_request.assert_called_once_with(USER)
         message.channel.send.assert_awaited_once()
 
+    async def test_replay_with_nothing_left_to_replay_stays_silent(self):
+        message = FakeMessage()
+        self.actions.prior = lambda message_id: (Plan(()), {"game": None})
+        await self.handle(message)
+        self.model.structured.assert_not_awaited()
+        self.model.chat.assert_not_awaited()
+        self.actions.execute.assert_not_awaited()
+        message.channel.send.assert_not_awaited()
+        message.posted.edit.assert_not_awaited()
+        message.posted.delete.assert_awaited_once()
+
     async def test_raw_direct_input_limit_blocks_intent_operations_and_media(self):
         message = FakeMessage(content="<@799> " + "問" * 4001)
         message.with_untrusted_quote_and_images()
@@ -410,7 +413,7 @@ class FrontendIntentTest(unittest.IsolatedAsyncioTestCase):
         self.model.chat.assert_not_awaited()
         self.actions.execute.assert_not_awaited()
         self.media.read.assert_not_awaited()
-        self.assertIn("4,000", str(message.channel.send.await_args))
+        self.assertIn("4,000", text(message.posted.edit.await_args.kwargs["view"]))
 
     async def test_channel_epoch_revokes_only_removed_scope_and_stays_stale_after_readd(self):
         request_a = self.request(FakeMessage())

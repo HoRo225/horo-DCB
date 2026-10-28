@@ -5,7 +5,7 @@ from unittest.mock import MagicMock
 import discord
 
 from src.games import GAMES
-from src.games.adapters.discord.views import HUB_STATUS, RETIRED, game_pick_item, lobby_view, rules_item
+from src.games.adapters.discord.views import RETIRED, game_pick_item, lobby_view, rules_item
 from tests.support import testing
 from tests.support.games import CHANNEL, GUILD, PLAYER, ROLE, FakeReply, GameHarness
 
@@ -26,7 +26,7 @@ class Presenter:
         self.redrawn_after.append(self.seat())
         if self.redraw_error is not None:
             raise self.redraw_error
-        return {"view": lobby_view(), "attachments": ["hub.png"]}
+        return {"view": lobby_view("睦"), "attachments": ["hub.png"]}
 
     def reply(self, interaction: discord.Interaction) -> FakeReply:
         self.replies.append(FakeReply())
@@ -45,10 +45,10 @@ class LobbyViewTests(unittest.TestCase):
     def test_lobby_card_holds_the_banner_or_title_then_the_game_menu(self) -> None:
         for banner in (True, False):
             with self.subTest(banner=banner):
-                view = lobby_view(banner=banner)
+                view = lobby_view("睦_頭", banner=banner)
                 card, menu = view.children
                 self.assertEqual((len(card.children), galleries(view)), (2, 1) if banner else (1, 0))
-                self.assertIn(HUB_STATUS, testing.text(view))
+                self.assertIn("選一個遊戲，和睦\\_頭玩一局", testing.text(view))
                 [select] = menu.children
                 self.assertEqual(select.custom_id, "horo:game:pick")
                 self.assertEqual([(option.value, option.label, option.description) for option in select.options],

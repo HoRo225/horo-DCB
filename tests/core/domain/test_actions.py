@@ -10,7 +10,7 @@ CATALOGUE = Catalogue([
     Entry("open_table", {"game": Param("enum", choices=("blackjack", "slots"))}, exclusive="game"),
     Entry("games_channel", {"channel_id": Param("id")}),
     Entry("ai_roles", {"ids": Param("ids")}),
-    Entry("ai_display", {"enabled": Param("bool")}),
+    Entry("ai_enabled", {"enabled": Param("bool")}),
     Entry("resolve", {"effect_id": Param("text"), "message_id": Param("id", required=False)}),
     Entry("pick", {"choice": Param("object", schema={"type": "object"}, accepts=lambda value: isinstance(value, dict))}),
 ], ["help 說明。"])
@@ -28,7 +28,7 @@ class CatalogueTests(unittest.TestCase):
             {"name": "games_channel", "params": {"channel_id": 2**63}},
             {"name": "ai_roles", "params": {"ids": [1, 1]}},
             {"name": "ai_roles", "params": {"ids": list(range(1, 27))}},
-            {"name": "ai_display", "params": {"enabled": 1}},
+            {"name": "ai_enabled", "params": {"enabled": 1}},
             {"name": "resolve", "params": {"effect_id": " "}},
             {"name": "resolve", "params": {"effect_id": "x" * 501}},
             {"name": "pick", "params": {"choice": None}},
@@ -55,7 +55,7 @@ class CatalogueTests(unittest.TestCase):
         choices = CATALOGUE.choices()
         self.assertEqual([choice["properties"]["name"]["enum"] for choice in choices],
                          [[name] for name in ("help", "deal", "hit", "open_table", "games_channel", "ai_roles",
-                                              "ai_display", "resolve", "pick")])
+                                              "ai_enabled", "resolve", "pick")])
         resolve = choices[7]["properties"]["params"]
         self.assertEqual(resolve["required"], ["effect_id", "message_id"])
         self.assertEqual(resolve["properties"]["message_id"], {"anyOf": [{"type": "integer", "minimum": 1}, {"type": "null"}]})

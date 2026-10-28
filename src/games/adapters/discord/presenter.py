@@ -49,13 +49,13 @@ class DiscordTables:
         except discord.HTTPException:
             attachments = []
         if attachments:
-            return {"view": lobby_view(), "attachments": attachments}
+            return {"view": lobby_view(self._live.bot_name()), "attachments": attachments}
         if interaction.app_permissions.attach_files and (file := await self._banner()):
-            return {"view": lobby_view(), "attachments": [file]}
-        return {"view": lobby_view(banner=False), "attachments": []}
+            return {"view": lobby_view(self._live.bot_name()), "attachments": [file]}
+        return {"view": lobby_view(self._live.bot_name(), banner=False), "attachments": []}
 
     def view(self, table: LiveTable) -> SeatView:
-        return seat_view(table)
+        return seat_view(table, self._live.bot_name())
 
     def reply(self, interaction: discord.Interaction) -> InteractionReply:
         return InteractionReply(interaction, self)
@@ -157,12 +157,12 @@ class DiscordLobbyBoard:
             if not still_current():
                 return None
             try:
-                return await channel.send(view=lobby_view(), file=file)
+                return await channel.send(view=lobby_view(self._live.bot_name()), file=file)
             except discord.Forbidden:
                 logging.warning("Game lobby banner was refused; posting without it.")
         if not still_current():
             return None
-        return await channel.send(view=lobby_view(banner=False))
+        return await channel.send(view=lobby_view(self._live.bot_name(), banner=False))
 
     async def withdraw(self, channel_id: int, message_id: int) -> bool:
         try:
@@ -187,10 +187,10 @@ class DiscordLobbyBoard:
         try:
             if file := await self._banner():
                 try:
-                    await message.edit(view=lobby_view(), attachments=[file])
+                    await message.edit(view=lobby_view(self._live.bot_name()), attachments=[file])
                     return
                 except discord.Forbidden:
                     logging.warning("Game lobby banner was refused; refreshing without it.")
-            await message.edit(view=lobby_view(banner=False), attachments=[])
+            await message.edit(view=lobby_view(self._live.bot_name(), banner=False), attachments=[])
         except discord.HTTPException:
             logging.warning("Published game lobby could not be refreshed.")

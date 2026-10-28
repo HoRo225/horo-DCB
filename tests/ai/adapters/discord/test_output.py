@@ -127,35 +127,52 @@ class ProgressCardTests(unittest.IsolatedAsyncioTestCase):
 
 
 class AnswerTests(unittest.IsolatedAsyncioTestCase):
-    async def test_final_answer_is_a_new_reply(self) -> None:
+    async def test_final_answer_is_a_plain_text_reply(self) -> None:
         message = SimpleNamespace(channel=SimpleNamespace(send=AsyncMock()), to_reference=lambda **kwargs: kwargs)
-        outcome = await send_ai_answer(message, "最終答案", text_display_enabled=True,
-                                       can_send=AsyncMock(return_value=True))
+        outcome = await send_ai_answer(message, "最終答案", can_send=AsyncMock(return_value=True))
         self.assertEqual(outcome, "success")
         message.channel.send.assert_awaited_once()
+        self.assertEqual(message.channel.send.await_args.args, ("最終答案",))
+        self.assertNotIn("view", message.channel.send.await_args.kwargs)
+        self.assertIn("reference", message.channel.send.await_args.kwargs)
 
-    async def test_plain_text_fallback_requires_a_format_rejection(self) -> None:
-        for status in (400, 403, 404, 429, 500, 503):
-            with self.subTest(status):
-                error = discord.HTTPException(SimpleNamespace(status=status, reason="failed"), "failed")
-                send = AsyncMock(side_effect=[error, None])
-                message = SimpleNamespace(channel=SimpleNamespace(send=send), to_reference=lambda **kwargs: kwargs)
-                with self.assertLogs(level="ERROR"):
-                    outcome = await send_ai_answer(message, "最終答案", text_display_enabled=True,
-                                                   can_send=AsyncMock(return_value=True))
-                self.assertEqual(outcome, "success" if status == 400 else "unavailable")
-                self.assertEqual(send.await_count, 2 if status == 400 else 1)
-                if status == 400:
-                    self.assertEqual(send.await_args.args, ("最終答案",))
+    async def test_send_failure_is_unavailable(self) -> None:
+        error = discord.HTTPException(SimpleNamespace(status=400, reason="failed"), "failed")
+        message = SimpleNamespace(channel=SimpleNamespace(send=AsyncMock(side_effect=error)),
+                                  to_reference=lambda **kwargs: kwargs)
+        with self.assertLogs(level="ERROR"):
+            outcome = await send_ai_answer(message, "最終答案", can_send=AsyncMock(return_value=True))
+        self.assertEqual(outcome, "unavailable")
+        message.channel.send.assert_awaited_once()
 
     async def test_long_plain_answer_is_split_and_truncated(self) -> None:
         send = AsyncMock()
         message = SimpleNamespace(channel=SimpleNamespace(send=send), to_reference=lambda **kwargs: kwargs)
-        await send_ai_answer(message, "word " * 5_000, text_display_enabled=False, can_send=AsyncMock(return_value=True))
+        await send_ai_answer(message, "word " * 5_000, can_send=AsyncMock(return_value=True))
         chunks = [call.args[0] for call in send.await_args_list]
         self.assertEqual(len(chunks), 8)
         self.assertTrue(all(len(chunk) <= DISCORD_MESSAGE_LIMIT for chunk in chunks))
         self.assertTrue(chunks[-1].endswith("回覆過長，已截斷。"))
+
+    async def test_images_follow_the_text_as_a_link_message(self) -> None:
+        send = AsyncMock()
+        message = SimpleNamespace(channel=SimpleNamespace(send=send), to_reference=lambda **kwargs: kwargs)
+        url = "https://cdn.example.com/a.png"
+        await send_ai_answer(message, "word " * 5_000, image_urls=(url,), can_send=AsyncMock(return_value=True))
+        chunks = [call.args[0] for call in send.await_args_list]
+        self.assertEqual(len(chunks), 8)
+        self.assertTrue(chunks[-2].endswith("回覆過長，已截斷。"))
+        self.assertTrue(chunks[-1].endswith(url))
+        self.assertTrue(all("view" not in call.kwargs for call in send.await_args_list))
+
+    async def test_image_only_answer_replies_with_the_links(self) -> None:
+        message = SimpleNamespace(channel=SimpleNamespace(send=AsyncMock()), to_reference=lambda **kwargs: kwargs)
+        url = "https://cdn.example.com/a.png"
+        self.assertEqual(await send_ai_answer(message, "", image_urls=(url,), can_send=AsyncMock(return_value=True)),
+                         "success")
+        message.channel.send.assert_awaited_once()
+        self.assertTrue(message.channel.send.await_args.args[0].endswith(url))
+        self.assertIn("reference", message.channel.send.await_args.kwargs)
 
 
 class ImageLinksTests(unittest.TestCase):

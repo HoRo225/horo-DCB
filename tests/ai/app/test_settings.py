@@ -37,15 +37,11 @@ class SwitchTests(unittest.IsolatedAsyncioTestCase):
             self.assertFalse(await ai.set_enabled(False))
         self.assertFalse(ai.enabled)
 
-    async def test_switches_reject_non_booleans(self) -> None:
+    async def test_switch_rejects_non_booleans(self) -> None:
         ai, store, _model = settings()
         with self.assertRaises(ValueError):
             await ai.set_enabled(1)
-        with self.assertRaises(ValueError):
-            ai.set_display("yes")
         self.assertEqual(store.saved, [])
-        self.assertTrue(ai.set_display(False))
-        self.assertFalse(ai.text_display)
 
 
 class ModelSettingsTests(unittest.TestCase):

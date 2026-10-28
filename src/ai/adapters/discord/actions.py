@@ -30,9 +30,6 @@ def ai_actions(
     async def set_enabled(step: Step, params: Mapping[str, object]) -> None:
         await settings.set_enabled(params["enabled"], operation_id=step.operation_id)
 
-    async def set_display(step: Step, params: Mapping[str, object]) -> None:
-        settings.set_display(params["enabled"], operation_id=step.operation_id)
-
     async def check_models(source: Source, params: Mapping[str, object]) -> None:
         try:
             resolve_model_settings(parse_model_settings(params), await models())
@@ -56,7 +53,6 @@ def ai_actions(
 
     return ActionGroup("ai", (
         ActionSpec("ai_enabled", {"enabled": Param("bool")}, admin=True, effect=Configure(set_enabled)),
-        ActionSpec("ai_display", {"enabled": Param("bool")}, admin=True, effect=Configure(set_display)),
         ActionSpec("ai_models", {
             "primary": Param("object", schema=MODEL_CHOICE, accepts=lambda value: value is not None and _model_choice(value)),
             "fallback": Param("object", schema={"anyOf": [MODEL_CHOICE, {"type": "null"}]},

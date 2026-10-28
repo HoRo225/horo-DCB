@@ -25,6 +25,7 @@ PINNED = (
     "d6dce5392140570bed0d487751580733abcdb5475a2e2d50a5f13b0ef94e936c",
     "f585080e6b637901a3feaadee9ad2e911ca748c9f6e9addd28ae7e5442563220",
     "1fa316231e44b4568e0972e9aa1fec8860ed497b4d55c58c54bcb5d51ef71ecc",
+    "a0962bddfe699807dd02c304a89ccfa4856d9d47e8dd5f0fee372ab42f600402",
 )
 TABLES = {
     "requests", "operations", "discord_effects", "settings", "game_tables",
@@ -165,6 +166,15 @@ class UpgradeTests(unittest.TestCase):
                          dict.fromkeys("cep", "feature_removed"))
         self.assertEqual(dict(db.execute("SELECT operation_id, status FROM operations")),
                          {"oc": "skipped", "oa": "done", "og": "running"})
+
+    def test_v13_to_v14_drops_the_ai_card_display_setting(self) -> None:
+        raw = self.raw()
+        raw.executescript("\n".join(MIGRATIONS[:13]) + "PRAGMA user_version = 13;\n"
+                          "INSERT INTO settings VALUES ('feature.ai_text_display', 'false'), ('feature.ai', 'true');")
+        raw.close()
+        db = self.open(MIGRATIONS[:14])
+        self.assertEqual(db.execute("PRAGMA user_version").fetchone(), (14,))
+        self.assertEqual(db.execute("SELECT key, value FROM settings").fetchall(), [("feature.ai", "true")])
 
     def test_failed_migration_rolls_back_to_last_good_version(self) -> None:
         broken = (MIGRATIONS[0], "CREATE TABLE leftover (a INTEGER); INSERT INTO missing VALUES (1);")

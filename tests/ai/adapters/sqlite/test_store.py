@@ -18,29 +18,26 @@ class SqliteAiStoreTest(unittest.TestCase):
 
     def test_settings_start_from_their_defaults_and_persist(self) -> None:
         store = self.store
-        self.assertEqual((store.enabled(), store.text_display(), store.channel_ids(), store.role_ids(), store.models()),
-                         (False, True, [], [], None))
+        self.assertEqual((store.enabled(), store.channel_ids(), store.role_ids(), store.models()),
+                         (False, [], [], None))
         self.assertTrue(store.set_enabled(True, operation_id=None))
-        self.assertTrue(store.set_display(False, operation_id=None))
         self.assertTrue(store.set_allowlist([10, 11], roles=False, operation_id=None))
         self.assertTrue(store.set_allowlist([20], roles=True, operation_id=None))
         self.assertTrue(store.save_models(MODELS, operation_id=None))
         again = SqliteAiStore(self.db)
-        self.assertEqual((again.enabled(), again.text_display(), again.channel_ids(), again.role_ids(), again.models()),
-                         (True, False, [10, 11], [20], MODELS))
+        self.assertEqual((again.enabled(), again.channel_ids(), again.role_ids(), again.models()),
+                         (True, [10, 11], [20], MODELS))
 
     def test_operation_receipts_keep_their_kinds_and_inputs(self) -> None:
         self.store.set_enabled(True, operation_id="toggle")
-        self.store.set_display(False, operation_id="display")
         self.store.set_allowlist([10], roles=False, operation_id="channels")
         self.store.set_allowlist([20], roles=True, operation_id="roles")
         self.store.save_models(MODELS, operation_id="models")
         self.assertEqual(
             {op: (self.records.get(op).kind, self.records.get(op).inputs)
-             for op in ("toggle", "display", "channels", "roles", "models")},
+             for op in ("toggle", "channels", "roles", "models")},
             {
                 "toggle": ("ai.enabled", {"enabled": True}),
-                "display": ("ai.display", {"enabled": False}),
                 "channels": ("ai.channel_ids", {"ids": [10]}),
                 "roles": ("ai.role_ids", {"ids": [20]}),
                 "models": ("ai.models", MODELS),

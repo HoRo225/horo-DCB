@@ -76,7 +76,7 @@ class ActionHarness:
         registry.register(
             *game_actions(self.play, self.games, self.live),
             ai_actions(self.ai, self.access, AsyncMock(return_value=())),
-            help_actions(self.games),
+            help_actions(self.games, self.live.bot_name),
             voice_actions(self.voice, self.live),
         )
         operations = OperationStore(self.db)

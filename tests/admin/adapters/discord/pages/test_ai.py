@@ -73,14 +73,6 @@ class AiStatusPageTests(PanelCase):
         with self.assertRaises(StopIteration):
             self.button("登入")
 
-    async def test_text_display_toggle_saves_the_card_setting(self) -> None:
-        await self.open_panel()
-        await self.go("樂奈")
-        shown = self.screen(await self.click(self.button("關閉卡片顯示")))
-        self.assertFalse(self.admin.ai.text_display)
-        self.assertIn("✅ 已關閉卡片顯示。", shown)
-        self.button("開啟卡片顯示")
-
 
 class AiAccessPageTests(PanelCase):
     CHANNELS = "選擇樂奈白名單文字頻道（可複選）"

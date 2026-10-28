@@ -7,6 +7,7 @@ import discord
 
 from src.admin.adapters.discord.pages.effects import ConfirmDelivery, EffectPick, render_effects
 from src.admin.adapters.discord.panel import AdminPanelView
+from src.core.adapters.discord.brand import ICONS
 from src.core.adapters.sqlite.db import open_db, transaction
 from src.core.adapters.sqlite.operations import OperationStore
 from src.core.app.effects import EffectKind, EffectRegistry, MessageProof, PendingEffect
@@ -190,6 +191,8 @@ class EffectsThroughPanelTests(PanelCase):
             await self.click(self.button("略過此次"))
             self.assertEqual(self.button("確定要略過此次？無法復原").style, danger)
             self.assertEqual(self.button("取消").style, discord.ButtonStyle.secondary)
+            self.assertEqual(str(self.button("取消").emoji), ICONS["cancel"])
+            self.assertNotEqual(str(self.button("確定要略過此次？無法復原").emoji), ICONS["cancel"])
             with self.assertRaises(StopIteration):
                 self.button("核對後標記已送達")
             await leave()

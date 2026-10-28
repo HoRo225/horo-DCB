@@ -55,14 +55,13 @@ class AiMessages:
             or (denial_reason == "channel" and clean_bot_mention(content, bot_user_id) == content)
         ):
             return
-        text_display = settings.text_display
         received_context = actions.context(message_source(message)) if key is not None else None
         referenced_message = None
         if not mentions_bot:
             referenced_message = await get_referenced_message(message)
             if getattr(getattr(referenced_message, "author", None), "id", None) != bot_user_id:
                 return
-        bot_name = message.guild.me.display_name
+        bot_name = services.live.bot_name()
 
         if key is None:
             logging.info("AI access denied reason=%s", denial_reason)
@@ -70,18 +69,18 @@ class AiMessages:
             channels = "、".join(f"<#{channel_id}>" for channel_id in sorted(settings.channel_ids)[:5])
             if code == "not_allowed_channel" and not channels:
                 code = "not_allowed"
-            await reply_notice(message, codex_error_text(code, bot_name, channels=channels), text_display)
+            await reply_notice(message, codex_error_text(code, bot_name, channels=channels))
             return
 
         cleaned_content = clean_bot_mention(content, bot_user_id)
         if cleaned_content in HELP_WORDS:
             try:
-                await reply(message, view=help_view(services.games.channel_id))
+                await reply(message, view=help_view(services.games.channel_id, bot_name))
             except discord.HTTPException:
                 logging.exception("Failed to send the help card.")
             return
         if not actions.has_request(message.id) and not services.model.try_start_request(message.author.id):
-            await reply_notice(message, THROTTLED, text_display)
+            await reply_notice(message, THROTTLED)
             return
 
         await AiRequest(
@@ -92,6 +91,5 @@ class AiMessages:
             mentions_bot=mentions_bot,
             referenced_message=referenced_message,
             bot_name=bot_name,
-            text_display_enabled=text_display,
             received_context=received_context,
         ).run()

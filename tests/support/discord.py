@@ -31,6 +31,7 @@ class Guild:
     def __init__(self, guild_id: int, *, unavailable: bool = False) -> None:
         self.id = guild_id
         self.unavailable = unavailable
+        self.me: object | None = None
         self.members: dict[int, object] = {}
         self.channels: dict[int, object] = {}
         self.fetched: dict[int, object] = {}
@@ -60,7 +61,7 @@ class Guild:
 class Client:
     def __init__(self, *guilds: Guild, user_id: int = 0) -> None:
         self.guilds = {guild.id: guild for guild in guilds}
-        self.user = SimpleNamespace(id=user_id)
+        self.user = SimpleNamespace(id=user_id, name="HoRo")
 
     def get_guild(self, guild_id: int) -> Guild | None:
         return self.guilds.get(guild_id)

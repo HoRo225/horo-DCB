@@ -50,7 +50,7 @@ class DiscordReceipts:
         self._live = live
         self._client = client
         self._registry = registry
-        self.private_results = PrivateResults(self._authorize, self._render, self._label)
+        self.private_results = PrivateResults(self._authorize, self._render, self._label, live.bot_name)
         self._sent: OrderedDict[int, object | None] = OrderedDict()
         self._lock = asyncio.Lock()
 

@@ -16,7 +16,6 @@ PERSISTED = {
     "feature.ai": False,
     "feature.temp_voice": False,
     "feature.steam_free_games": False,
-    "feature.ai_text_display": True,
     "ai.channel_ids": [],
     "ai.role_ids": [],
     "ai.models": None,

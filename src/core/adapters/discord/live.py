@@ -73,6 +73,11 @@ class LiveGuild:
         guild = self._client.get_guild(self.guild_id)
         return guild if guild is not None and guild.id == self.guild_id and not guild.unavailable else None
 
+    def bot_name(self) -> str:
+        guild = self.guild()
+        me = guild.me if guild is not None else None
+        return me.display_name if me is not None else self._client.user.name
+
     def channel(self, channel_id: int) -> discord.abc.GuildChannel | discord.Thread | None:
         guild = self.guild()
         return guild.get_channel_or_thread(channel_id) if guild is not None else None

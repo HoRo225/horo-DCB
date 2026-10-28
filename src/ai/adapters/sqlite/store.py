@@ -10,7 +10,6 @@ from src.core.adapters.sqlite.settings import SettingsStore
 from src.core.domain.settings import Setting
 
 AI_ENABLED = Setting("feature.ai", False)
-AI_TEXT_DISPLAY = Setting("feature.ai_text_display", True)
 AI_CHANNEL_IDS: Setting[list[int]] = Setting("ai.channel_ids", [])
 AI_ROLE_IDS: Setting[list[int]] = Setting("ai.role_ids", [])
 AI_MODELS: Setting[dict[str, object] | None] = Setting("ai.models", None)
@@ -40,15 +39,6 @@ class SqliteAiStore:
     def set_enabled(self, value: bool, *, operation_id: str | None) -> bool:
         with self._saving():
             return self._settings.save("ai.enabled", {"enabled": value}, {AI_ENABLED: value}, operation_id=operation_id)
-
-    def text_display(self) -> bool:
-        with self._saving():
-            return self._settings.get(AI_TEXT_DISPLAY)
-
-    def set_display(self, value: bool, *, operation_id: str | None) -> bool:
-        with self._saving():
-            return self._settings.save("ai.display", {"enabled": value}, {AI_TEXT_DISPLAY: value},
-                                       operation_id=operation_id)
 
     def channel_ids(self) -> list[int]:
         with self._saving():
