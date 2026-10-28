@@ -17,9 +17,16 @@ from src.games.table_runtime import delete_message
 from src.games.tables import LIVE_TABLES, BlackjackTableView, SeatView, SlotTableView
 from src.core.adapters.sqlite.operations import OperationStore
 from src.core.adapters.sqlite.db import transaction
+from src.core.app.effects import EffectKind, MessageProof
 from src.core.app.supervisor import TaskGroup
 
 SEAT_GONE = "這張賭桌已失效，這局沒有結算；請從遊戲大廳重新開桌。"
+EFFECT_KINDS = (
+    EffectKind("game_hub_publish", "發布遊戲大廳", proof=MessageProof()),
+    EffectKind("game_table_open", "開啟賭桌"),
+    EffectKind("game_table_edit", "更新賭桌", proof=MessageProof(edited=True, same_message=True)),
+    EffectKind("game_table_delete", "收起賭桌"),
+)
 
 
 class GameOperations:

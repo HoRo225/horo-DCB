@@ -48,6 +48,8 @@ class Guild:
     def get_channel_or_thread(self, channel_id: int) -> object | None:
         return self.channels.get(channel_id)
 
+    get_channel = get_channel_or_thread
+
     async def _fetch(self, user_id: int) -> object:
         found = self.fetched.get(user_id) or self.members.get(user_id)
         if found is None:
@@ -56,8 +58,9 @@ class Guild:
 
 
 class Client:
-    def __init__(self, *guilds: Guild) -> None:
+    def __init__(self, *guilds: Guild, user_id: int = 0) -> None:
         self.guilds = {guild.id: guild for guild in guilds}
+        self.user = SimpleNamespace(id=user_id)
 
     def get_guild(self, guild_id: int) -> Guild | None:
         return self.guilds.get(guild_id)

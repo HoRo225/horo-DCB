@@ -144,7 +144,7 @@ class LayoutBudgetTest(unittest.IsolatedAsyncioTestCase):
             interaction.guild.get_channel_or_thread.return_value = None
             with transaction(db):
                 for n in range(30):
-                    view.effects.operations.create_effect(f"e{n}", "steam.announce", 10**18 + n, {})
+                    bot.operations.create_effect(f"e{n}", "steam.announce", 10**18 + n, {})
             render_effects(view)
             fits("effects pending", view)
             render_effects(view, ("warn", "註" * 60))

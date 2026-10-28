@@ -283,7 +283,7 @@ class AdminPanelTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_overview_counts_pending_effects_and_opens_them(self) -> None:
         with transaction(self.db):
-            self.bot.effects.operations.create_effect("e1", "action.receipt", 700, {})
+            self.bot.operations.create_effect("e1", "action.receipt", 700, {})
         shown = self.screen(await self.open_panel())
         self.assertIn("有 1 項送出結果待核對", shown)
         pending = self.button("待處理項目（1）")
@@ -651,7 +651,7 @@ class AdminPanelTest(unittest.IsolatedAsyncioTestCase):
         self.assertIn("**可用身分組**　所有人", shown)
 
     async def test_effects_page_skip_and_retry_through_panel_run(self) -> None:
-        operations = self.bot.effects.operations
+        operations = self.bot.operations
         with transaction(self.db):
             for effect_id in ("first", "second"):
                 operations.create_effect(effect_id, "action.receipt", 700, {})
@@ -696,7 +696,7 @@ class AdminPanelTest(unittest.IsolatedAsyncioTestCase):
         self.assertIn("已處理送出要求；尚未確認送達，請重新整理查看狀態。", shown)
 
     async def test_effects_page_shows_only_valid_actions_and_takes_a_message_link(self) -> None:
-        operations = self.bot.effects.operations
+        operations = self.bot.operations
         with transaction(self.db):
             for effect_id, kind in (("delete", "voice.delete"), ("open", "game_table_open"),
                                     ("failed", "action.receipt"), ("sent", "action.receipt")):

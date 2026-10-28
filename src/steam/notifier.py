@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import sqlite3
 import time
@@ -16,6 +17,7 @@ from src.core.adapters.discord.live import LiveGuild
 from src.core.adapters.sqlite.db import transaction
 from src.core.adapters.sqlite.operations import OperationStore
 from src.core.adapters.sqlite.settings import SettingsStore
+from src.core.app.effects import EffectKind, MessageProof, delivered
 from src.core.app.supervisor import TaskGroup
 from src.core.domain.records import DiscordEffect
 from src.core.domain.settings import Setting
@@ -27,6 +29,14 @@ POLL_INTERVAL_SECONDS = 15 * 60
 STEAM_ENABLED = Setting("feature.steam_free_games", False)
 STEAM_CHANNEL_ID: Setting[int | None] = Setting("steam.channel_id", None)
 STEAM_ROLE_IDS: Setting[list[int]] = Setting("steam.role_ids", [])
+
+
+def announces_offer(effect: DiscordEffect, message: discord.Message) -> str | None:
+    body = message.content + json.dumps([component.to_dict() for component in message.components], ensure_ascii=False)
+    app_id = effect.payload.get("offer", {}).get("app_id")
+    if type(app_id) is not int or app_id <= 0 or f"https://store.steampowered.com/app/{app_id}/" not in body:
+        return "訊息內容不是這一項 Steam 活動。"
+    return None
 
 
 class SteamFreeGamesNotifier:
@@ -47,6 +57,18 @@ class SteamFreeGamesNotifier:
     @property
     def enabled(self) -> bool:
         return self._settings.get(STEAM_ENABLED)
+
+    def effect_kinds(self) -> tuple[EffectKind, ...]:
+        return (
+            EffectKind("steam.announce", "Steam 免費遊戲通知", proof=MessageProof(check=announces_offer),
+                       retry=self._retry_announce, settle=self._mark_posted),
+        )
+
+    async def _retry_announce(self, effect_id: str, still_current: Callable[[], bool]) -> str | None:
+        return delivered(await self.retry_effect(effect_id, allow_unknown=True, still_current=still_current))
+
+    def _mark_posted(self, effect: DiscordEffect) -> None:
+        self._db.execute("INSERT OR IGNORE INTO steam_posted (app_id) VALUES (?)", (effect.payload["offer"]["app_id"],))
 
     def set_enabled(
         self, value: bool, client: discord.Client | None = None, *, operation_id: str | None = None,
@@ -324,7 +346,7 @@ class SteamFreeGamesNotifier:
         message_id = getattr(message, "id", None)
         with transaction(self._db):
             self.operations.update_effect(effect.effect_id, "done", message_id=message_id if type(message_id) is int else None)
-            self._db.execute("INSERT OR IGNORE INTO steam_posted (app_id) VALUES (?)", (offer.app_id,))
+            self._mark_posted(effect)
         return True
 
     async def retry_effect(self, effect_id: str, *, allow_unknown: bool = False, still_current=None) -> bool:
@@ -338,16 +360,6 @@ class SteamFreeGamesNotifier:
             if effect is None or effect.kind != "steam.announce":
                 return False
             return await self._send_effect(effect, allow_unknown=allow_unknown, still_current=still_current)
-
-    def confirm_effect(self, effect_id: str, *, message_id: int | None = None, skipped: bool = False) -> None:
-        with transaction(self._db):
-            effect = self.operations.get_effect(effect_id)
-            if effect is None or effect.kind != "steam.announce":
-                raise ValueError("Steam effect is missing")
-            if not skipped and effect.status == "pending":
-                self.operations.update_effect(effect_id, "unknown")
-            self.operations.update_effect(effect_id, "skipped" if skipped else "done", message_id=message_id)
-            self._db.execute("INSERT OR IGNORE INTO steam_posted (app_id) VALUES (?)", (effect.payload["offer"]["app_id"],))
 
     def _blocking(self) -> set[int]:
         return {

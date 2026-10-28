@@ -6,6 +6,7 @@ import sqlite3
 import uuid
 from collections.abc import Callable
 from dataclasses import dataclass
+from functools import partial
 
 import discord
 import aiohttp
@@ -19,6 +20,7 @@ from src.core.adapters.discord.live import LiveGuild
 from src.core.adapters.sqlite.db import transaction
 from src.core.adapters.sqlite.operations import OperationStore
 from src.core.adapters.sqlite.settings import SettingsStore
+from src.core.app.effects import EffectKind, ResourceProof
 from src.core.domain.json import json_value
 from src.core.domain.settings import Setting
 from src.core.app.supervisor import TaskGroup, cancel_all, wait_until
@@ -64,6 +66,20 @@ class TempVoiceManager:
         self.operations = OperationStore(db)
         self._settings = SettingsStore(db, self.operations)
         self._live = live
+
+    def effect_kinds(self) -> tuple[EffectKind, ...]:
+        return (
+            EffectKind("voice.create", "建立臨時語音房",
+                       proof=ResourceProof(self.confirm_effect, "請提供已核對的語音頻道 ID。")),
+            EffectKind("voice.delete", "刪除臨時語音房", retry=partial(self.retry_effect, allow_unknown=True),
+                       unconfirmable="刪除操作請使用重試清理，系統會核對既有頻道 ID。"),
+        )
+
+    def _same_guild(self, still_current: Callable[[], bool] | None) -> tuple[discord.Guild | None, Callable[[], bool]]:
+        guild = self._live.guild()
+        return guild, lambda: (
+            guild is not None and self._live.guild() is guild and (still_current is None or still_current())
+        )
 
     def _current_guild(self, guild):
         current = self._live.guild()
@@ -424,10 +440,13 @@ class TempVoiceManager:
                     self._settings.put({VOICE_ENTRY_CHANNEL_ID: None})
                 logging.warning("Temp voice entry channel deleted; reselect it in the admin panel.")
 
-    async def confirm_effect(self, effect_id: str, resource_channel_id: int, guild: discord.Guild, *, still_current=None) -> str | None:
+    async def confirm_effect(
+        self, effect_id: str, resource_channel_id: int, still_current: Callable[[], bool] | None = None,
+    ) -> str | None:
         if self._closing:
             return "Bot 正在關閉，未登記待查語音房。"
-        return await self._own(self._confirm_effect(effect_id, resource_channel_id, guild, still_current=still_current))
+        guild, current = self._same_guild(still_current)
+        return await self._own(self._confirm_effect(effect_id, resource_channel_id, guild, still_current=current))
 
     async def _confirm_effect(self, effect_id, resource_channel_id, guild, *, still_current=None) -> str | None:
         async with self._lock:
@@ -481,11 +500,12 @@ class TempVoiceManager:
             return None
 
     async def retry_effect(
-        self, effect_id: str, guild: discord.Guild, *, allow_unknown: bool = False, still_current=None,
+        self, effect_id: str, still_current: Callable[[], bool] | None = None, *, allow_unknown: bool = False,
     ) -> str | None:
         if self._closing:
             return "Bot 正在關閉，未處理語音清理。"
-        return await self._own(self._retry_effect(effect_id, guild, allow_unknown=allow_unknown, still_current=still_current))
+        guild, current = self._same_guild(still_current)
+        return await self._own(self._retry_effect(effect_id, guild, allow_unknown=allow_unknown, still_current=current))
 
     async def _retry_effect(self, effect_id, guild, *, allow_unknown=False, still_current=None) -> str | None:
         async with self._lock:

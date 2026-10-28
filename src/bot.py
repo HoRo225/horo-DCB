@@ -8,7 +8,6 @@ from discord.ext import commands
 
 from src.admin.cog import AdminCog
 from src.admin.sessions import PanelSessionRegistry
-from src.effects import EffectService
 from src.action_service import ActionService
 from src.core.adapters.sqlite.operations import OperationStore
 from src.ai.private_results import PrivateResultButton
@@ -20,14 +19,16 @@ from src.codex.service import CodexService
 from src.core.adapters.discord.brand import load_app_emojis, report_interaction_error, sync_discord_brand
 from src.core.app.config import CODEX_URL, AppConfig
 from src.core.adapters.discord.channels import member_role_ids
+from src.core.adapters.discord.effects import EffectResolver
 from src.core.adapters.discord.live import LiveGuild
 from src.games.cog import GamesCog
-from src.games.operations import GameOperations
+from src.games.operations import EFFECT_KINDS as GAME_EFFECT_KINDS, GameOperations
 from src.games.store import GameStore
 from src.core.adapters.sqlite.db import DB_PATH, hold_lock, open_db
 from src.steam.cog import SteamCog
 from src.steam.notifier import SteamFreeGamesNotifier
 from src.core.adapters.discord.shutdown import Shutdown
+from src.core.app.effects import EffectRegistry
 from src.core.app.maintenance import Maintenance
 from src.core.app.supervisor import PRESENTATION, REQUEST, SCHEDULED, WORK, Supervisor
 from src.voice.cog import VoiceCog
@@ -76,8 +77,13 @@ class HoroBot(commands.Bot):
         self.admin_panels = PanelSessionRegistry(
             supervisor.group("admin", PRESENTATION), supervisor.group("admin", WORK),
         )
-        self.effects = EffectService(self, db, live)
         self.actions = ActionService(self, db, supervisor.group("actions", WORK), live)
+        kinds = EffectRegistry()
+        kinds.register(
+            *self.temp_voice.effect_kinds(), *self.steam_free_games.effect_kinds(), *GAME_EFFECT_KINDS,
+            *self.actions.effect_kinds(),
+        )
+        self.effects = EffectResolver(self.operations, kinds, live, self)
         self._watchdog = supervisor.group("watchdog", SCHEDULED)
         self.shutdown = Shutdown(
             supervisor,

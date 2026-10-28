@@ -256,8 +256,8 @@ class TempVoiceManagerTest(unittest.IsolatedAsyncioTestCase):
         self.guild.create_voice_channel.assert_awaited_once()
         room.delete.assert_not_awaited()
         self.assertEqual(self.rooms(), 0)
-        self.assertIn("不能直接重新建立", await self.manager.retry_effect(effect.effect_id, self.guild))
-        self.assertIsNone(await self.manager.confirm_effect(effect.effect_id, room.id, self.guild))
+        self.assertIn("不能直接重新建立", await self.manager.retry_effect(effect.effect_id))
+        self.assertIsNone(await self.manager.confirm_effect(effect.effect_id, room.id))
         self.assertEqual(self.rooms(), 1)
         receipt = self.manager.operations.get(effect.operation_id)
         self.assertEqual((receipt.status, receipt.resource_id), ("done", str(room.id)))
@@ -266,16 +266,16 @@ class TempVoiceManagerTest(unittest.IsolatedAsyncioTestCase):
         effect, room = await self.uncertain_creation(self.member(1))
         original_name = room.name
         room.name = "別人的房間"
-        self.assertIn("不符", await self.manager.confirm_effect(effect.effect_id, room.id, self.guild))
+        self.assertIn("不符", await self.manager.confirm_effect(effect.effect_id, room.id))
         room.name = original_name
         original_overwrites = room.overwrites
         room.overwrites = {}
-        self.assertIn("不符", await self.manager.confirm_effect(effect.effect_id, room.id, self.guild))
+        self.assertIn("不符", await self.manager.confirm_effect(effect.effect_id, room.id))
         room.overwrites = original_overwrites
         other = self.voice()
         with transaction(self.manager.operations.db):
             self.manager.operations.db.execute("INSERT INTO voice_rooms (channel_id, owner_id) VALUES (?, ?)", (other.id, 1))
-        self.assertIn("未覆蓋", await self.manager.confirm_effect(effect.effect_id, room.id, self.guild))
+        self.assertIn("未覆蓋", await self.manager.confirm_effect(effect.effect_id, room.id))
         self.assertEqual(self.manager.operations.db.execute("SELECT channel_id FROM voice_rooms WHERE owner_id = 1").fetchone(), (other.id,))
         self.assertEqual(self.manager.operations.get_effect(effect.effect_id).status, "unknown")
 
@@ -316,7 +316,7 @@ class TempVoiceManagerTest(unittest.IsolatedAsyncioTestCase):
             await self.join_entry(alice)
         self.guild.create_voice_channel.assert_awaited_once()
         db.execute("DROP TRIGGER reject_room")
-        self.assertIsNone(await self.manager.confirm_effect(effect.effect_id, room.id, self.guild))
+        self.assertIsNone(await self.manager.confirm_effect(effect.effect_id, room.id))
         self.assertEqual(self.rooms(), 1)
         room.delete.assert_awaited_once()
 
@@ -325,12 +325,12 @@ class TempVoiceManagerTest(unittest.IsolatedAsyncioTestCase):
         db = self.manager.operations.db
         db.execute("CREATE TRIGGER reject_done BEFORE UPDATE ON operations WHEN NEW.status = 'done' BEGIN SELECT RAISE(ABORT, 'disk full'); END")
         with self.assertLogs(level="ERROR"):
-            self.assertIn("無法儲存", await self.manager.confirm_effect(effect.effect_id, room.id, self.guild))
+            self.assertIn("無法儲存", await self.manager.confirm_effect(effect.effect_id, room.id))
         self.assertEqual(self.rooms(), 0)
         self.assertEqual(self.manager.operations.get_effect(effect.effect_id).status, "unknown")
         self.assertEqual(self.manager.operations.get(effect.operation_id).status, "running")
         db.execute("DROP TRIGGER reject_done")
-        self.assertIsNone(await self.manager.confirm_effect(effect.effect_id, room.id, self.guild))
+        self.assertIsNone(await self.manager.confirm_effect(effect.effect_id, room.id))
 
     async def test_known_channel_delete_can_retry_without_recreating_room(self) -> None:
         await self.join_entry(self.member(1))
@@ -342,7 +342,7 @@ class TempVoiceManagerTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(effect.status, "unknown")
         self.assertEqual(self.rooms(), 1)
         room.delete.side_effect = discord.NotFound(MagicMock(status=404), "already deleted")
-        self.assertIsNone(await self.manager.retry_effect(effect.effect_id, self.guild, allow_unknown=True))
+        self.assertIsNone(await self.manager.retry_effect(effect.effect_id, allow_unknown=True))
         self.assertEqual(self.rooms(), 0)
         self.assertEqual(self.manager.operations.get_effect(effect.effect_id).status, "done")
         self.guild.create_voice_channel.assert_awaited_once()

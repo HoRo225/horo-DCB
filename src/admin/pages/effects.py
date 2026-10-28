@@ -6,18 +6,7 @@ import discord
 
 from src.core.adapters.discord.brand import ICONS, ErrorNotice, send_notice
 from src.admin.pages.common import footer_note
-from src.effects import CONFIRMABLE, RETRYABLE
 
-KINDS = {
-    "action.receipt": "AI 操作結果卡",
-    "game_hub_publish": "發布遊戲大廳",
-    "game_table_open": "開啟賭桌",
-    "game_table_edit": "更新賭桌",
-    "game_table_delete": "收起賭桌",
-    "steam.announce": "Steam 免費遊戲通知",
-    "voice.create": "建立臨時語音房",
-    "voice.delete": "刪除臨時語音房",
-}
 STATES = {"pending": "待送出", "unknown": "結果不明", "failed": "送出失敗"}
 
 
@@ -65,29 +54,28 @@ def channel_name(view, channel_id: int | None) -> str:
 
 
 def render_effects(view, note=None):
-    effects = view.effects.pending()
+    pending = view.effects.pending()
     picked = view.state(EffectPick)
     if view.page != "effects":
         picked.confirming = None
-    if picked.effect_id not in {effect.effect_id for effect in effects}:
-        picked.effect_id, picked.confirming = (effects[0].effect_id if effects else None), None
+    if picked.effect_id not in {item.effect.effect_id for item in pending}:
+        picked.effect_id, picked.confirming = (pending[0].effect.effect_id if pending else None), None
     children = view.header("待處理項目", "effects")
     buttons = []
-    if not effects:
+    if not pending:
         children.append(discord.ui.TextDisplay("目前沒有待處理的送出結果。"))
     else:
-        more = f"\n還有 {len(effects) - 25} 項，處理完前面的會自動遞補。" if len(effects) > 25 else ""
-        children.append(discord.ui.TextDisplay(f"**{len(effects)} 項待處理**\n結果不明表示可能已送達；查核前不會自動重送。{more}"))
+        more = f"\n還有 {len(pending) - 25} 項，處理完前面的會自動遞補。" if len(pending) > 25 else ""
+        children.append(discord.ui.TextDisplay(f"**{len(pending)} 項待處理**\n結果不明表示可能已送達；查核前不會自動重送。{more}"))
         select = view.control(("select", "effect"), lambda: discord.ui.Select(), lambda item, interaction: pick(view, item, interaction))
-        select.options = [discord.SelectOption(label=f"{KINDS.get(effect.kind, '其他項目')} · {STATES.get(effect.status, '待處理')}",
-                                               value=effect.effect_id, description=channel_name(view, effect.channel_id)[:100],
-                                               default=effect.effect_id == picked.effect_id) for effect in effects[:25]]
+        select.options = [discord.SelectOption(label=f"{item.kind.label} · {STATES.get(item.effect.status, '待處理')}",
+                                               value=item.effect.effect_id, description=channel_name(view, item.effect.channel_id)[:100],
+                                               default=item.effect.effect_id == picked.effect_id) for item in pending[:25]]
         children.append(discord.ui.ActionRow(select))
-        effect = next(effect for effect in effects if effect.effect_id == picked.effect_id)
-        can_confirm = effect.kind in CONFIRMABLE and effect.status != "failed"
-        can_retry = effect.kind in RETRYABLE
+        chosen = next(item for item in pending if item.effect.effect_id == picked.effect_id)
+        effect, can_confirm, can_retry = chosen.effect, chosen.confirmable, chosen.retryable
         children.append(discord.ui.TextDisplay(
-            f"**{KINDS.get(effect.kind, '其他項目')}** · {STATES.get(effect.status, '待處理')}\n"
+            f"**{chosen.kind.label}** · {STATES.get(effect.status, '待處理')}\n"
             f"**原頻道**　<#{effect.channel_id}> · <t:{effect.updated_at}:f>"
             + ("" if can_confirm or can_retry else "\n這類項目不能核對或重送，請到原頻道確認並清理後按略過。")))
         async def confirm(interaction):

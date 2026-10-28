@@ -12,7 +12,9 @@ from src.ai.access import AiSettings
 from src.codex.contracts import GAME_ACTIONS, Action, IntentDecision
 from src.codex.protocol import CodexError
 from src.core.adapters.discord.brand import ICONS
+from src.core.adapters.discord.effects import EffectResolver
 from src.core.adapters.discord.live import LiveGuild
+from src.core.app.effects import EffectRegistry
 from src.games.operations import GameOperations
 from src.games.store import GameStore
 from src.core.adapters.sqlite.db import transaction
@@ -511,9 +513,9 @@ class ActionServiceTest(unittest.IsolatedAsyncioTestCase):
         self.bot.ai_settings.set_display(True)
         sends = AsyncMock(return_value=SimpleNamespace(id=3001))
         self.bot.get_partial_messageable = lambda channel_id: SimpleNamespace(send=sends, get_partial_message=lambda message_id: self.receipt)
-        from src.effects import EffectService
-        self.bot.guild_id = 5
-        self.bot.effects = EffectService(self.bot, self.db, self.live)
+        kinds = EffectRegistry()
+        kinds.register(*self.service.effect_kinds())
+        self.bot.effects = EffectResolver(self.service.records, kinds, self.live, self.bot)
         self.bot.actions = self.service
         self.source.id = 1001
         self.source.content = effect_id
@@ -563,8 +565,7 @@ class ActionServiceTest(unittest.IsolatedAsyncioTestCase):
             self.assertNotIn(removed, rendered)
 
     async def test_admin_status_counts_pending_items_from_the_effect_service(self):
-        from src.effects import EffectService
-        self.bot.effects = EffectService(self.bot, self.db, self.live)
+        self.bot.effects = EffectResolver(self.service.records, EffectRegistry(), self.live, self.bot)
         self.bot.steam_free_games = SimpleNamespace(status=lambda: SimpleNamespace(running=True))
         self.bot.temp_voice = SimpleNamespace(status=lambda: None, enabled=True)
         with transaction(self.db):

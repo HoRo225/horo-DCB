@@ -22,6 +22,7 @@ from src.games.hub import bind_channel
 from src.core.adapters.sqlite.operations import OperationStore
 from src.core.domain.json import json_value
 from src.core.adapters.sqlite.db import transaction
+from src.core.app.effects import EffectKind, MessageProof, delivered
 from src.core.app.supervisor import TaskGroup, cancel_all, wait_until
 
 ADMIN_ACTIONS = frozenset({"admin_status", "voice_sync", "publish_hub",
@@ -58,6 +59,12 @@ class ActionService:
         self._receipts: OrderedDict[int, object | None] = OrderedDict()
         self._closed = False
         self._receipt_lock = asyncio.Lock()
+
+    def effect_kinds(self) -> tuple[EffectKind, ...]:
+        return (EffectKind("action.receipt", "AI 操作結果卡", proof=MessageProof(), retry=self._retry_receipt),)
+
+    async def _retry_receipt(self, effect_id: str, still_current) -> str | None:
+        return delivered(await self.retry_effect(effect_id, allow_unknown=True, still_current=still_current))
 
     @staticmethod
     def _actor(source):

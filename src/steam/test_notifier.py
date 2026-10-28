@@ -2,13 +2,16 @@ import asyncio
 import sqlite3
 import unittest
 from dataclasses import asdict
+from datetime import UTC, datetime
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import discord
 
 from src.core.adapters.discord.brand import BRAND_COLOUR, ICONS
+from src.core.adapters.discord.effects import EffectResolver
 from src.core.adapters.discord.live import LiveGuild
+from src.core.app.effects import EffectRegistry
 from src.admin.pages.steam import steam_state
 from src.core.adapters.sqlite.db import open_db, transaction
 from src.testing import put_setting
@@ -20,7 +23,7 @@ from src.steam.provider import SteamOfferProvider
 from src.steam.views import SteamClaim, build_offer_view, offer_summary
 from src.steam.notifier import STEAM_ENABLED
 
-G, CH = 100, 10
+G, CH, ADMIN, BOT = 100, 10, 7, 99
 VIEW_SEND = discord.Permissions(view_channel=True, send_messages=True)
 
 
@@ -33,13 +36,13 @@ class SteamFreeGamesNotifierTest(unittest.IsolatedAsyncioTestCase):
         self.guild = MagicMock(id=G, unavailable=False)
         self.channels: dict[int, MagicMock] = {}
         self.roles: dict[int, MagicMock] = {}
-        self.guild.get_channel = self.channels.get
+        self.guild.get_channel = self.guild.get_channel_or_thread = self.channels.get
         self.guild.get_role = self.roles.get
         self.channel = self.text(CH)
         db = open_db(":memory:")
         self.addCleanup(db.close)
         put_setting(db, STEAM_ENABLED, True)
-        self.client = SimpleNamespace(get_guild=lambda _: self.guild)
+        self.client = SimpleNamespace(get_guild=lambda _: self.guild, user=SimpleNamespace(id=BOT))
         self.live = LiveGuild(self.client, G, lambda: False)
         self.notifier = SteamFreeGamesNotifier(db, self.live, group(SCHEDULED))
         self.notifier.provider = MagicMock(fetch_current_offers=AsyncMock(), close=AsyncMock())
@@ -69,6 +72,18 @@ class SteamFreeGamesNotifierTest(unittest.IsolatedAsyncioTestCase):
 
     def status(self):
         return self.notifier.status()
+
+    async def confirm(self, effect_id: str, message_id: int) -> str | None:
+        effect = self.notifier.operations.get_effect(effect_id)
+        self.channel.fetch_message = AsyncMock(return_value=SimpleNamespace(
+            id=message_id, author=SimpleNamespace(id=BOT), channel=self.channel, created_at=datetime.now(UTC),
+            nonce=effect.nonce, components=[],
+            content=f"https://store.steampowered.com/app/{effect.payload['offer']['app_id']}/",
+        ))
+        kinds = EffectRegistry()
+        kinds.register(*self.notifier.effect_kinds())
+        resolver = EffectResolver(self.notifier.operations, kinds, self.live, self.client)
+        return await resolver.resolve(effect_id, "confirmed", actor_id=ADMIN, message_id=message_id)
 
     def sent_mentions(self) -> discord.AllowedMentions:
         return self.channel.send.await_args.kwargs["allowed_mentions"]
@@ -260,7 +275,7 @@ class SteamFreeGamesNotifierTest(unittest.IsolatedAsyncioTestCase):
         db.execute("DROP TRIGGER reject_post")
         await self.check(offer(1))
         self.assertEqual(self.channel.send.await_count, 1)
-        self.notifier.confirm_effect(effect.effect_id, message_id=777)
+        self.assertIsNone(await self.confirm(effect.effect_id, 777))
         await self.check(offer(1))
         self.assertEqual(self.channel.send.await_count, 1)
         self.assertEqual(self.notifier.operations.get_effect(effect.effect_id).message_id, 777)
@@ -285,12 +300,12 @@ class SteamFreeGamesNotifierTest(unittest.IsolatedAsyncioTestCase):
             self.notifier.operations.create_effect("pending", "steam.announce", CH,
                                                   {"offer": asdict(offer(1)), "role_ids": []})
         db.execute("CREATE TRIGGER reject_post BEFORE INSERT ON steam_posted BEGIN SELECT RAISE(ABORT, 'disk full'); END")
-        with self.assertRaises(sqlite3.IntegrityError):
-            self.notifier.confirm_effect("pending", message_id=777)
+        with self.assertLogs(level="ERROR"):
+            self.assertEqual(await self.confirm("pending", 777), "處理結果無法儲存；項目仍保留待查，請稍後重新整理。")
         self.assertEqual(self.notifier.operations.get_effect("pending").status, "pending")
         self.assertEqual(self.status().active_app_count, 0)
         db.execute("DROP TRIGGER reject_post")
-        self.notifier.confirm_effect("pending", message_id=777)
+        self.assertIsNone(await self.confirm("pending", 777))
         self.assertEqual(self.notifier.operations.get_effect("pending").status, "done")
         self.assertEqual(self.notifier.operations.get_effect("pending").message_id, 777)
         self.assertEqual(self.status().active_app_count, 1)

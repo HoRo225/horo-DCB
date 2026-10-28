@@ -11,6 +11,7 @@ from src.core.adapters.sqlite.migrations import MIGRATIONS
 from src.core.app.config import DATA_DIR
 
 DB_PATH = DATA_DIR / "horo.db"
+StorageError = sqlite3.Error
 
 
 def open_db(path: Path | str, migrations: Sequence[str] = MIGRATIONS) -> sqlite3.Connection:
