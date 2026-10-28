@@ -60,7 +60,9 @@ class SettingsContractTests(unittest.TestCase):
     def test_feature_switches_drive_their_components(self) -> None:
         from src.ai.access import AI_ENABLED, AiSettings
         from src.steam.notifier import STEAM_ENABLED, SteamFreeGamesNotifier
-        from src.voice.manager import VOICE_ENABLED, TempVoiceManager
+        from src.voice import Voice
+        from src.voice.adapters.discord.gateway import DiscordVoiceGateway
+        from src.voice.adapters.sqlite.store import VOICE_ENABLED, SqliteVoiceStore
 
         db = open_db(":memory:")
         self.addCleanup(db.close)
@@ -68,7 +70,7 @@ class SettingsContractTests(unittest.TestCase):
         live = LiveGuild(SimpleNamespace(get_guild=lambda _guild_id: None), 1, lambda: False)
         components = {
             AI_ENABLED: AiSettings(db, 1),
-            VOICE_ENABLED: TempVoiceManager(db, TaskGroup("voice", WORK), live),
+            VOICE_ENABLED: Voice(SqliteVoiceStore(db), DiscordVoiceGateway(live), TaskGroup("voice", WORK)),
             STEAM_ENABLED: SteamFreeGamesNotifier(db, live, TaskGroup("steam", SCHEDULED)),
         }
         for switch, component in components.items():

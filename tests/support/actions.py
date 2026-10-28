@@ -21,7 +21,7 @@ from src.core.domain.actions import Action, Plan
 from src.games.actions import game_actions
 from src.games.operations import GameOperations
 from src.games.store import GameStore
-from src.voice.actions import voice_actions
+from src.voice.adapters.discord.actions import voice_actions
 
 GUILD, CHANNEL, ACTOR, ROLE, RECEIPT = 5, 10, 1, 7, 3000
 
