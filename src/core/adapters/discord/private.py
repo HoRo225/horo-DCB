@@ -10,7 +10,7 @@ from dataclasses import dataclass
 
 import discord
 
-from src.core.adapters.discord.brand import ICONS, send_notice
+from src.core.adapters.discord.brand import ICONS, reported, send_notice
 from src.core.app.ports import Source
 
 EXPIRED = "私人結果已過期，請再 @樂奈 問一次。"
@@ -45,10 +45,26 @@ def private_result_item(results: PrivateResults) -> type[discord.ui.DynamicItem[
         async def from_custom_id(cls, interaction, item, match, /):
             return cls(match["token"])
 
+        @reported
         async def callback(self, interaction: discord.Interaction) -> None:
             await results.show(self.token, interaction)
 
     return PrivateResultButton
+
+
+async def disable_button(interaction: discord.Interaction, custom_id: str) -> None:
+    try:
+        view = discord.ui.LayoutView.from_message(interaction.message)
+        buttons = [item for item in view.walk_children()
+                   if isinstance(item, discord.ui.Button) and item.custom_id == custom_id]
+        if not buttons:
+            return
+        for button in buttons:
+            button.disabled = True
+        view.stop()
+        await interaction.response.edit_message(view=view)
+    except Exception:
+        logging.warning("Expired private result button could not be disabled.", exc_info=True)
 
 
 class PrivateResults:
@@ -98,6 +114,7 @@ class PrivateResults:
         self._prune()
         entry = self._items.get(token)
         if entry is None:
+            await disable_button(interaction, f"horo:private:{token}")
             await send_notice(interaction, EXPIRED, "deadline")
             return
         if (interaction.user.id != entry.user_id or interaction.guild_id != entry.guild_id

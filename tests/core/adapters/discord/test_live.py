@@ -12,7 +12,7 @@ from tests.support.discord import Client, Guild, channel, member, thread
 
 G, OTHER, USER, CHANNEL = 5, 6, 1, 10
 RESTARTING = "Bot 正在重新啟動，請稍後再試。"
-OTHER_GUILD = "此 Bot 只服務 .env 的 DISCORD_GUILD_ID 伺服器。"
+OTHER_GUILD = "此 Bot 只在指定的伺服器提供服務。"
 UNCONFIRMED = "目前無法確認最新的伺服器或頻道狀態，請稍後再試。"
 CANNOT_SEND = "你目前無法在這個頻道執行操作。"
 SENDABLE = {"view_channel": True, "send_messages": True}

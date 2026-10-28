@@ -205,7 +205,7 @@ class ExecutionTests(Engine):
         self.network.side_effect = RuntimeError("socket closed")
         with self.assertLogs(level="ERROR"):
             [result] = await self.execute(("sync", {}), message_id=MESSAGE + 1)
-        self.assertEqual(result["code"], "unknown")
+        self.assertEqual((result["code"], result["text"]), ("unknown", "這項操作未能確認完成，請查看私人結果或請管理員核對待處理項目。"))
         self.assertEqual(self.operations.get(f"{self.request(MESSAGE + 1).request_id}:0").status, "running")
 
     async def test_member_plan_with_an_admin_step_is_rejected_before_any_commit(self) -> None:

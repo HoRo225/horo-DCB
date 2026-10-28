@@ -12,7 +12,7 @@ from src.core.app.ports import Actor, Mentions, Named, Source
 from src.core.domain.actions import Target
 
 RESTARTING = "Bot 正在重新啟動，請稍後再試。"
-OTHER_GUILD = "此 Bot 只服務 .env 的 DISCORD_GUILD_ID 伺服器。"
+OTHER_GUILD = "此 Bot 只在指定的伺服器提供服務。"
 UNCONFIRMED = "目前無法確認最新的伺服器或頻道狀態，請稍後再試。"
 CANNOT_SEND = "你目前無法在這個頻道執行操作。"
 MISSING_CHANNEL = ("指定頻道不存在或目前無法查看，未執行任何操作。", "指定頻道已不存在或無法查看，未執行這項操作。")

@@ -1,5 +1,9 @@
 import unittest
-from unittest.mock import AsyncMock, patch
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, MagicMock, patch
+
+import discord
+from discord.components import _component_factory
 
 from src.core.adapters.discord.brand import ICONS, NEUTRAL_COLOUR, notice_view
 from src.core.adapters.discord.private import TTL_SECONDS, PrivateResults
@@ -67,6 +71,45 @@ class PrivateResultsTest(unittest.IsolatedAsyncioTestCase):
             notice = clicked.response.send_message.await_args.kwargs["view"]
             self.assertEqual(text(notice), EXPIRED)
             self.assertEqual(notice.children[0].accent_colour, NEUTRAL_COLOUR)
+
+    def receipt(self, *tokens):
+        view = discord.ui.LayoutView(timeout=None)
+        view.add_item(discord.ui.Container(discord.ui.TextDisplay("操作結果")))
+        view.add_item(discord.ui.ActionRow(*self.registry.make_buttons(tokens)))
+        return SimpleNamespace(id=3000, components=[_component_factory(data) for data in view.to_components()])
+
+    async def test_expired_button_is_disabled_on_the_receipt_and_explained_privately(self):
+        other = self.registry.issue(source(), "steam_query")
+        self.registry.bind_message(other, 3000)
+        clicked = self.click()
+        clicked.message = self.receipt("gone", other)
+        await self.registry.item("gone").callback(clicked)
+        edited = clicked.response.edit_message.await_args.kwargs["view"]
+        buttons = {item.custom_id: item.disabled for item in edited.walk_children() if isinstance(item, discord.ui.Button)}
+        self.assertEqual(buttons, {"horo:private:gone": True, f"horo:private:{other}": False})
+        self.assertIn("操作結果", text(edited))
+        self.assertTrue(edited.is_finished())
+        notice = clicked.followup.send.await_args.kwargs
+        self.assertTrue(notice["ephemeral"])
+        self.assertEqual(text(notice["view"]), EXPIRED)
+        self.render.assert_not_awaited()
+
+    async def test_expired_button_still_explains_when_the_receipt_cannot_be_edited(self):
+        clicked = self.click()
+        clicked.message = self.receipt("gone")
+        clicked.response.edit_message.side_effect = discord.HTTPException(MagicMock(status=500), "down")
+        with self.assertLogs(level="WARNING"):
+            await self.registry.show("gone", clicked)
+        notice = clicked.response.send_message.await_args.kwargs
+        self.assertTrue(notice["ephemeral"])
+        self.assertEqual(text(notice["view"]), EXPIRED)
+
+    async def test_button_errors_reply_with_an_error_card(self):
+        self.registry.show = AsyncMock(side_effect=RuntimeError("db gone"))
+        clicked = self.click()
+        with self.assertLogs(level="ERROR"):
+            await self.registry.item(self.token).callback(clicked)
+        self.assertIn("發生未預期的錯誤", text(clicked.response.send_message.await_args.kwargs["view"]))
 
     async def test_authorization_is_rechecked_after_slow_render(self):
         self.authorize.side_effect = [None, "你目前沒有查看權限。"]
