@@ -75,6 +75,10 @@ class ServiceTests(unittest.IsolatedAsyncioTestCase):
         self.server.script = answer(("commentary", "先想想"), (None, "舊模型回覆"))
         self.assertEqual((await self.chat()).text, "舊模型回覆")
 
+    async def test_inline_citation_markers_are_removed(self) -> None:
+        self.server.script = answer(("final_answer", "今天陰天。\n-# 來源：天氣預報citeturn0forecast0"))
+        self.assertEqual((await self.chat()).text, "今天陰天。\n-# 來源：天氣預報")
+
     async def test_commentary_alone_is_not_a_reply(self) -> None:
         self.server.script = answer(("commentary", "我查一下"))
         with self.assertRaises(CodexError) as caught:

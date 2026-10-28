@@ -12,6 +12,7 @@ from src.codex.rpc import RpcError, ThreadEvents
 
 _IMAGE_RESULT_REF = re.compile(r"^turn[0-9]+image[0-9]+$")
 _MARKDOWN_IMAGE_URL = re.compile(r"!\[[^\]]*\]\((https://[^\s)]+)\)")
+_CITATION = re.compile("[^]*")
 ISOLATED_ITEMS = frozenset({"userMessage", "agentMessage", "reasoning"})
 TERMINAL = frozenset({"completed", "failed", "interrupted"})
 
@@ -102,7 +103,7 @@ def _record_message(result: TurnResult, item: dict[str, Any]) -> None:
     phase = item.get("phase")
     final = phase == "final_answer"
     if final or (phase != "commentary" and not result.final_answer):
-        result.text = text
+        result.text = _CITATION.sub("", text)
         result.final_answer = final
 
 
