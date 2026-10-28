@@ -28,16 +28,25 @@ async def draw_banner() -> discord.File | None:
 
 
 class DiscordTables:
-    def __init__(self, client: discord.Client, live: LiveGuild, lobby: Lobby) -> None:
+    def __init__(
+        self, client: discord.Client, live: LiveGuild, lobby: Lobby,
+        banner: Callable[[], Awaitable[discord.File | None]] = draw_banner,
+    ) -> None:
         self._client = client
         self._live = live
         self._lobby = lobby
+        self._banner = banner
 
     def symbol(self, name: str) -> str:
         return slot_symbol(name)
 
     def hub_link(self) -> list[discord.ui.Button]:
         return hub_link(self._lobby.hub_message, self._live.guild_id)
+
+    async def lobby_message(self) -> dict[str, object]:
+        if file := await self._banner():
+            return {"view": lobby_view(), "attachments": [file]}
+        return {"view": lobby_view(banner=False), "attachments": []}
 
     def view(self, table: LiveTable) -> SeatView:
         return seat_view(table, self.hub_link() if table.farewell is not None else ())

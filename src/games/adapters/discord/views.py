@@ -61,7 +61,7 @@ def game_pick_item(
             if problem := lobby.problem(interaction.guild_id, interaction.channel_id, players.role_ids(user_id)):
                 await send_notice(interaction, problem, items=tables.hub_link())
                 return
-            await interaction.response.edit_message(view=lobby_view(banner=bool(interaction.message.attachments)))
+            await interaction.response.edit_message(**await tables.lobby_message())
             move = Move("open_table", user_id, interaction.guild_id, interaction.channel_id, interaction.id,
                         play.snapshot(user_id)["state_token"], game=self.item.values[0])
             await play.execute(move, tables.reply(interaction))

@@ -18,6 +18,9 @@ class Presenter:
     def hub_link(self) -> list[discord.ui.Button]:
         return [discord.ui.Button(label="前往遊戲大廳", url=HUB_URL)]
 
+    async def lobby_message(self) -> dict[str, object]:
+        return {"view": lobby_view(), "attachments": ["hub.png"]}
+
     def reply(self, interaction: discord.Interaction) -> FakeReply:
         self.replies.append(FakeReply())
         return self.replies[-1]
@@ -57,16 +60,16 @@ class GamePickTests(unittest.IsolatedAsyncioTestCase):
     async def choose(self, game: str) -> discord.Interaction:
         picked = testing.interaction()
         picked.id, picked.user.id, picked.guild_id, picked.channel_id = 900, PLAYER, GUILD, CHANNEL
-        picked.message.attachments = [object()]
+        picked.message.attachments = []
         item = await self.pick.from_custom_id(picked, None, None)
         item.item._values = [game]
         await item.callback(picked)
         return picked
 
-    async def test_pick_resets_the_menu_and_opens_a_table(self) -> None:
+    async def test_pick_redraws_the_lobby_with_its_banner_and_opens_a_table(self) -> None:
         picked = await self.choose("slots")
-        lobby = picked.response.edit_message.await_args.kwargs["view"]
-        self.assertEqual(galleries(lobby), 1)
+        redrawn = picked.response.edit_message.await_args.kwargs
+        self.assertEqual((galleries(redrawn["view"]), redrawn["attachments"]), (1, ["hub.png"]))
         self.assertEqual(self.game.store.seat(PLAYER).game, "slots")
         self.assertEqual(self.game.records.get_effect("interaction:900:table-send").payload["source_message_id"], 900)
         [reply] = self.presenter.replies

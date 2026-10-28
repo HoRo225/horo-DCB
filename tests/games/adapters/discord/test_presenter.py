@@ -54,6 +54,16 @@ class TableMessageTests(unittest.IsolatedAsyncioTestCase):
         view = self.channel.send.await_args.kwargs["view"]
         self.assertIn(f"{'a' * 32}:again", view.actions)
 
+    async def test_lobby_message_carries_the_banner_file_or_drops_the_banner(self) -> None:
+        client = Client(Guild(G).add(self.channel))
+        live = LiveGuild(client, G, lambda: False)
+        drawn = DiscordTables(client, live, SimpleNamespace(), AsyncMock(return_value=discord.File(io.BytesIO(b"png"), "hub.png")))
+        content = await drawn.lobby_message()
+        self.assertEqual((galleries(content["view"]), [file.filename for file in content["attachments"]]), (1, ["hub.png"]))
+        failed = DiscordTables(client, live, SimpleNamespace(), AsyncMock(return_value=None))
+        content = await failed.lobby_message()
+        self.assertEqual((galleries(content["view"]), content["attachments"]), (0, []))
+
     async def test_refused_or_missing_channel_is_a_present_error(self) -> None:
         self.channel.send.side_effect = http(discord.Forbidden, 403)
         with self.assertRaises(PresentError):
