@@ -5,7 +5,7 @@ from typing import TypeGuard
 
 import discord
 
-from src.core.app.config import is_positive_int
+from src.core.domain.ids import is_positive_int
 
 VIEW_AND_SEND = (("view_channel", "檢視頻道"), ("send_messages", "傳送訊息"))
 

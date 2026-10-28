@@ -16,9 +16,14 @@ from src.codex.service import DeviceLogin
 from src.admin.cog import AdminCog
 from src.bot import HoroBot
 from src.core.adapters.discord.brand import BRAND_COLOUR, ICONS, NEUTRAL_COLOUR, WARN_COLOUR
-from src.state import open_db, set_setting, transaction
+from src.core.adapters.sqlite.db import open_db, transaction
+from src.testing import put_setting
 from src.steam.models import SteamFetchResult, SteamOffer
 from src.testing import text
+from src.ai.access import AI_ENABLED
+from src.games.store import GAMES_HUB_MESSAGE
+from src.steam.notifier import STEAM_CHANNEL_ID
+from src.voice.manager import VOICE_ENABLED, VOICE_ENTRY_CHANNEL_ID
 
 G, OWNER = 100, 200
 
@@ -128,7 +133,7 @@ class AdminPanelTest(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self) -> None:
         self.db = db = open_db(":memory:")
         self.addCleanup(db.close)
-        set_setting(db, "feature.ai", True)
+        put_setting(db, AI_ENABLED, True)
         self.codex = MagicMock()
         self.codex.get_runtime_status = AsyncMock(return_value=STATUS)
         self.codex.get_rate_limits = AsyncMock(return_value=limits(20))
@@ -507,7 +512,7 @@ class AdminPanelTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_steam_toggle_and_notification_roles(self) -> None:
         self.channels[700] = text_channel(700, self.guild)
-        set_setting(self.db, "steam.channel_id", 700)
+        put_setting(self.db, STEAM_CHANNEL_ID, 700)
         await self.open_panel()
         await self.go("Steam 免費遊戲")
         steam, role = self.bot.steam_free_games, self.role(900)
@@ -745,7 +750,7 @@ class AdminPanelTest(unittest.IsolatedAsyncioTestCase):
         await self.open_panel()
         await self.go("遊戲大廳")
         self.assertEqual(self.button("重發遊戲大廳").style, primary)
-        set_setting(self.db, "games.hub_message", [800, 801])
+        put_setting(self.db, GAMES_HUB_MESSAGE, [800, 801])
         await self.click(self.button("重新整理"))
         self.assertEqual(self.button("重發遊戲大廳").style, secondary)
         self.channels.pop(800)
@@ -755,14 +760,14 @@ class AdminPanelTest(unittest.IsolatedAsyncioTestCase):
         await self.go("臨時語音")
         sync = self.button("重新同步")
         self.assertEqual((sync.style, sync.disabled), (secondary, True))
-        set_setting(self.db, "feature.temp_voice", True)
+        put_setting(self.db, VOICE_ENABLED, True)
         await self.click(self.button("重新整理"))
         self.assertEqual(sync.style, primary)
         entry = MagicMock(spec=discord.VoiceChannel)
         entry.id, entry.type, entry.guild = 500, discord.ChannelType.voice, self.guild
         entry.permissions_for.return_value = discord.Permissions.all()
         self.channels[500] = entry
-        set_setting(self.db, "voice.entry_channel_id", 500)
+        put_setting(self.db, VOICE_ENTRY_CHANNEL_ID, 500)
         await self.click(self.button("重新整理"))
         self.assertEqual((sync.style, sync.disabled), (secondary, False))
 

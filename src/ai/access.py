@@ -3,11 +3,17 @@ from __future__ import annotations
 import sqlite3
 
 from src.codex.model_settings import DEFAULT_MODEL_SETTINGS, ModelSettings, parse_model_settings
-from src.core.app.config import is_positive_int
-from src.state import setting
-from src.settings_ops import save_settings
+from src.core.adapters.sqlite.operations import OperationStore
+from src.core.adapters.sqlite.settings import SettingsStore
+from src.core.domain.ids import is_positive_int
+from src.core.domain.settings import Setting
 
 MAX_CODEX_ALLOWED_CHANNELS = 25
+AI_ENABLED = Setting("feature.ai", False)
+AI_TEXT_DISPLAY = Setting("feature.ai_text_display", True)
+AI_CHANNEL_IDS: Setting[list[int]] = Setting("ai.channel_ids", [])
+AI_ROLE_IDS: Setting[list[int]] = Setting("ai.role_ids", [])
+AI_MODELS: Setting[dict[str, object] | None] = Setting("ai.models", None)
 
 
 def valid_allowlist_ids(values: object, *, minimum: int) -> bool:
@@ -20,7 +26,7 @@ def valid_allowlist_ids(values: object, *, minimum: int) -> bool:
 
 class AiSettings:
     def __init__(self, db: sqlite3.Connection, guild_id: int) -> None:
-        self._db = db
+        self._settings = SettingsStore(db, OperationStore(db))
         self.guild_id = guild_id
         self.generation = 0
         self._channel_generations: dict[int, int] = {}
@@ -28,7 +34,7 @@ class AiSettings:
 
     @property
     def enabled(self) -> bool:
-        return setting(self._db, "feature.ai")
+        return self._settings.get(AI_ENABLED)
 
     @enabled.setter
     def enabled(self, value: bool) -> None:
@@ -38,18 +44,18 @@ class AiSettings:
         if type(value) is not bool:
             raise ValueError("invalid AI switch")
         before = self.enabled
-        changed = save_settings(self._db, operation_id, "ai.enabled", {"enabled": value}, {"feature.ai": value})
+        changed = self._settings.save("ai.enabled", {"enabled": value}, {AI_ENABLED: value}, operation_id=operation_id)
         if changed and before and not value:
             self.generation += 1
         return changed
 
     @property
     def channel_ids(self) -> frozenset[int]:
-        return frozenset(setting(self._db, "ai.channel_ids"))
+        return frozenset(self._settings.get(AI_CHANNEL_IDS))
 
     @property
     def role_ids(self) -> frozenset[int]:
-        return frozenset(setting(self._db, "ai.role_ids"))
+        return frozenset(self._settings.get(AI_ROLE_IDS))
 
     def denial_reason(
         self,
@@ -71,16 +77,16 @@ class AiSettings:
 
     @property
     def models(self) -> ModelSettings:
-        raw = setting(self._db, "ai.models")
+        raw = self._settings.get(AI_MODELS)
         return DEFAULT_MODEL_SETTINGS if raw is None else parse_model_settings(raw)
 
     def save_models(self, settings: ModelSettings, *, operation_id: str | None = None) -> bool:
         payload = parse_model_settings(settings.to_payload()).to_payload()
-        return save_settings(self._db, operation_id, "ai.models", payload, {"ai.models": payload})
+        return self._settings.save("ai.models", payload, {AI_MODELS: payload}, operation_id=operation_id)
 
     @property
     def text_display(self) -> bool:
-        return setting(self._db, "feature.ai_text_display")
+        return self._settings.get(AI_TEXT_DISPLAY)
 
     @text_display.setter
     def text_display(self, value: bool) -> None:
@@ -89,7 +95,7 @@ class AiSettings:
     def set_display(self, value: bool, *, operation_id: str | None = None) -> bool:
         if type(value) is not bool:
             raise ValueError("invalid AI display switch")
-        return save_settings(self._db, operation_id, "ai.display", {"enabled": value}, {"feature.ai_text_display": value})
+        return self._settings.save("ai.display", {"enabled": value}, {AI_TEXT_DISPLAY: value}, operation_id=operation_id)
 
     @property
     def configured(self) -> bool:
@@ -108,8 +114,10 @@ class AiSettings:
     def set_allowlist(
         self, guild_id: int, selected: frozenset[int], *, roles: bool, operation_id: str | None = None
     ) -> bool:
-        key = "ai.role_ids" if roles else "ai.channel_ids"
-        return save_settings(self._db, operation_id, key, {"ids": sorted(selected)}, {key: sorted(selected)})
+        setting = AI_ROLE_IDS if roles else AI_CHANNEL_IDS
+        return self._settings.save(
+            setting.key, {"ids": sorted(selected)}, {setting: sorted(selected)}, operation_id=operation_id,
+        )
 
     def channel_generation(self, channel_id: int) -> int:
         return self._channel_generations.get(channel_id, 0)

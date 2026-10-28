@@ -19,8 +19,9 @@ from src.core.adapters.discord.brand import BRAND_COLOUR, ICONS, WARN_COLOUR, ca
 from src.core.adapters.discord.channels import fetch_current_member, member_role_ids, text_channel_problem, is_voice_channel, is_text_channel
 from src.games.access import play_problem
 from src.games.hub import bind_channel
-from src.operations import OperationStore, json_value
-from src.state import transaction
+from src.core.adapters.sqlite.operations import OperationStore
+from src.core.domain.json import json_value
+from src.core.adapters.sqlite.db import transaction
 from src.core.app.supervisor import cancel_all, track, wait_until
 
 ADMIN_ACTIONS = frozenset({"admin_status", "voice_sync", "publish_hub",

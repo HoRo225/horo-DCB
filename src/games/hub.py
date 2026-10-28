@@ -10,8 +10,8 @@ from src.core.adapters.discord.channels import post_problem, text_channel_proble
 from src.games.cards import banner_file, banner_png
 from src.games.store import GameStore
 from src.games.views import lobby_view
-from src.operations import OperationStore
-from src.state import transaction
+from src.core.adapters.sqlite.operations import OperationStore
+from src.core.adapters.sqlite.db import transaction
 
 
 async def _banner() -> discord.File | None:

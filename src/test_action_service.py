@@ -12,7 +12,7 @@ from src.codex.protocol import CodexError
 from src.core.adapters.discord.brand import ICONS
 from src.games.operations import GameOperations
 from src.games.store import GameStore
-from src.state import transaction
+from src.core.adapters.sqlite.db import transaction
 from src.testing import memory_db, text
 
 QUERY = Action("help", {})

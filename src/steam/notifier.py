@@ -12,14 +12,19 @@ import aiohttp
 import discord
 
 from src.core.adapters.discord.channels import post_problem, text_channel_problem
-from src.operations import DiscordEffect, OperationStore
-from src.settings_ops import save_settings
-from src.state import set_setting, setting, transaction
+from src.core.adapters.sqlite.db import transaction
+from src.core.adapters.sqlite.operations import OperationStore
+from src.core.adapters.sqlite.settings import SettingsStore
+from src.core.domain.records import DiscordEffect
+from src.core.domain.settings import Setting
 from src.steam.models import SteamConfigurationError, SteamFetchResult, SteamOffer, SteamStatus, offer_from_payload
 from src.steam.provider import SteamOfferProvider
 from src.steam.views import build_offer_view
 
 POLL_INTERVAL_SECONDS = 15 * 60
+STEAM_ENABLED = Setting("feature.steam_free_games", False)
+STEAM_CHANNEL_ID: Setting[int | None] = Setting("steam.channel_id", None)
+STEAM_ROLE_IDS: Setting[list[int]] = Setting("steam.role_ids", [])
 
 
 class SteamFreeGamesNotifier:
@@ -32,12 +37,13 @@ class SteamFreeGamesNotifier:
         self._closing = False
         self._client: discord.Client | None = None
         self.operations = OperationStore(db)
+        self._settings = SettingsStore(db, self.operations)
         self.last_success: int | None = None
         self.last_error: str | None = None
 
     @property
     def enabled(self) -> bool:
-        return setting(self._db, "feature.steam_free_games")
+        return self._settings.get(STEAM_ENABLED)
 
     def set_enabled(
         self, value: bool, client: discord.Client | None = None, *, operation_id: str | None = None,
@@ -46,8 +52,8 @@ class SteamFreeGamesNotifier:
             raise SteamConfigurationError("Bot 正在關閉，無法修改 Steam 通知設定。")
         if type(value) is not bool:
             raise ValueError("enabled must be a boolean")
-        if not save_settings(
-            self._db, operation_id, "steam.set_enabled", {"enabled": value}, {"feature.steam_free_games": value},
+        if not self._settings.save(
+            "steam.set_enabled", {"enabled": value}, {STEAM_ENABLED: value}, operation_id=operation_id,
         ):
             return
         if client is not None:
@@ -63,9 +69,9 @@ class SteamFreeGamesNotifier:
     def status(self) -> SteamStatus:
         return SteamStatus(
             poll_interval_seconds=POLL_INTERVAL_SECONDS,
-            channel_id=setting(self._db, "steam.channel_id"),
+            channel_id=self._settings.get(STEAM_CHANNEL_ID),
             active_app_count=len(self._posted_app_ids()),
-            role_ids=tuple(sorted(setting(self._db, "steam.role_ids"))),
+            role_ids=tuple(sorted(self._settings.get(STEAM_ROLE_IDS))),
             running=self._task is not None and not self._task.done() and not self._task.cancelling(),
             last_success=self.last_success,
             last_error=self.last_error,
@@ -73,12 +79,12 @@ class SteamFreeGamesNotifier:
         )
 
     def notification_problem(self, guild: discord.Guild) -> str | None:
-        channel = guild.get_channel(setting(self._db, "steam.channel_id"))
+        channel = guild.get_channel(self._settings.get(STEAM_CHANNEL_ID))
         if problem := self._channel_problem(guild, channel):
             return problem
         unavailable_roles = sum(
             1
-            for role_id in setting(self._db, "steam.role_ids")
+            for role_id in self._settings.get(STEAM_ROLE_IDS)
             if (role := guild.get_role(role_id)) is None
             or role.is_default()
             or not self._role_can_notify(guild, channel, role)
@@ -136,7 +142,7 @@ class SteamFreeGamesNotifier:
                 resolved = [guild.get_role(role_id) for role_id in sorted(role_ids)]
                 if any(role is None or role.guild is not guild or role.is_default() for role in resolved):
                     raise SteamConfigurationError("選取的通知身分組已不存在，未修改設定。")
-                channel = guild.get_channel(setting(self._db, "steam.channel_id"))
+                channel = guild.get_channel(self._settings.get(STEAM_CHANNEL_ID))
                 if self._channel_problem(guild, channel):
                     raise SteamConfigurationError("請先選擇可用的 Steam 通知頻道，並確認 Bot 權限。")
 
@@ -146,8 +152,9 @@ class SteamFreeGamesNotifier:
                             "選取的身分組中有目前不可被通知的項目；請將身分組設為可提及，或授予 Bot「提及 @everyone、@here 和所有身分組」權限。"
                         )
 
-            save_settings(
-                self._db, operation_id, "steam.set_roles", {"role_ids": sorted(role_ids)}, {"steam.role_ids": sorted(role_ids)},
+            self._settings.save(
+                "steam.set_roles", {"role_ids": sorted(role_ids)}, {STEAM_ROLE_IDS: sorted(role_ids)},
+                operation_id=operation_id,
             )
 
     async def bind_channel(
@@ -176,8 +183,8 @@ class SteamFreeGamesNotifier:
                 return problem
             if problem := self._channel_problem(guild, channel):
                 return problem
-            save_settings(
-                self._db, operation_id, "steam.bind_channel", {"channel_id": channel.id}, {"steam.channel_id": channel.id},
+            self._settings.save(
+                "steam.bind_channel", {"channel_id": channel.id}, {STEAM_CHANNEL_ID: channel.id}, operation_id=operation_id,
             )
         logging.info("Steam free games notification channel bound.")
         return None
@@ -244,7 +251,7 @@ class SteamFreeGamesNotifier:
         guild: discord.Guild,
         channel: discord.TextChannel,
     ) -> tuple[discord.Role, ...]:
-        role_ids = setting(self._db, "steam.role_ids")
+        role_ids = self._settings.get(STEAM_ROLE_IDS)
         kept: list[int] = []
         resolved: list[discord.Role] = []
         for role_id in sorted(role_ids):
@@ -259,7 +266,8 @@ class SteamFreeGamesNotifier:
                 continue
             resolved.append(role)
         if len(kept) != len(role_ids):
-            set_setting(self._db, "steam.role_ids", kept)
+            with transaction(self._db):
+                self._settings.put({STEAM_ROLE_IDS: kept})
         return tuple(resolved)
 
     async def _send_offer(
@@ -297,7 +305,7 @@ class SteamFreeGamesNotifier:
             self.last_error = problem
             return False
         offer = offer_from_payload(effect.payload["offer"])
-        allowed = set(setting(self._db, "steam.role_ids"))
+        allowed = set(self._settings.get(STEAM_ROLE_IDS))
         roles = tuple(
             role for role_id in effect.payload["role_ids"]
             if role_id in allowed and (role := guild.get_role(role_id)) is not None
@@ -378,7 +386,7 @@ class SteamFreeGamesNotifier:
             if guild is None:
                 self.last_error = "目前無法確認最新的伺服器狀態，通知仍保留待處理。"
                 return
-            channel_id = setting(self._db, "steam.channel_id")
+            channel_id = self._settings.get(STEAM_CHANNEL_ID)
             if channel_id is None:
                 return
             channel = guild.get_channel(channel_id)

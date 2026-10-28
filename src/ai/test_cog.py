@@ -8,7 +8,9 @@ from src import testing
 from src.ai.access import AiSettings
 from src.ai.cog import AiCog
 from src.codex.protocol import conversation_key
-from src.state import open_db, set_setting
+from src.core.adapters.sqlite.db import open_db
+from src.testing import put_setting
+from src.ai.access import AI_ENABLED
 
 
 class NewTopicTest(unittest.IsolatedAsyncioTestCase):
@@ -94,7 +96,7 @@ class ChannelDeleteTest(unittest.IsolatedAsyncioTestCase):
         await self.delete(10)
         self.assertEqual(self.bot.ai_settings.channel_ids, frozenset({11}))
         self.bot.codex.archive_scope.assert_not_awaited()
-        set_setting(self.db, "feature.ai", True)
+        put_setting(self.db, AI_ENABLED, True)
         await self.delete(11)
         self.assertEqual(self.bot.ai_settings.channel_ids, frozenset())
         self.bot.codex.archive_scope.assert_awaited_once_with(1, 11, include_children=True)

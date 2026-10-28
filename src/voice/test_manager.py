@@ -6,10 +6,12 @@ from unittest.mock import AsyncMock, MagicMock
 import discord
 
 from src.core.adapters.discord.brand import WARN_COLOUR
-from src.state import open_db, set_setting, transaction
+from src.core.adapters.sqlite.db import open_db, transaction
+from src.testing import put_setting
 from src.testing import text
 from src.voice.cog import VoiceCog
 from src.voice.manager import AUDIT_REASON, TempVoiceManager, build_temp_voice_name
+from src.voice.manager import VOICE_ENABLED, VOICE_ENTRY_CHANNEL_ID
 
 G, ENTRY = 100, 10
 
@@ -27,7 +29,7 @@ class TempVoiceManagerTest(unittest.IsolatedAsyncioTestCase):
         self.entry = self.voice(ENTRY, user_limit=5, bitrate=384000)
         db = open_db(":memory:")
         self.addCleanup(db.close)
-        set_setting(db, "feature.temp_voice", True)
+        put_setting(db, VOICE_ENABLED, True)
         self.manager = TempVoiceManager(db, get_guild=lambda guild_id: self.guild if guild_id == G else None)
         self.assertIsNone(await self.manager.bind_entry(self.guild, self.entry))
 
@@ -529,14 +531,14 @@ class TempVoiceManagerTest(unittest.IsolatedAsyncioTestCase):
         self.manager._get_guild = lambda _: self.guild
         for change in ("binding", "category"):
             with self.subTest(change=change):
-                set_setting(self.manager.operations.db, "voice.entry_channel_id", ENTRY)
+                put_setting(self.manager.operations.db, VOICE_ENTRY_CHANNEL_ID, ENTRY)
                 self.entry.category, self.entry.category_id = None, None
                 alice = self.member(1)
 
                 def create(name, **kwargs):
                     room = self.create_voice(name, **kwargs)
                     if change == "binding":
-                        set_setting(self.manager.operations.db, "voice.entry_channel_id", 999)
+                        put_setting(self.manager.operations.db, VOICE_ENTRY_CHANNEL_ID, 999)
                     else:
                         self.entry.category_id = 999
                     return room

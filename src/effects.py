@@ -8,8 +8,8 @@ import sqlite3
 import aiohttp
 import discord
 
-from src.operations import OperationStore
-from src.state import transaction
+from src.core.adapters.sqlite.operations import OperationStore
+from src.core.adapters.sqlite.db import transaction
 
 MESSAGE_CONFIRMATIONS = frozenset({
     "steam.announce", "action.receipt", "game_table_edit", "game_hub_publish",

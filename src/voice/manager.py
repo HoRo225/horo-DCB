@@ -15,15 +15,19 @@ from src.core.adapters.discord.channels import (
     is_voice_channel,
     missing_channel_permissions,
 )
-from src.state import set_setting, setting, transaction
-from src.operations import OperationStore, json_value
-from src.settings_ops import save_settings
+from src.core.adapters.sqlite.db import transaction
+from src.core.adapters.sqlite.operations import OperationStore
+from src.core.adapters.sqlite.settings import SettingsStore
+from src.core.domain.json import json_value
+from src.core.domain.settings import Setting
 from src.core.app.supervisor import track, wait_until, cancel_all
 
 CHANNEL_NAME_PREFIX = "▍"
 CHANNEL_NAME_SUFFIX = " 的語音-🔊"
 CHANNEL_NAME_LIMIT = 100
 AUDIT_REASON = "horo-DCB temporary voice channel"
+VOICE_ENABLED = Setting("feature.temp_voice", False)
+VOICE_ENTRY_CHANNEL_ID: Setting[int | None] = Setting("voice.entry_channel_id", None)
 
 _REQUIRED_BOT_PERMISSIONS = (
     ("view_channel", "檢視頻道"),
@@ -57,6 +61,7 @@ class TempVoiceManager:
         self._closed = False
         self._tasks: set[asyncio.Task] = set()
         self.operations = OperationStore(db)
+        self._settings = SettingsStore(db, self.operations)
         self._get_guild = get_guild
 
     def _current_guild(self, guild):
@@ -73,7 +78,7 @@ class TempVoiceManager:
         return current if is_voice_channel(current) and current.guild is guild else None
 
     def _current_entry(self, member, entry):
-        if self._closing or not self.enabled or setting(self._db, "voice.entry_channel_id") != entry.id:
+        if self._closing or not self.enabled or self._settings.get(VOICE_ENTRY_CHANNEL_ID) != entry.id:
             return None
         guild = self._current_guild(member.guild)
         if guild is None:
@@ -113,21 +118,21 @@ class TempVoiceManager:
             raise RuntimeError("Bot 正在關閉，未修改臨時語音設定。")
         if type(value) is not bool:
             raise ValueError("invalid feature switch")
-        return save_settings(self._db, operation_id, "voice.enabled", {"enabled": value}, {"feature.temp_voice": value})
+        return self._settings.save("voice.enabled", {"enabled": value}, {VOICE_ENABLED: value}, operation_id=operation_id)
 
     @property
     def enabled(self) -> bool:
-        return setting(self._db, "feature.temp_voice")
+        return self._settings.get(VOICE_ENABLED)
 
     def stop_new_work(self) -> None:
         self._closing = True
 
     def status(self) -> TempVoiceStatus:
         (room_count,) = self._db.execute("SELECT COUNT(*) FROM voice_rooms").fetchone()
-        return TempVoiceStatus(setting(self._db, "voice.entry_channel_id"), room_count)
+        return TempVoiceStatus(self._settings.get(VOICE_ENTRY_CHANNEL_ID), room_count)
 
     def entry_problem(self, guild: discord.Guild) -> str | None:
-        entry_channel = guild.get_channel(setting(self._db, "voice.entry_channel_id"))
+        entry_channel = guild.get_channel(self._settings.get(VOICE_ENTRY_CHANNEL_ID))
         if not is_voice_channel(entry_channel):
             return "找不到已綁定的入口頻道，請在控制台重新選擇入口。"
         return self._bot_problem(guild, entry_channel)
@@ -188,7 +193,7 @@ class TempVoiceManager:
             if self._closed:
                 return
             after_channel = after.channel
-            entry_channel_id = setting(self._db, "voice.entry_channel_id")
+            entry_channel_id = self._settings.get(VOICE_ENTRY_CHANNEL_ID)
             moved_back = None
             if (
                 not member.bot
@@ -418,8 +423,9 @@ class TempVoiceManager:
             if self._closed:
                 return
             self._drop_room(channel.id)
-            if setting(self._db, "voice.entry_channel_id") == channel.id:
-                set_setting(self._db, "voice.entry_channel_id", None)
+            if self._settings.get(VOICE_ENTRY_CHANNEL_ID) == channel.id:
+                with transaction(self._db):
+                    self._settings.put({VOICE_ENTRY_CHANNEL_ID: None})
                 logging.warning("Temp voice entry channel deleted; reselect it in the admin panel.")
 
     async def confirm_effect(self, effect_id: str, resource_channel_id: int, guild: discord.Guild, *, still_current=None) -> str | None:
@@ -537,7 +543,9 @@ class TempVoiceManager:
             if self._is_room(channel.id):
                 return "不能把臨時語音頻道設為入口。"
             try:
-                save_settings(self._db, operation_id, "voice.entry", {"channel_id": channel.id}, {"voice.entry_channel_id": channel.id})
+                self._settings.save(
+                    "voice.entry", {"channel_id": channel.id}, {VOICE_ENTRY_CHANNEL_ID: channel.id}, operation_id=operation_id,
+                )
             except sqlite3.Error:
                 logging.exception("Temp voice entry channel could not be saved.")
                 return "臨時語音設定無法儲存。"
@@ -547,14 +555,15 @@ class TempVoiceManager:
     def _resolve_entry_channel(self, guild: discord.Guild) -> discord.VoiceChannel | None:
         if self._closing:
             return None
-        bound_channel_id = setting(self._db, "voice.entry_channel_id")
+        bound_channel_id = self._settings.get(VOICE_ENTRY_CHANNEL_ID)
         if bound_channel_id is None:
             return None
         bound_channel = guild.get_channel(bound_channel_id)
         if is_voice_channel(bound_channel):
             return bound_channel
 
-        set_setting(self._db, "voice.entry_channel_id", None)
+        with transaction(self._db):
+            self._settings.put({VOICE_ENTRY_CHANNEL_ID: None})
         logging.warning("Bound temp voice entry channel is gone; reselect it in the admin panel.")
         return None
 

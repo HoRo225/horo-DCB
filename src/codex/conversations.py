@@ -5,7 +5,7 @@ from collections.abc import Iterable
 from dataclasses import dataclass
 
 from src.codex.protocol import scope_matches
-from src.state import transaction
+from src.core.adapters.sqlite.db import transaction
 
 
 @dataclass(frozen=True, slots=True)

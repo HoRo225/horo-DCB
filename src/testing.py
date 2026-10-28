@@ -10,7 +10,10 @@ import discord
 from src.games import rana
 from src.games.blackjack import Card
 from src.games.store import GameStore
-from src.state import open_db, transaction
+from src.core.adapters.sqlite.db import open_db, transaction
+from src.core.adapters.sqlite.operations import OperationStore
+from src.core.adapters.sqlite.settings import SettingsStore
+from src.core.domain.settings import Setting
 
 
 class Fatal(BaseException):
@@ -25,6 +28,15 @@ def text(view: discord.ui.BaseView) -> str:
 
 def deck(*ranks: str) -> list[Card]:
     return [Card(rank, "S") for rank in reversed(ranks)]
+
+
+def put_setting(db: sqlite3.Connection, setting: Setting[object], value: object) -> None:
+    with transaction(db):
+        SettingsStore(db, OperationStore(db)).put({setting: value})
+
+
+def get_setting[T](db: sqlite3.Connection, setting: Setting[T]) -> T:
+    return SettingsStore(db, OperationStore(db)).get(setting)
 
 
 def memory_db(test: unittest.TestCase) -> sqlite3.Connection:

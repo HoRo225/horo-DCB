@@ -11,7 +11,7 @@ from src.admin.cog import AdminCog
 from src.admin.sessions import PanelSessionRegistry
 from src.effects import EffectService
 from src.action_service import ActionService
-from src.operations import OperationStore
+from src.core.adapters.sqlite.operations import OperationStore
 from src.ai.private_results import PrivateResultButton
 from src.ai.cog import AiCog
 from src.ai.access import AiSettings
@@ -24,7 +24,7 @@ from src.core.adapters.discord.channels import member_role_ids
 from src.games.cog import GamesCog
 from src.games.operations import GameOperations
 from src.games.store import GameStore
-from src.state import DB_PATH, hold_lock, open_db
+from src.core.adapters.sqlite.db import DB_PATH, hold_lock, open_db
 from src.steam.cog import SteamCog
 from src.steam.notifier import SteamFreeGamesNotifier
 from src.core.app.supervisor import stage

@@ -11,14 +11,32 @@ from src.ai.access_service import AiAccessService
 from src.codex.conversations import ConversationStore
 from src.codex.service import CodexService
 from src.codex.protocol import CodexError
-from src.state import open_db, set_setting
+from src.core.adapters.sqlite.db import open_db
+from src.testing import put_setting
+from src.ai.access import AI_ENABLED, AI_MODELS
+from src.codex.model_settings import DEFAULT_MODEL_SETTINGS, ModelChoice, ModelSettings
 
 
 class AiSettingsTests(unittest.TestCase):
     def setUp(self) -> None:
         self.db = open_db(":memory:")
         self.addCleanup(self.db.close)
-        set_setting(self.db, "feature.ai", True)
+        put_setting(self.db, AI_ENABLED, True)
+
+    def test_model_settings_default_round_trip_and_invalid(self) -> None:
+        self.assertEqual(AiSettings(self.db, 1).models, DEFAULT_MODEL_SETTINGS)
+        saved = ModelSettings(ModelChoice("gpt-b", "high"), None)
+        AiSettings(self.db, 1).save_models(saved)
+        self.assertEqual(AiSettings(self.db, 1).models, saved)
+        with self.assertRaises(ValueError):
+            AiSettings(self.db, 1).save_models(ModelSettings(ModelChoice("bad model"), None))
+        self.assertEqual(AiSettings(self.db, 1).models, saved)
+        put_setting(self.db, AI_MODELS, {"primary": "gpt-b"})
+        with self.assertRaises(ValueError):
+            AiSettings(self.db, 1).models
+        self.db.execute("UPDATE settings SET value = '{' WHERE key = 'ai.models'")
+        with self.assertRaises(ValueError):
+            AiSettings(self.db, 1).models
 
     def test_default_is_empty(self) -> None:
         access = AiSettings(self.db, 1)
@@ -63,7 +81,7 @@ class AiAccessServiceTests(unittest.IsolatedAsyncioTestCase):
     def setUp(self) -> None:
         self.db = open_db(":memory:")
         self.addCleanup(self.db.close)
-        set_setting(self.db, "feature.ai", True)
+        put_setting(self.db, AI_ENABLED, True)
         self.access = AiSettings(self.db, 1)
         self.access.set_allowlist(1, frozenset({10, 11}), roles=False)
         self.access.set_allowlist(1, frozenset({20}), roles=True)

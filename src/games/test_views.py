@@ -17,8 +17,8 @@ from src.games.operations import GameOperations
 from src.games.tables import LIVE_TABLES, BlackjackTableView, SlotTableView
 from src.games.table_runtime import dispatch_table, open_table, restore_tables
 from src.games.views import GamePickSelect, RulesButton
-from src.state import open_db
-from src.operations import OperationStore
+from src.core.adapters.sqlite.db import open_db
+from src.core.adapters.sqlite.operations import OperationStore
 from src.testing import deck, quiet_rana, seat, text as screen
 
 

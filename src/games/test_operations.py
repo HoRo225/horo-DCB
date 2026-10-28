@@ -12,8 +12,8 @@ from src.games.operations import GameOperations
 from src.games.tables import LIVE_TABLES, BlackjackTableView, SlotTableView
 from src.games.store import GameStore
 from src.games.table_runtime import open_table
-from src.operations import OperationStore
-from src.state import transaction
+from src.core.adapters.sqlite.operations import OperationStore
+from src.core.adapters.sqlite.db import transaction
 from src.testing import deck, text, memory_db, quiet_rana, seat, interaction as fake_interaction
 
 
@@ -403,6 +403,26 @@ class GameOperationsTest(unittest.IsolatedAsyncioTestCase):
                                                expected_token=self.store.state_token(1), operation_id="ai-open")
         self.assertTrue(result["ok"])
         self.assertEqual(self.guild.fetch_member.await_count, 2)
+
+
+class MidnightPruneTest(unittest.TestCase):
+    def test_midnight_job_prunes_old_operations(self) -> None:
+        from src.games.cog import GamesCog
+
+        db = memory_db(self)
+        operations = OperationStore(db)
+        with transaction(db):
+            operations.complete("op-done", "credit", {}, None)
+            db.execute("UPDATE operations SET created_at = unixepoch() - 31 * 86400")
+        bot = SimpleNamespace(operations=operations)
+        with patch("src.games.cog.daily", AsyncMock()) as daily:
+            asyncio.run(GamesCog(bot)._prune())
+        hour, job = daily.await_args.args
+        self.assertEqual(hour, 0)
+        with self.assertLogs(level="INFO") as logs:
+            asyncio.run(job())
+        self.assertIsNone(operations.get("op-done"))
+        self.assertIn("Pruned 0 effects, 1 operations and 0 requests older than 30 days.", logs.output[-1])
 
 
 if __name__ == "__main__":

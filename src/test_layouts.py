@@ -23,9 +23,14 @@ from src.games import slots
 from src.games.blackjack import RANKS, SUITS, Card, Round
 from src.games.tables import TABLES, BlackjackTableView, SlotTableView
 from src.games.views import lobby_view
-from src.state import set_setting, transaction
+from src.core.adapters.sqlite.db import transaction
+from src.testing import put_setting
 from src.steam.models import SteamFetchResult, SteamOffer
 from src.steam.views import build_offer_view
+from src.games.store import GAMES_HUB_MESSAGE
+from src.ai.access import AI_ENABLED
+from src.steam.notifier import STEAM_ENABLED, STEAM_ROLE_IDS
+from src.voice.manager import VOICE_ENABLED
 
 G, OWNER, MEMBER = 100, 200, 300
 
@@ -81,9 +86,9 @@ class LayoutBudgetTest(unittest.IsolatedAsyncioTestCase):
             patch.dict("src.core.adapters.discord.brand.APP_EMOJIS", emojis),
         ):
             db = testing.memory_db(self)
-            for key in ("feature.ai", "feature.temp_voice", "feature.steam_free_games"):
-                set_setting(db, key, True)
-            set_setting(db, "steam.role_ids", list(range(1, 26)))
+            for switch in (AI_ENABLED, VOICE_ENABLED, STEAM_ENABLED):
+                put_setting(db, switch, True)
+            put_setting(db, STEAM_ROLE_IDS, list(range(1, 26)))
             codex = MagicMock()
             codex.request_counts.return_value = (0, 0)
             bot = HoroBot(codex, guild_id=G, db=db)
@@ -132,7 +137,7 @@ class LayoutBudgetTest(unittest.IsolatedAsyncioTestCase):
             readings.confirm_logout = True
             render_ai(view, ("warn", "註" * 60))
             fits("render_ai confirming logout", view)
-            set_setting(db, "games.hub_message", [10**18, 10**18])
+            put_setting(db, GAMES_HUB_MESSAGE, [10**18, 10**18])
             render_games(view, ("warn", "註" * 60))
             fits("render_games with hub", view)
             self.assertIn(f"https://discord.com/channels/{G}/{10**18}/{10**18}", [getattr(i, "url", None) for i in view.walk_children()])

@@ -4,7 +4,7 @@ from datetime import datetime, timedelta, timezone
 from src.core.domain.clock import next_taipei_timestamp
 from src.games.blackjack import Round, total
 from src.games.store import GameStore
-from src.state import open_db, transaction
+from src.core.adapters.sqlite.db import open_db, transaction
 from src.testing import deck, seat
 
 

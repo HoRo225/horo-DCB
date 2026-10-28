@@ -9,12 +9,14 @@ import discord
 
 from src.core.adapters.discord.brand import BRAND_COLOUR, ICONS
 from src.admin.pages.steam import steam_state
-from src.state import open_db, set_setting, transaction
+from src.core.adapters.sqlite.db import open_db, transaction
+from src.testing import put_setting
 from src.testing import text
 from src.steam.models import SteamConfigurationError, SteamFetchResult, SteamOffer
 from src.steam.notifier import SteamFreeGamesNotifier
 from src.steam.provider import SteamOfferProvider
 from src.steam.views import SteamClaim, build_offer_view, offer_summary
+from src.steam.notifier import STEAM_ENABLED
 
 G, CH = 100, 10
 VIEW_SEND = discord.Permissions(view_channel=True, send_messages=True)
@@ -34,7 +36,7 @@ class SteamFreeGamesNotifierTest(unittest.IsolatedAsyncioTestCase):
         self.channel = self.text(CH)
         db = open_db(":memory:")
         self.addCleanup(db.close)
-        set_setting(db, "feature.steam_free_games", True)
+        put_setting(db, STEAM_ENABLED, True)
         self.notifier = SteamFreeGamesNotifier(db, G)
         self.notifier.provider = MagicMock(fetch_current_offers=AsyncMock(), close=AsyncMock())
         await self.notifier.bind_channel(self.guild, self.channel)

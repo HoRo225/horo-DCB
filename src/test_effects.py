@@ -11,12 +11,15 @@ import discord
 from src.effects import CONFIRMABLE, RETRYABLE, EffectService
 from src.admin.panel import AdminPanelView
 from src.admin.pages.effects import KINDS, ConfirmDelivery, EffectPick, render_effects
-from src.operations import OperationStore
-from src.state import open_db, set_setting, setting, transaction
+from src.core.adapters.sqlite.operations import OperationStore
+from src.core.adapters.sqlite.db import open_db, transaction
+from src.testing import put_setting, get_setting
 from src.steam.models import SteamOffer
 from src.steam.notifier import SteamFreeGamesNotifier
 from src.testing import interaction
 from src.voice.manager import TempVoiceManager
+from src.games.store import GAMES_HUB_MESSAGE
+from src.steam.notifier import STEAM_ENABLED
 
 GUILD, CHANNEL, ADMIN, BOT = 100, 101, 102, 103
 
@@ -190,7 +193,7 @@ class EffectsTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_manual_retry_does_not_publish_pending_while_waiting_or_after_revocation(self):
         effect = self.steam_effect()
-        set_setting(self.db, "feature.steam_free_games", True)
+        put_setting(self.db, STEAM_ENABLED, True)
         async with self.bot.steam_free_games._lock:
             task = asyncio.create_task(self.resolve(effect.effect_id, "retry"))
             await asyncio.sleep(0)
@@ -202,7 +205,7 @@ class EffectsTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_manual_retry_requires_whitelist_and_normal_owner_never_retries_unknown(self):
         effect = self.steam_effect()
-        set_setting(self.db, "feature.steam_free_games", True)
+        put_setting(self.db, STEAM_ENABLED, True)
         self.assertFalse(await self.bot.steam_free_games.retry_effect(effect.effect_id))
         self.channel.send.assert_not_awaited()
         self.channel.send.return_value = SimpleNamespace(id=777)
@@ -277,12 +280,12 @@ class EffectsTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.records.get_effect(effect.effect_id).status, "done")
 
     async def test_hub_delivery_confirmation_preserves_newer_hub_pointer(self):
-        set_setting(self.db, "games.hub_message", [CHANNEL, 999])
+        put_setting(self.db, GAMES_HUB_MESSAGE, [CHANNEL, 999])
         effect = self.effect(kind="game_hub_publish", payload={"previous_hub": [CHANNEL, 888]})
         self.channel.fetch_message.return_value = self.message(effect)
         self.assertIsNone(await self.resolve(effect.effect_id, "confirmed", message_id=501))
         self.assertEqual(self.records.get_effect(effect.effect_id).status, "done")
-        self.assertEqual(setting(self.db, "games.hub_message"), [CHANNEL, 999])
+        self.assertEqual(get_setting(self.db, GAMES_HUB_MESSAGE), [CHANNEL, 999])
 
     async def test_page_button_constants_match_what_the_service_accepts(self):
         self.bot.actions = SimpleNamespace(retry_effect=AsyncMock(return_value=True))
@@ -420,6 +423,30 @@ class EffectsPageTest(unittest.IsolatedAsyncioTestCase):
         await modal.on_submit(clicked)
         self.assertEqual(self.effects.resolve.await_args.args, ("first", "confirmed"))
         self.assertEqual(self.effects.resolve.await_args.kwargs["message_id"], 501)
+
+
+class PendingIndexTest(unittest.TestCase):
+    def test_pending_items_read_through_the_status_index(self) -> None:
+        db = open_db(":memory:")
+        self.addCleanup(db.close)
+        operations = OperationStore(db)
+        with transaction(db):
+            for identifier, status in (("a", "pending"), ("b", "unknown"), ("c", "failed"), ("d", "done")):
+                operations.create_effect(identifier, "voice.create", 3, {})
+                if status in {"unknown", "done"}:
+                    operations.update_effect(identifier, "unknown")
+                if status != "pending":
+                    operations.update_effect(identifier, status)
+        queries = []
+        db.set_trace_callback(queries.append)
+        try:
+            pending = EffectService(None, db).pending()
+        finally:
+            db.set_trace_callback(None)
+        self.assertEqual([effect.effect_id for effect in pending], ["a", "b", "c"])
+        [query] = queries
+        plan = " ".join(row[3] for row in db.execute("EXPLAIN QUERY PLAN " + query))
+        self.assertIn("USING INDEX discord_effects_status", plan)
 
 
 if __name__ == "__main__":

@@ -14,9 +14,11 @@ from src.codex.admission import AcceptedJob
 from src.codex.contracts import Action, IntentDecision
 from src.ai.discord import AiRequest, handle_message
 from src.codex.protocol import CodexError, CodexChatReply, conversation_key
-from src.operations import OperationStore
-from src.state import open_db, set_setting
+from src.core.adapters.sqlite.operations import OperationStore
+from src.core.adapters.sqlite.db import open_db
+from src.testing import put_setting
 from src.testing import text
+from src.ai.access import AI_CHANNEL_IDS, AI_ENABLED, AI_ROLE_IDS, AI_TEXT_DISPLAY
 
 GUILD, CHANNEL_A, CHANNEL_B, USER, ROLE, BOT = 700, 701, 702, 710, 720, 799
 PLAN = IntentDecision("plan", (Action("steam_query", {}),))
@@ -138,10 +140,10 @@ class FrontendIntentTest(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
         self.db = open_db(":memory:")
         self.addCleanup(self.db.close)
-        set_setting(self.db, "feature.ai", True)
-        set_setting(self.db, "feature.ai_text_display", False)
-        set_setting(self.db, "ai.channel_ids", [CHANNEL_A, CHANNEL_B])
-        set_setting(self.db, "ai.role_ids", [ROLE])
+        put_setting(self.db, AI_ENABLED, True)
+        put_setting(self.db, AI_TEXT_DISPLAY, False)
+        put_setting(self.db, AI_CHANNEL_IDS, [CHANNEL_A, CHANNEL_B])
+        put_setting(self.db, AI_ROLE_IDS, [ROLE])
         self.access, self.codex, self.actions = AiSettings(self.db, GUILD), FakeCodex(), FakeActions(self.db)
 
     async def handle(self, message):
@@ -275,7 +277,7 @@ class FrontendIntentTest(unittest.IsolatedAsyncioTestCase):
         self.actions._receipt_view = MagicMock(return_value=discord.ui.LayoutView())
         for display in (True, False):
             with self.subTest(display=display):
-                set_setting(self.db, "feature.ai_text_display", display)
+                put_setting(self.db, AI_TEXT_DISPLAY, display)
                 message = FakeMessage(800 + display)
                 await self.handle(message)
                 sent = message.channel.send.await_args
@@ -302,7 +304,7 @@ class FrontendIntentTest(unittest.IsolatedAsyncioTestCase):
         self.codex.chat.assert_not_awaited()
 
     async def test_progress_card_goes_once_the_receipt_lands_not_after_the_summary(self):
-        set_setting(self.db, "feature.ai_text_display", True)
+        put_setting(self.db, AI_TEXT_DISPLAY, True)
         message = FakeMessage()
         card = SimpleNamespace(delete=AsyncMock(), edit=AsyncMock())
         message.reply = AsyncMock(return_value=card)

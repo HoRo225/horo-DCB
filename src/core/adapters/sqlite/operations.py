@@ -3,50 +3,11 @@ from __future__ import annotations
 import json
 import sqlite3
 import uuid
-from dataclasses import dataclass
 from typing import Any
 
-from src.state import transaction
-
-
-def json_value(value: object) -> str:
-    return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False, allow_nan=False)
-
-
-@dataclass(frozen=True)
-class RequestRecord:
-    request_id: str
-    message_id: int
-    actor_id: int
-    guild_id: int
-    channel_id: int
-    plan: Any
-    status: str
-
-
-@dataclass(frozen=True)
-class OperationRecord:
-    operation_id: str
-    kind: str
-    inputs: dict[str, Any]
-    status: str
-    result: Any
-    resource_id: str | None
-
-
-@dataclass(frozen=True)
-class DiscordEffect:
-    effect_id: str
-    operation_id: str | None
-    kind: str
-    status: str
-    channel_id: int | None
-    message_id: int | None
-    nonce: str | None
-    payload: Any
-    error: str | None
-    created_at: int
-    updated_at: int
+from src.core.adapters.sqlite.db import transaction
+from src.core.domain.json import json_value
+from src.core.domain.records import DiscordEffect, OperationRecord, RequestRecord
 
 
 class OperationStore:

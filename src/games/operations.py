@@ -16,8 +16,8 @@ from src.games.blackjack import Round
 from src.games.hub import publish_hub
 from src.games.table_runtime import delete_message
 from src.games.tables import LIVE_TABLES, BlackjackTableView, SeatView, SlotTableView
-from src.operations import OperationStore
-from src.state import transaction
+from src.core.adapters.sqlite.operations import OperationStore
+from src.core.adapters.sqlite.db import transaction
 
 SEAT_GONE = "這張賭桌已失效，這局沒有結算；請從遊戲大廳重新開桌。"
 

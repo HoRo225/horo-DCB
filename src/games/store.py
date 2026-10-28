@@ -5,13 +5,20 @@ import sqlite3
 from uuid import uuid4
 from collections.abc import Iterable
 
-from src.state import set_setting, setting, transaction
-from src.settings_ops import save_settings
+from src.core.adapters.sqlite.db import transaction
+from src.core.adapters.sqlite.operations import OperationStore
+from src.core.adapters.sqlite.settings import SettingsStore
+from src.core.domain.settings import Setting
+
+GAMES_CHANNEL_ID: Setting[int | None] = Setting("games.channel_id", None)
+GAMES_ROLE_IDS: Setting[list[int]] = Setting("games.role_ids", [])
+GAMES_HUB_MESSAGE: Setting[list[int] | None] = Setting("games.hub_message", None)
 
 
 class GameStore:
     def __init__(self, db: sqlite3.Connection) -> None:
         self.db = db
+        self._settings = SettingsStore(db, OperationStore(db))
         self._player_locks: dict[int, asyncio.Lock] = {}
         self._state_tokens: dict[int, str] = {}
         self._hub_lock = asyncio.Lock()
@@ -28,25 +35,26 @@ class GameStore:
 
     @property
     def channel_id(self) -> int | None:
-        return setting(self.db, "games.channel_id")
+        return self._settings.get(GAMES_CHANNEL_ID)
 
     @property
     def role_ids(self) -> list[int]:
-        return setting(self.db, "games.role_ids")
+        return self._settings.get(GAMES_ROLE_IDS)
 
     @property
     def hub_message(self) -> list[int] | None:
-        return setting(self.db, "games.hub_message")
+        return self._settings.get(GAMES_HUB_MESSAGE)
 
     def set_channel(self, channel_id: int, *, operation_id: str | None = None) -> None:
-        save_settings(self.db, operation_id, "games.channel", {"channel_id": channel_id}, {"games.channel_id": channel_id})
+        self._settings.save("games.channel", {"channel_id": channel_id}, {GAMES_CHANNEL_ID: channel_id}, operation_id=operation_id)
 
     def set_roles(self, role_ids: Iterable[int], *, operation_id: str | None = None) -> None:
         selected = sorted(role_ids)
-        save_settings(self.db, operation_id, "games.roles", {"ids": selected}, {"games.role_ids": selected})
+        self._settings.save("games.roles", {"ids": selected}, {GAMES_ROLE_IDS: selected}, operation_id=operation_id)
 
     def set_hub(self, channel_id: int, message_id: int) -> None:
-        set_setting(self.db, "games.hub_message", [channel_id, message_id])
+        with transaction(self.db):
+            self._settings.put({GAMES_HUB_MESSAGE: [channel_id, message_id]})
 
     def replace_table(self, user_id: int, game: str, channel_id: int, message_id: int) -> None:
         if not self.db.in_transaction:

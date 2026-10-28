@@ -3,16 +3,11 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import TypeGuard
 
 DATA_DIR = Path("/app/data")
 CODEX_URL = "ws://codex:8765"
 CODEX_TOKEN_FILE = Path("/run/secrets/codex_ws_token")
 CODEX_WORKSPACE = "/workspace"
-
-
-def is_positive_int(value: object) -> TypeGuard[int]:
-    return type(value) is int and value > 0
 
 
 def required_env(name: str) -> str:

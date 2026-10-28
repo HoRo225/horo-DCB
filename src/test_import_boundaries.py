@@ -84,7 +84,8 @@ class ImportBoundaryTests(unittest.TestCase):
 
     def test_shared_layers_load_no_features(self) -> None:
         features = ("games", "voice", "steam", "ai", "admin")
-        for shared in ("state", "core.domain.clock", "core.app.supervisor", "core.adapters.discord.brand",
+        for shared in ("core.adapters.sqlite.db", "core.adapters.sqlite.settings", "core.adapters.sqlite.operations",
+                       "core.domain.clock","core.app.supervisor", "core.adapters.discord.brand",
                        "core.adapters.discord.channels", "core.adapters.discord.watchdog", "core.app.config", "cards"):
             modules = loaded_modules(f"src.{shared}")
             with self.subTest(shared):
@@ -107,7 +108,7 @@ class ImportBoundaryTests(unittest.TestCase):
                 self.assertFalse(any(name.endswith("views") or name.endswith(".cog") for name in loaded if name.startswith("src.")))
 
     def test_panel_pages_do_not_import_state(self) -> None:
-        pattern = re.compile(r"^\s*(?:from|import)\s+src\.state\b|^\s*from\s+src\s+import\s+.*\bstate\b", re.M)
+        pattern = re.compile(r"^\s*(?:from|import)\s+src\.core\.adapters\.sqlite\b", re.M)
         for path in (Path(__file__).parent / "admin" / "pages").glob("*.py"):
             with self.subTest(path.name):
                 self.assertIsNone(pattern.search(path.read_text(encoding="utf-8")))
