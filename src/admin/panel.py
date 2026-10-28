@@ -195,6 +195,18 @@ class AdminPanelView(ErrorNotice, discord.ui.LayoutView):
         else:
             await self.show(interaction, PAGES[key])
 
+    async def refresh(self, page: str, render: Callable[[], None]) -> None:
+        interaction = self._interaction
+        if interaction is None or self.page != page:
+            return
+        operation = self._begin_operation()
+        if not self.is_current(operation):
+            return
+        if (load := PAGES[page].load) is not None and not await load(self, operation):
+            return
+        render()
+        await self._edit_original(interaction, operation)
+
     async def show(self, interaction: discord.Interaction, page: Page, *, load: bool = True) -> None:
         async def work(operation: int) -> Callable[[], None] | None:
             if load and page.load is not None and not await page.load(self, operation):

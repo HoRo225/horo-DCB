@@ -16,6 +16,7 @@ from src.codex.model_settings import ModelChoice, ModelInfo, ModelSettings
 from src.codex.protocol import CodexRuntimeStatus
 from src.ai.query_views import help_view
 from src.codex.rate_limits import CodexRateLimits, CodexRateWindow
+from src.codex.service import DeviceLogin
 from src.bot import HoroBot
 from src.brand import ICONS, WHITE, full_rules, notice_view
 from src.games import slots
@@ -96,15 +97,7 @@ class LayoutBudgetTest(unittest.IsolatedAsyncioTestCase):
             bot.get_guild = MagicMock(return_value=interaction.guild)
             view = AdminPanelView(bot, bot.admin_panels.begin((G, OWNER)), interaction)
             view.state(AiReadings).codex_status = CodexRuntimeStatus(
-                available=True,
-                authenticated=False,
-                plan="plus",
-                sdk_version="0.159.0",
-                runtime_version="1.0",
-                thread_count=3,
-                ready=False,
-                reason="auth_required",
-                last_error="auth_required",
+                reason="auth_required", plan="plus", runtime_version="1.0", thread_count=3, last_error="auth_required",
             )
             view.state(AiReadings).rate_limits = CodexRateLimits(
                 int(time.time()), (CodexRateWindow("primary", 20, 300, None),), None
@@ -131,6 +124,14 @@ class LayoutBudgetTest(unittest.IsolatedAsyncioTestCase):
                 fits(f"{render.__name__} with note", view)
                 if render is not render_ai_access:
                     self.assertEqual(len(view.children), 2, render.__name__)
+            readings = view.state(AiReadings)
+            readings.login = DeviceLogin("login-1", "https://auth.openai.com/codex/device", "ABCD-1234")
+            render_ai(view, ("warn", "註" * 60))
+            fits("render_ai with device code", view)
+            readings.codex_status = CodexRuntimeStatus(reason="ready", authenticated=True, plan="plus", last_error="timeout")
+            readings.confirm_logout = True
+            render_ai(view, ("warn", "註" * 60))
+            fits("render_ai confirming logout", view)
             set_setting(db, "games.hub_message", [10**18, 10**18])
             render_games(view, ("warn", "註" * 60))
             fits("render_games with hub", view)

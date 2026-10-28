@@ -22,7 +22,7 @@ from src.ai.access import MAX_CODEX_ALLOWED_CHANNELS
 from src.ai.formatting import codex_error_text
 from src.codex.protocol import CodexError, CodexRuntimeStatus
 from src.codex.rate_limits import CodexRateLimits
-from src.codex.service import CodexService
+from src.codex.service import CodexService, DeviceLogin
 from src.brand import BRAND_COLOUR, ICONS, bar
 from src.discord_utils import (
     VIEW_AND_SEND,
@@ -49,6 +49,9 @@ class _AiState:
 class AiReadings:
     codex_status: CodexRuntimeStatus = CodexRuntimeStatus()
     rate_limits: CodexRateLimits = CodexRateLimits()
+    login: DeviceLogin | None = None
+    login_task: asyncio.Task[None] | None = None
+    confirm_logout: bool = False
 
 
 def ai_display(view: AdminPanelView) -> tuple[str, str]:
@@ -214,6 +217,9 @@ def ai_state(view: AdminPanelView) -> _AiState:
         label, detail = "需要處理", "白名單身分組尚未設定"
     elif allowlist_detail is not None:
         label, detail = "需要處理", allowlist_detail
+    elif status.reason == "unresponsive":
+        label, detail = "需要處理", "codex 無回應"
+        next_step = "codex 無回應，請手動重啟 codex 容器後再重新整理。"
     elif status.reason == "unavailable":
         label, detail = "需要處理", "codex 無法連線"
         next_step = "請確認 codex 服務正在執行且連線 token 設定正確，再重新整理。"
@@ -259,6 +265,7 @@ def render_ai(view: AdminPanelView, note: tuple[str, str] | None = None) -> None
                 f"{codex_error_text(code, view.bot_name)}\n**錯誤代碼**　`{code}`"
             )
         )
+    children.extend((spacer(), *account_items(view)))
     if rate_visible(view):
         children.extend((spacer(), rate_item(view)))
     children.extend(
@@ -301,6 +308,119 @@ async def _after_ai_toggle(
     if not await load_ai(view, operation):
         logging.warning("AI status refresh after toggle failed; showing previous status.")
     return note
+
+
+def account_items(view: AdminPanelView) -> tuple[discord.ui.Item, ...]:
+    readings = view.state(AiReadings)
+    status = readings.codex_status
+    if status.authenticated and readings.confirm_logout:
+        return (
+            discord.ui.TextDisplay("### 確認登出 Codex\n登出後 AI 功能會停止，直到再次登入。"),
+            discord.ui.ActionRow(
+                view.button("logout_confirm", "確認登出", on_click=lambda interaction: _logout(view, interaction),
+                            style=discord.ButtonStyle.danger, emoji=ICONS["leave"]),
+                view.button("logout_cancel", "取消", on_click=lambda interaction: _ask_logout(view, interaction, False),
+                            emoji=ICONS["cancel"]),
+            ),
+        )
+    if status.authenticated:
+        return (discord.ui.Section(
+            "### Codex 帳號\n已登入 ChatGPT 帳號。",
+            accessory=view.button("logout", "登出", on_click=lambda interaction: _ask_logout(view, interaction, True),
+                                  emoji=ICONS["leave"]),
+        ),)
+    if status.reason != "auth_required":
+        return ()
+    if (login := readings.login) is not None:
+        return (
+            discord.ui.TextDisplay(
+                "### 登入 Codex\n"
+                f"1. 開啟 {login.verification_url}\n"
+                f"2. 輸入代碼 `{login.user_code}`\n"
+                "完成後這裡會自動更新；代碼約 15 分鐘後失效。"
+            ),
+            discord.ui.ActionRow(
+                view.button("login_cancel", "取消登入", on_click=lambda interaction: _cancel_login(view, interaction),
+                            emoji=ICONS["cancel"]),
+            ),
+        )
+    return (discord.ui.Section(
+        "### Codex 帳號\n尚未登入。按「登入」取得裝置碼，再用 ChatGPT 帳號完成登入。",
+        accessory=view.button("login", "登入", on_click=lambda interaction: _start_login(view, interaction),
+                              style=discord.ButtonStyle.primary, emoji=ICONS["access"]),
+    ),)
+
+
+async def _start_login(view: AdminPanelView, interaction: discord.Interaction) -> None:
+    async def work(operation: int) -> Callable[[], None]:
+        readings = view.state(AiReadings)
+        try:
+            login = await view.codex_client.login_start()
+        except CodexError:
+            return lambda: render_ai(view, ("warn", "目前無法開始登入，請稍後再試。"))
+        if readings.login_task is not None:
+            readings.login_task.cancel()
+        readings.login = login
+        readings.login_task = asyncio.create_task(_watch_login(view, login))
+        view.track(readings.login_task)
+        return lambda: render_ai(view)
+
+    await view.run(interaction, work)
+
+
+async def _watch_login(view: AdminPanelView, login: DeviceLogin) -> None:
+    readings = view.state(AiReadings)
+    client = view.codex_client
+    try:
+        success = await client.wait_login(login.login_id)
+    except TimeoutError:
+        success = None
+    except asyncio.CancelledError:
+        await asyncio.shield(client.login_cancel(login.login_id))
+        raise
+    finally:
+        if readings.login is login:
+            readings.login, readings.login_task = None, None
+    if success is None:
+        await client.login_cancel(login.login_id)
+    note = ("ok", "已登入 Codex。") if success else ("warn", "登入未完成，請重新按「登入」。")
+    await view.refresh("ai", lambda: render_ai(view, note))
+
+
+async def _cancel_login(view: AdminPanelView, interaction: discord.Interaction) -> None:
+    async def work(operation: int) -> Callable[[], None]:
+        readings = view.state(AiReadings)
+        task, readings.login, readings.login_task = readings.login_task, None, None
+        if task is not None:
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+        return lambda: render_ai(view, ("info", "已取消登入。"))
+
+    await view.run(interaction, work)
+
+
+async def _ask_logout(view: AdminPanelView, interaction: discord.Interaction, confirm: bool) -> None:
+    async def work(operation: int) -> Callable[[], None]:
+        view.state(AiReadings).confirm_logout = confirm
+        return lambda: render_ai(view)
+
+    await view.run(interaction, work)
+
+
+async def _logout(view: AdminPanelView, interaction: discord.Interaction) -> None:
+    async def work(operation: int) -> Callable[[], None] | None:
+        view.state(AiReadings).confirm_logout = False
+        try:
+            await view.codex_client.logout()
+        except CodexError:
+            note = ("warn", "登出失敗，請稍後再試。")
+        else:
+            note = ("ok", "已登出 Codex。")
+        if not await load_ai(view, operation):
+            return None
+        return lambda: render_ai(view, note)
+
+    await view.run(interaction, work)
 
 
 def access_note(result: str, roles: bool, count: int) -> tuple[str, str]:

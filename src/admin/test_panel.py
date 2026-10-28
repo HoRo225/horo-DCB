@@ -12,6 +12,7 @@ from src.admin.pages.games import games_state
 from src.codex.model_settings import ModelInfo
 from src.codex.protocol import CodexRuntimeStatus
 from src.codex.rate_limits import CodexRateLimits, CodexRateWindow
+from src.codex.service import DeviceLogin
 from src.admin.cog import AdminCog
 from src.bot import HoroBot
 from src.brand import BRAND_COLOUR, ICONS, NEUTRAL_COLOUR, WARN_COLOUR
@@ -97,16 +98,9 @@ class PanelShutdownTests(unittest.IsolatedAsyncioTestCase):
         self.assertIs(registry._close_task, shared)
         self.assertFalse(registry.mutations)
 
-STATUS = CodexRuntimeStatus(
-    available=True,
-    authenticated=True,
-    plan="plus",
-    sdk_version="0.159.0",
-    runtime_version="1.0",
-    thread_count=3,
-    ready=True,
-    reason="ready",
-)
+STATUS = CodexRuntimeStatus(reason="ready", authenticated=True, plan="plus", runtime_version="1.0", thread_count=3)
+LOGGED_OUT = CodexRuntimeStatus(reason="auth_required", runtime_version="1.0")
+LOGIN = DeviceLogin("login-1", "https://auth.openai.com/codex/device", "ABCD-1234")
 MODELS = (
     ModelInfo("gpt-a", "Model A", "medium", ("low", "medium"), ("text",)),
     ModelInfo("gpt-b", "Model B", "high", ("high",), ("text",)),
@@ -829,6 +823,79 @@ class AdminPanelTest(unittest.IsolatedAsyncioTestCase):
         self.assertIn(f"## {ICONS['closed']} 管理控制台\n-# 閒置 10 分鐘，已自動關閉", text(self.view))
         self.assertEqual([card.accent_colour for card in self.view.children], [NEUTRAL_COLOUR])
         self.assertFalse([item for item in self.view.walk_children() if isinstance(item, (discord.ui.Button, discord.ui.Select))])
+
+    def logged_out(self) -> asyncio.Future[bool]:
+        self.codex.get_runtime_status.return_value = LOGGED_OUT
+        self.codex.login_start = AsyncMock(return_value=LOGIN)
+        self.codex.login_cancel = AsyncMock()
+        finished = asyncio.get_running_loop().create_future()
+
+        async def wait_login(login_id: str) -> bool:
+            return await finished
+        self.codex.wait_login = wait_login
+        return finished
+
+    async def test_device_login_shows_code_in_panel_then_redraws_when_done(self) -> None:
+        finished = self.logged_out()
+        await self.open_panel()
+        await self.go("樂奈")
+        self.assertIn("尚未登入。按「登入」取得裝置碼", text(self.view))
+        clicked = await self.click(self.button("登入"))
+        shown = self.screen(clicked)
+        self.assertIn("1. 開啟 https://auth.openai.com/codex/device\n2. 輸入代碼 `ABCD-1234`", shown)
+        self.button("取消登入")
+        self.codex.get_runtime_status.return_value = STATUS
+        finished.set_result(True)
+        for _ in range(20):
+            await asyncio.sleep(0)
+        redrawn = clicked.edit_original_response.await_args.kwargs["view"]
+        self.assertIs(redrawn, self.view)
+        self.assertIn("✅ 已登入 Codex。", text(redrawn))
+        self.assertIn("已登入 ChatGPT 帳號。", text(redrawn))
+        self.button("登出")
+        self.codex.login_cancel.assert_not_awaited()
+
+    async def test_device_login_is_cancelled_by_button_or_closing_the_panel(self) -> None:
+        self.logged_out()
+        await self.open_panel()
+        await self.go("樂奈")
+        await self.click(self.button("登入"))
+        clicked = await self.click(self.button("取消登入"))
+        self.codex.login_cancel.assert_awaited_once_with("login-1")
+        self.assertIn("已取消登入。", self.screen(clicked))
+        self.button("登入")
+        await self.click(self.button("登入"))
+        await self.bot.admin_panels.close(deadline=asyncio.get_running_loop().time() + 5)
+        self.assertEqual(self.codex.login_cancel.await_count, 2)
+
+    async def test_logout_asks_for_confirmation_first(self) -> None:
+        self.codex.logout = AsyncMock()
+        await self.open_panel()
+        await self.go("樂奈")
+        shown = self.screen(await self.click(self.button("登出")))
+        self.assertIn("### 確認登出 Codex", shown)
+        self.codex.logout.assert_not_awaited()
+        self.assertNotIn("確認登出 Codex", self.screen(await self.click(self.button("取消"))))
+        await self.click(self.button("登出"))
+        self.codex.get_runtime_status.return_value = LOGGED_OUT
+        clicked = await self.click(self.button("確認登出"))
+        self.codex.logout.assert_awaited_once()
+        shown = self.screen(clicked)
+        self.assertIn("✅ 已登出 Codex。", shown)
+        self.assertIn("尚未登入。", shown)
+
+    async def test_unresponsive_codex_is_named_on_ai_page_and_overview(self) -> None:
+        self.codex.get_runtime_status.return_value = CodexRuntimeStatus(reason="unresponsive")
+        self.bot.ai_settings.set_allowlist(G, frozenset({600}), roles=False)
+        self.bot.ai_settings.set_allowlist(G, frozenset({700}), roles=True)
+        self.channels[600] = text_channel(600, self.guild)
+        self.role(700)
+        shown = self.screen(await self.open_panel())
+        self.assertIn("**🤖 樂奈**\ncodex 無回應", shown)
+        shown = self.screen(await self.go("樂奈"))
+        self.assertIn("codex 無回應，請手動重啟 codex 容器後再重新整理。", shown)
+        with self.assertRaises(StopIteration):
+            self.button("登入")
 
     async def test_replaced_or_shut_down_panel_is_deleted(self) -> None:
         first = await self.open_panel()

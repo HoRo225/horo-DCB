@@ -612,6 +612,10 @@ class CodexService:
             future = self._logins.get(event.params.get("loginId"))
             if future is not None and not future.done():
                 future.set_result(event.params.get("success") is True)
+        if event.method == "account/updated" and event.params.get("authMode") is not None:
+            for future in self._logins.values():
+                if not future.done():
+                    future.set_result(True)
         if event.method in ("account/login/completed", "account/updated"):
             self._rate_next = 0.0
             self._quota_due = 0.0
