@@ -5,7 +5,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import discord
 
-from src.core.adapters.discord.live import LiveGuild
+from src.core.adapters.discord.live import LiveGuild, name_text
 from src.core.app.ports import Actor, Source
 from src.core.domain.actions import REGULAR_ROLES, TEXT_CHANNEL, Target
 from tests.support.discord import Client, Guild, channel, member, thread
@@ -51,6 +51,13 @@ class LiveGuildTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.live.bot_name(), "HoRo")
         self.client.guilds = {}
         self.assertEqual(self.live.bot_name(), "HoRo")
+
+    def test_name_text_spaces_a_latin_name_only_against_words(self) -> None:
+        self.assertEqual(name_text("{name}能幫你做的事", "HoRo"), "HoRo 能幫你做的事")
+        self.assertEqual(name_text("{name}能幫你做的事", "樂奈"), "樂奈能幫你做的事")
+        self.assertEqual(name_text("比{name}更接近；{name}也是", "HoRo"), "比 HoRo 更接近；HoRo 也是")
+        self.assertEqual(name_text("「{name}」 @{name} {name}。", "HoRo"), "「HoRo」 @HoRo HoRo。")
+        self.assertEqual(name_text("沒有名字", "HoRo"), "沒有名字")
 
     def test_admin_and_avatar_follow_the_cached_member(self) -> None:
         self.assertFalse(self.live.admin(USER))

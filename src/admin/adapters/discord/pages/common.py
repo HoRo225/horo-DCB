@@ -21,6 +21,24 @@ def status_text(label: str) -> str:
     return f"{ICONS[STATUS_DOTS[label]]} {label}"
 IDLE_TIMEOUT_SECONDS = 600.0
 TOGGLE_REPEAT_SECONDS = 1.5
+MENTION_LIMIT = 10
+
+
+def mention(entity_id: int, found: bool, *, role: bool = False) -> str:
+    if not found:
+        return f"（已刪除）ID {entity_id}"
+    return f"<@&{entity_id}>" if role else f"<#{entity_id}>"
+
+
+def mentions(view: AdminPanelView, ids: Iterable[int], *, role: bool = False) -> str:
+    guild = view.services.live.guild()
+    lookup = None if guild is None else guild.get_role if role else guild.get_channel
+    ordered = sorted(ids)
+    shown = "、".join(
+        mention(entity_id, lookup is None or lookup(entity_id) is not None, role=role)
+        for entity_id in ordered[:MENTION_LIMIT]
+    )
+    return f"{shown} 等 {len(ordered)} 個" if len(ordered) > MENTION_LIMIT else shown
 
 
 def no_guild_note() -> tuple[str, str]:
@@ -129,8 +147,10 @@ def _join(verb: str, label: str) -> str:
     return f"{verb} {label}" if label[:1].isascii() else f"{verb}{label}"
 
 
-def feature_button(
+def feature_section(
     view: AdminPanelView,
+    heading: str,
+    body: str,
     key: str,
     label: str,
     *,
@@ -141,7 +161,7 @@ def feature_button(
     ]
     | None = None,
     confirm_off: Callable[[AdminPanelView], tuple[str, str]] | None = None,
-) -> discord.ui.Button:
+) -> discord.ui.Section:
     enabled = owner.enabled
 
     async def click(interaction: discord.Interaction) -> None:
@@ -173,10 +193,14 @@ def feature_button(
 
         await view.run(interaction, work)
 
-    return view.button(
-        f"toggle_{key}",
-        _join("關閉" if enabled else "開啟", label.format(name=view.bot_name)),
-        on_click=click,
-        style=discord.ButtonStyle.secondary if enabled else discord.ButtonStyle.primary,
-        emoji=ICONS["settings"],
+    state = f"{ICONS['dotok']} 已開啟" if enabled else f"{ICONS['dotoff']} 已關閉"
+    return discord.ui.Section(
+        f"{heading}\n{state}\n{body}",
+        accessory=view.button(
+            f"toggle_{key}",
+            _join("關閉" if enabled else "開啟", label.format(name=view.bot_name)),
+            on_click=click,
+            style=discord.ButtonStyle.secondary if enabled else discord.ButtonStyle.primary,
+            emoji=ICONS["settings"],
+        ),
     )

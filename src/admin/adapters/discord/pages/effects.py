@@ -5,7 +5,7 @@ from dataclasses import dataclass
 import discord
 
 from src.core.adapters.discord.brand import ICONS, ErrorNotice, send_notice
-from src.admin.adapters.discord.pages.common import footer_note
+from src.admin.adapters.discord.pages.common import footer_note, mention
 
 STATES = {"pending": "待送出", "unknown": "結果不明", "failed": "送出失敗"}
 
@@ -50,7 +50,7 @@ async def resolve(view, interaction, resolution, effect_id, message_id=None):
 
 def channel_name(view, channel_id: int | None) -> str:
     channel = view.guild.get_channel_or_thread(channel_id) if channel_id else None
-    return f"#{channel.name}" if channel is not None else f"頻道 ID {channel_id}"
+    return f"#{channel.name}" if channel is not None else mention(channel_id, False)
 
 
 def render_effects(view, note=None):
@@ -74,9 +74,10 @@ def render_effects(view, note=None):
         children.append(discord.ui.ActionRow(select))
         chosen = next(item for item in pending if item.effect.effect_id == picked.effect_id)
         effect, can_confirm, can_retry = chosen.effect, chosen.confirmable, chosen.retryable
+        origin = mention(effect.channel_id, view.guild.get_channel_or_thread(effect.channel_id) is not None)
         children.append(discord.ui.TextDisplay(
             f"**{chosen.kind.label}** · {STATES.get(effect.status, '待處理')}\n"
-            f"**原頻道**　<#{effect.channel_id}> · <t:{effect.updated_at}:f>"
+            f"**原頻道**　{origin} · <t:{effect.updated_at}:f>"
             + ("" if can_confirm or can_retry else "\n這類項目不能核對或重送，請到原頻道確認並清理後按略過。")))
         async def confirm(interaction):
             await interaction.response.send_modal(ConfirmDelivery(view, view.state(EffectPick).effect_id))

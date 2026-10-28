@@ -6,10 +6,11 @@ from typing import TYPE_CHECKING
 import discord
 
 from src.core.adapters.discord.brand import BRAND_COLOUR, ICONS, card_title, full_rules, reported, send_notice
+from src.core.adapters.discord.live import name_text
 from src.games.adapters.discord.format import slot_symbol
 from src.games.app.lobby import Lobby
 from src.games.app.play import Move, Play
-from src.games.domain.catalog import GAMES
+from src.games.domain.catalog import GAMES, Game
 
 if TYPE_CHECKING:
     from src.games.adapters.discord.access import DiscordPlayers
@@ -23,15 +24,21 @@ class LobbyView(discord.ui.LayoutView):
         return False
 
 
-def pick_select() -> discord.ui.Select:
+def pick_select(host: str) -> discord.ui.Select:
     return discord.ui.Select(custom_id="horo:game:pick", placeholder="選擇遊戲", options=[
-        discord.SelectOption(label=game.title, value=key, emoji=ICONS[key], description=game.summary)
+        discord.SelectOption(label=game.title, value=key, emoji=ICONS[key], description=name_text(game.summary, host))
         for key, game in GAMES.items()
     ])
 
 
 def hub_status(host: str) -> str:
-    return f"選一個遊戲，和{discord.utils.escape_markdown(host)}玩一局"
+    return name_text("選一個遊戲，和{name}玩一局", discord.utils.escape_markdown(host))
+
+
+def rules_view(game: Game, host: str) -> discord.ui.LayoutView:
+    name = discord.utils.escape_markdown(host)
+    return full_rules(f"{ICONS[game.key]} {game.title} 完整規則",
+                      [(heading, name_text(text, name)) for heading, text in game.rules(slot_symbol)])
 
 
 def lobby_view(host: str, *, banner: bool = True) -> discord.ui.LayoutView:
@@ -45,7 +52,7 @@ def lobby_view(host: str, *, banner: bool = True) -> discord.ui.LayoutView:
         title = [card_title(f"{ICONS['games']} 遊戲大廳", status)]
     view = LobbyView(timeout=None)
     view.add_item(discord.ui.Container(*title, accent_colour=BRAND_COLOUR))
-    view.add_item(discord.ui.ActionRow(pick_select()))
+    view.add_item(discord.ui.ActionRow(pick_select(host)))
     return view
 
 
@@ -54,7 +61,7 @@ def game_pick_item(
 ) -> type[discord.ui.DynamicItem[discord.ui.Select]]:
     class GamePickSelect(discord.ui.DynamicItem[discord.ui.Select], template=r"horo:game:pick"):
         def __init__(self) -> None:
-            super().__init__(pick_select())
+            super().__init__(pick_select(tables.host()))
 
         @classmethod
         async def from_custom_id(cls, interaction, item, match, /) -> GamePickSelect:
@@ -96,7 +103,6 @@ def rules_item(tables: DiscordTables) -> type[discord.ui.DynamicItem[discord.ui.
             if (game := GAMES.get(self.game)) is None:
                 await send_notice(interaction, RETIRED, items=tables.hub_link())
                 return
-            view = full_rules(f"{ICONS[game.key]} {game.title} 完整規則", game.rules(slot_symbol))
-            await interaction.response.send_message(view=view, ephemeral=True)
+            await interaction.response.send_message(view=rules_view(game, tables.host()), ephemeral=True)
 
     return RulesButton

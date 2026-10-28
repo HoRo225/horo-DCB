@@ -13,8 +13,9 @@ from src.admin.adapters.discord.pages.common import (
     PendingConfirm,
     status_text,
     defaults,
-    feature_button,
+    feature_section,
     footer_note,
+    mentions,
     role_select,
     spacer,
 )
@@ -201,7 +202,7 @@ def ai_state(view: AdminPanelView) -> _AiState:
     allowlist_detail = codex_stale_detail(stale_counts) or permission_detail
     next_step = None
     if not access.enabled:
-        label, detail = "停用", view.bot_text(after=f"未開啟，可在「{view.bot_name_md}」頁開啟")
+        label, detail = "停用", "未開啟"
     elif not access.channel_ids:
         label, detail = "需要處理", "白名單頻道尚未設定"
     elif not access.configured:
@@ -237,19 +238,18 @@ def render_ai(view: AdminPanelView, note: tuple[str, str] | None = None) -> None
     authenticated = "已登入" if status.authenticated else "未登入"
     children = view.header(view.bot_name_md, "ai")
     children.append(
-        discord.ui.Section(
-            f"### 目前狀態\n{status_text(ai.label)} · **{plan} · {authenticated}**",
-            accessory=feature_button(
-                view,
-                "ai",
-                "{name}",
-                owner=view.services.ai,
-                render=render_ai,
-                after=_after_ai_toggle,
-                confirm_off=lambda view: (
-                    view.bot_text("確認關閉"),
-                    view.bot_text("關閉後會立即中斷所有進行中的", "請求，成員也無法再使用，直到重新開啟。"),
-                ),
+        feature_section(
+            view,
+            "### 目前狀態",
+            f"{status_text(ai.label)} · **{plan} · {authenticated}**",
+            "ai",
+            "{name}",
+            owner=view.services.ai,
+            render=render_ai,
+            after=_after_ai_toggle,
+            confirm_off=lambda view: (
+                view.bot_text("確認關閉"),
+                view.bot_text("關閉後會立即中斷所有進行中的", "請求，成員也無法再使用，直到重新開啟。"),
             ),
         )
     )
@@ -296,12 +296,7 @@ def access_note(result: str, roles: bool, count: int) -> tuple[str, str]:
     return "ok", f"已更新 {count} 個白名單{label}。"
 
 
-def codex_channel_select(
-    view: AdminPanelView,
-    *,
-    disabled: bool,
-    channel_ids: frozenset[int],
-) -> discord.ui.ChannelSelect:
+def codex_channel_select(view: AdminPanelView, channel_ids: frozenset[int]) -> discord.ui.ChannelSelect:
     item = view.control(
         ("select", "codex_channel"),
         lambda: discord.ui.ChannelSelect(
@@ -313,7 +308,6 @@ def codex_channel_select(
             view, interaction, tuple(value.resolve() for value in item.values), roles=False
         ),
     )
-    item.disabled = disabled
     item.placeholder = view.bot_text("選擇", "白名單文字頻道（可複選）", markdown=False)
     item.default_values = defaults(discord.SelectDefaultValue.from_channel, sorted(channel_ids))
     return item
@@ -388,9 +382,7 @@ def render_ai_access(view: AdminPanelView, note: tuple[str, str] | None = None) 
     permission_detail = ai.permission_detail
     channel_ids = view.services.ai.channel_ids
     role_ids = view.services.ai.role_ids
-    if not view.services.ai.enabled:
-        channel_detail = view.bot_text(after=f"未開啟，可在「{view.bot_name_md}」頁開啟")
-    elif not channel_ids:
+    if not channel_ids:
         channel_detail = view.bot_text("請選擇可使用", "的文字頻道")
     else:
         channel_detail = view.bot_text("僅所選頻道及其討論串可使用")
@@ -410,18 +402,17 @@ def render_ai_access(view: AdminPanelView, note: tuple[str, str] | None = None) 
     children = view.header(view.bot_text(after="使用權限"), "ai_access")
     children.extend(
         (
-            discord.ui.TextDisplay(f"### 白名單頻道 · {len(channel_ids)} 個\n{channel_detail}"),
-            discord.ui.ActionRow(
-                codex_channel_select(
-                    view,
-                    disabled=not view.services.ai.enabled,
-                    channel_ids=channel_ids,
-                )
+            discord.ui.TextDisplay(
+                f"### 白名單頻道 · {len(channel_ids)} 個\n"
+                + (f"{mentions(view, channel_ids)}\n" if channel_ids else "")
+                + channel_detail
             ),
+            discord.ui.ActionRow(codex_channel_select(view, channel_ids)),
             spacer(),
             discord.ui.TextDisplay(
                 f"### 白名單身分組 · {len(role_ids)} 個\n"
-                f"{role_detail} · 目前操作者："
+                + (f"{mentions(view, role_ids, role=True)}\n" if role_ids else "")
+                + f"{role_detail} · 目前操作者："
                 f"{'已允許' if current_allowed else '未允許'}"
             ),
             discord.ui.ActionRow(
@@ -431,7 +422,7 @@ def render_ai_access(view: AdminPanelView, note: tuple[str, str] | None = None) 
                     "選擇白名單身分組（清空即暫停）",
                     role_ids,
                     lambda i, roles: pick_codex_roles(view, i, roles),
-                    disabled=not view.services.ai.enabled or not channel_ids,
+                    disabled=not channel_ids,
                 )
             ),
             discord.ui.Separator(),

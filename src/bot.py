@@ -109,7 +109,7 @@ def compose(bot: HoroBot, codex: CodexService, db: sqlite3.Connection, guild_id:
         voice_actions(voice, live),
         steam_actions(steam, live),
         admin_actions(lambda: ai_settings.enabled, lambda: voice.enabled,
-                      lambda: steam.status().running, lambda: len(effects.pending())),
+                      lambda: steam.status().running, lambda: len(effects.pending()), lobby.attention),
         effect_actions(effects),
     )
     actions = ActionEngine(registry, operations, live, receipts, supervisor.group("actions", WORK))

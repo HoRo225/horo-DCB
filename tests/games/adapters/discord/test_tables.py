@@ -16,6 +16,7 @@ from tests.support.games import deck
 
 AVATAR = "https://cdn.example.com/a.png"
 HOST = "睦_頭"
+BLACKJACK_BRIEF = "玩法　叫牌或停牌，比睦\\_頭更接近 21 點就贏"
 
 
 def table(state, **fields) -> LiveTable:
@@ -42,7 +43,9 @@ class BlackjackViewTests(unittest.TestCase):
     def test_new_table_shows_the_brief_and_a_start_button(self) -> None:
         view = seat_view(table(Blackjack()))
         self.assertEqual(colour(view), BRAND_COLOUR)
-        self.assertIn(GAMES["blackjack"].brief, testing.text(view))
+        self.assertIn(BLACKJACK_BRIEF, testing.text(view))
+        self.assertNotIn("{name}", testing.text(view))
+        self.assertIn("比 HoRo 更接近", testing.text(tables.seat_view(table(Blackjack()), "HoRo")))
         self.assertIn("## 🃏 21 點\n-# <@1>", testing.text(view))
         self.assertEqual(labels(view), ["開局", "完整規則", "離桌"])
 
@@ -51,7 +54,7 @@ class BlackjackViewTests(unittest.TestCase):
         self.assertEqual(labels(view), ["叫牌", "停牌"])
         self.assertIn("### 睦\\_頭　明牌 9 點\n## `9♠` 🂠", testing.text(view))
         self.assertIn("### 你　18 點\n## `10♠` `8♠`", testing.text(view))
-        self.assertNotIn(GAMES["blackjack"].brief, testing.text(view))
+        self.assertNotIn(BLACKJACK_BRIEF, testing.text(view))
 
     def test_missing_avatars_leave_plain_text(self) -> None:
         self.assertEqual(thumbnails(seat_view(table(Blackjack(Round(deck("10", "10", "8", "8")))))), [])

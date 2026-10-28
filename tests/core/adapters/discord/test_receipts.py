@@ -25,7 +25,7 @@ class ReceiptTests(unittest.IsolatedAsyncioTestCase):
         self.addCleanup(self.db.close)
         self.operations = OperationStore(self.db)
         self.guild = Guild(G).add(member(USER))
-        self.guild.me = SimpleNamespace(id=BOT)
+        self.guild.me = SimpleNamespace(id=BOT, display_name="睦_頭")
         self.posted = SimpleNamespace(id=SENT, edit=AsyncMock())
         self.permissions = discord.Permissions(view_channel=True, send_messages=True)
         self.channel = SimpleNamespace(id=CHANNEL, guild=self.guild, send=AsyncMock(return_value=self.posted),
@@ -37,7 +37,7 @@ class ReceiptTests(unittest.IsolatedAsyncioTestCase):
         self.client.get_partial_messageable = lambda channel_id: SimpleNamespace(
             send=self.resent, get_partial_message=lambda message_id: SimpleNamespace(id=message_id, edit=AsyncMock()),
         )
-        self.render = AsyncMock(return_value={"view": receipt_view([DONE]), "attachments": []})
+        self.render = AsyncMock(return_value={"view": receipt_view([DONE], name="睦_頭"), "attachments": []})
         registry = ActionRegistry()
         registry.register(ActionGroup("info", (
             ActionSpec("help", {}, admin=False, effect=Query("功能說明", self.render)),
@@ -115,7 +115,7 @@ class ExplainTests(ReceiptTests):
         view = self.posted.edit.await_args.kwargs["view"]
         self.assertNotIn("9876", text(view))
         self.assertIn(f"{ICONS['ok']} **完成**　已查詢功能說明。", text(view))
-        self.assertEqual(view.children[0].children[-1].content, "> **樂奈**　完成")
+        self.assertEqual(view.children[0].children[-1].content, "> **睦\\_頭**　完成")
 
 
 class ResendTests(ReceiptTests):

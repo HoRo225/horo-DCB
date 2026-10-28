@@ -11,7 +11,7 @@ import discord
 from src.admin.adapters.discord.pages.common import (
     status_text,
     channel_select,
-    feature_button,
+    feature_section,
     footer_note,
     no_guild_note,
 )
@@ -73,18 +73,15 @@ def render_voice(view: AdminPanelView, note: tuple[str, str] | None = None) -> N
     status = voice.status
     children = view.header("臨時語音", "voice")
     children.append(
-        discord.ui.Section(
-            "### 目前狀態\n"
-            f"{status_text(voice.label)} · **{status.room_count} 個臨時語音頻道**\n"
-            f"{voice.entry}",
-            accessory=feature_button(
-                view,
-                "temp_voice",
-                "臨時語音",
-                owner=view.services.voice,
-                render=render_voice,
-                after=_after_voice_toggle,
-            ),
+        feature_section(
+            view,
+            "### 目前狀態",
+            f"{status_text(voice.label)} · **{status.room_count} 個臨時語音頻道**\n{voice.entry}",
+            "temp_voice",
+            "臨時語音",
+            owner=view.services.voice,
+            render=render_voice,
+            after=_after_voice_toggle,
         )
     )
     children.append(

@@ -56,6 +56,15 @@ def as_actor(member: discord.Member) -> Actor:
     )
 
 
+def name_text(template: str, name: str) -> str:
+    before, found, after = template.partition("{name}")
+    if not found:
+        return template
+    left = " " if before[-1:].isalnum() and name[:1].isascii() else ""
+    right = " " if after[:1].isalnum() and name[-1:].isascii() else ""
+    return f"{before}{left}{name}{right}{name_text(after, name)}"
+
+
 class LiveGuild:
     def __init__(self, client: discord.Client, guild_id: int, closing: Callable[[], bool]) -> None:
         self._client = client

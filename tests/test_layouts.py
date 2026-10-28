@@ -16,13 +16,12 @@ from src.admin.adapters.discord.panel import PAGES
 from src.ai import DeviceLogin, ModelChoice, ModelInfo, ModelSettings, RateLimits, RateWindow, RuntimeStatus
 from src.ai.adapters.discord.help import help_view
 from src.ai.adapters.sqlite.store import AI_ENABLED
-from src.core.adapters.discord.brand import ICONS, WHITE, full_rules, notice_view
+from src.core.adapters.discord.brand import ICONS, WHITE, notice_view
 from src.core.adapters.discord.receipts import receipt_view
 from src.core.adapters.sqlite.db import transaction
 from src.games import GAMES, LiveTable
-from src.games.adapters.discord.format import slot_symbol
 from src.games.adapters.discord.tables import seat_view
-from src.games.adapters.discord.views import lobby_view
+from src.games.adapters.discord.views import lobby_view, rules_view
 from src.games.adapters.sqlite.store import GAMES_HUB_MESSAGE
 from src.games.domain import slots
 from src.games.domain.blackjack import RANKS, SUITS, Card, Round
@@ -141,6 +140,13 @@ class LayoutBudgetTest(unittest.IsolatedAsyncioTestCase):
                     self.assertEqual(len(view.children), 2, render.__name__)
             self.assertLessEqual(counts["render_steam"], STEAM_CAP)
             self.assertLessEqual(counts["ai_models"], MODELS_CAP)
+            for switch in (AI_ENABLED, VOICE_ENABLED, STEAM_ENABLED):
+                put_setting(db, switch, False)
+            for render in (render_ai, render_ai_access, render_voice, render_steam):
+                render(view, ("warn", "註" * 60))
+                self.assertLessEqual(fits(f"{render.__name__} switched off", view), counts[render.__name__])
+            for switch in (AI_ENABLED, VOICE_ENABLED, STEAM_ENABLED):
+                put_setting(db, switch, True)
             readings, login = view.state(AiReadings), view.state(CodexLogin)
             login.login = DeviceLogin("login-1", "https://auth.openai.com/codex/device", "ABCD-1234")
             render_ai(view, ("warn", "註" * 60))
@@ -169,7 +175,7 @@ class LayoutBudgetTest(unittest.IsolatedAsyncioTestCase):
             fits("lobby", lobby_view(host))
             fits("lobby without banner", lobby_view(host, banner=False))
             for game in GAMES.values():
-                fits(f"{game.key} full rules", full_rules(f"{ICONS[game.key]} {game.title} 完整規則", game.rules(slot_symbol)))
+                fits(f"{game.key} full rules", rules_view(game, host))
 
             table = LiveTable(OWNER, Blackjack(), "t" * 32, avatar_url=image)
             fits("blackjack open", seat_view(table, host))
@@ -209,7 +215,7 @@ class LayoutBudgetTest(unittest.IsolatedAsyncioTestCase):
             receipt = [{"ok": n % 2 == 0, "text": "果" * 200, "private_ref": f"ref{n}"} for n in range(3)] + [
                 {"ok": True, "text": "果" * 200}]
             for said in ("", "說" * 1500):
-                fits(f"ai receipt explained={bool(said)}", receipt_view(receipt, said, buttons=admin.receipts.private_results.make_buttons(
+                fits(f"ai receipt explained={bool(said)}", receipt_view(receipt, said, name=host, buttons=admin.receipts.private_results.make_buttons(
                     item["private_ref"] for item in receipt if "private_ref" in item)))
             fits("notice", notice_view("註" * 2000, title="標" * 100))
 

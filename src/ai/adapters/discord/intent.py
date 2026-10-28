@@ -61,7 +61,7 @@ async def route_intent(request: AiRequest, models: ModelSettings) -> bool:
     if not outcome.published:
         if await request.can_send():
             public = [{key: value for key, value in result.items() if key != "private_ref"} for result in results]
-            await reply(request.message, view=receipt_view(public))
+            await reply(request.message, view=receipt_view(public, name=request.bot_name))
         return True
     await request.progress.finish()
     if prior is None and request.job.current and await request.can_send():

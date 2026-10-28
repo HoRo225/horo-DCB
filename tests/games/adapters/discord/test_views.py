@@ -4,7 +4,6 @@ from unittest.mock import MagicMock
 
 import discord
 
-from src.games import GAMES
 from src.games.adapters.discord.views import RETIRED, game_pick_item, lobby_view, rules_item
 from tests.support import testing
 from tests.support.games import CHANNEL, GUILD, PLAYER, ROLE, FakeReply, GameHarness
@@ -21,6 +20,9 @@ class Presenter:
 
     def hub_link(self) -> list[discord.ui.Button]:
         return [discord.ui.Button(label="前往遊戲大廳", url=HUB_URL)]
+
+    def host(self) -> str:
+        return "HoRo"
 
     async def lobby_message(self, interaction: discord.Interaction) -> dict[str, object]:
         self.redrawn_after.append(self.seat())
@@ -52,7 +54,8 @@ class LobbyViewTests(unittest.TestCase):
                 [select] = menu.children
                 self.assertEqual(select.custom_id, "horo:game:pick")
                 self.assertEqual([(option.value, option.label, option.description) for option in select.options],
-                                 [(key, game.title, game.summary) for key, game in GAMES.items()])
+                                 [("blackjack", "21 點", "跟睦_頭比點數 · 叫牌或停牌"),
+                                  ("slots", "拉霸", "3×3 盤面 · 各線倍數相加")])
                 self.assertTrue(all(option.emoji for option in select.options))
 
 
@@ -133,6 +136,13 @@ class RulesTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("## 🎰 拉霸 完整規則", rules)
         self.assertIn("### 倍數表\n一條線三格相同：\n- 🍒🍒🍒　×9", rules)
         self.assertNotIn("-# ", rules)
+
+    async def test_blackjack_rules_name_the_bot_as_dealer(self) -> None:
+        rules = testing.text((await self.press("blackjack")).response.send_message.await_args.kwargs["view"])
+        self.assertIn("- 停牌：不再拿牌，換 HoRo 補牌。", rules)
+        self.assertIn("；HoRo 也是 Blackjack 時算平手", rules)
+        self.assertNotIn("{name}", rules)
+        self.assertNotIn("樂奈", rules)
 
     async def test_retired_game_points_back_to_the_lobby(self) -> None:
         clicked = await self.press("dice")

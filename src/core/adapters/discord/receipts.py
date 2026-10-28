@@ -22,14 +22,15 @@ REMEMBERED = 200
 
 
 def receipt_view(
-    results: Sequence[Mapping[str, object]], explanation: str = "", *, buttons: Sequence[discord.ui.Item] = (),
+    results: Sequence[Mapping[str, object]], explanation: str = "", *, name: str,
+    buttons: Sequence[discord.ui.Item] = (),
 ) -> discord.ui.LayoutView:
     lines = [f"{ICONS['ok']} **完成**　{item['text']}" if item.get("ok") else f"{ICONS['error']} **未完成**　{item['text']}"
              for item in results]
     note = f"按鈕 {TTL_SECONDS // 60} 分鐘內有效，只有你打得開" if buttons else ""
     items = [card_title(f"{ICONS['ai']} 操作結果", note), discord.ui.TextDisplay("\n".join(lines))]
     if explanation:
-        items.append(discord.ui.TextDisplay(rana_says(explanation[:1500])))
+        items.append(discord.ui.TextDisplay(rana_says(explanation[:1500], name)))
     view = discord.ui.LayoutView(timeout=None)
     view.add_item(discord.ui.Container(*items, accent_colour=tone_colour("ok" if all(item.get("ok") for item in results) else "warn")))
     if buttons:
@@ -65,7 +66,7 @@ class DiscordReceipts:
 
     def _view(self, results: Sequence[Mapping[str, object]], explanation: str = "") -> discord.ui.LayoutView:
         buttons = self.private_results.make_buttons(item["private_ref"] for item in results if "private_ref" in item)
-        return receipt_view(results, explanation, buttons=buttons)
+        return receipt_view(results, explanation, name=self._live.bot_name(), buttons=buttons)
 
     def _bind(self, results: Sequence[Mapping[str, object]], message_id: int) -> None:
         for item in results:

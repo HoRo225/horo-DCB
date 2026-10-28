@@ -276,7 +276,7 @@ def render_ai_models(view: AdminPanelView) -> None:
                 else "模型預設"
             )
             status = (
-                f"**{discord.utils.escape_markdown(choice.model)}**"
+                f"**{discord.utils.escape_markdown(info.display_name if info is not None else choice.model)}**"
                 f" · 推理強度：{EFFORT_LABELS.get(effort, effort)}"
             )
             if info is None and editor.catalog:

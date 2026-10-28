@@ -19,6 +19,6 @@ class Game:
 
 
 GAMES: Mapping[str, Game] = MappingProxyType({game.key: game for game in (
-    Game(Blackjack.key, "21 點", "跟樂奈比點數 · 叫牌或停牌", BLACKJACK_BRIEF, Blackjack, blackjack_rules),
+    Game(Blackjack.key, "21 點", "跟{name}比點數 · 叫牌或停牌", BLACKJACK_BRIEF, Blackjack, blackjack_rules),
     Game(Slots.key, "拉霸", "3×3 盤面 · 各線倍數相加", SLOT_BRIEF, Slots, slot_rules),
 )})

@@ -56,6 +56,9 @@ class ErrorTextTests(unittest.TestCase):
         self.assertEqual(codex_error_text("nope", "霍蘿"), "霍蘿 暫時無法回覆，請稍後再試。")
         self.assertEqual(codex_error_text("not_allowed_channel", "霍蘿", channels="<#1>"),
                          "這個頻道不能找霍蘿聊天，請到 <#1> 再 @霍蘿。")
+        self.assertEqual(codex_error_text("not_allowed_channel", "HoRo", channels="<#1>"),
+                         "這個頻道不能找 HoRo 聊天，請到 <#1> 再 @HoRo。")
+        self.assertEqual(codex_error_text("not_allowed_role", "HoRo"), "你目前沒有使用 HoRo AI 的身分組，需要的話請找管理員。")
         self.assertNotIn("AI 助手", codex_error_text("auth_required", "霍蘿"))
 
 

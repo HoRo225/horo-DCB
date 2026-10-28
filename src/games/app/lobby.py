@@ -11,6 +11,7 @@ from src.games.app.ports import GameStore, LobbyBoard, PresentError
 from src.games.domain.rules import play_problem
 
 NO_CHANNEL = "請先選擇遊戲頻道。"
+HUB_MISSING = "遊戲頻道裡沒有遊戲大廳訊息，請在控制台重發遊戲大廳。"
 PUBLISH_STALE = "操作權限或期限已改變，未發送遊戲大廳。"
 PUBLISH_RECORDED = "此遊戲大廳發送已有紀錄，請在待處理項目核對。"
 PUBLISH_FAILED = "無法在遊戲頻道發送訊息，請確認 Bot 的檢視頻道與傳送訊息權限。"
@@ -48,6 +49,14 @@ class Lobby:
 
     def channel_problem(self) -> str | None:
         return self._board.channel_problem(self.channel_id)
+
+    def attention(self) -> str | None:
+        if self.channel_id is None:
+            return NO_CHANNEL
+        if problem := self.channel_problem():
+            return problem
+        hub = self.hub_message
+        return HUB_MISSING if hub is None or hub[0] != self.channel_id else None
 
     async def refresh(self) -> None:
         if hub := self.hub_message:

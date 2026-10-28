@@ -46,7 +46,7 @@ class GamesPageTests(PanelCase):
         self.assertIn("2 個需要處理", shown)
         self.assertIn("🟠 需要處理 · **🎲 遊戲大廳**\n找不到已綁定的遊戲頻道，請在控制台重新選擇", shown)
         shown = self.screen(await self.go("遊戲大廳"))
-        self.assertIn("🟠 需要處理 · **遊戲頻道 <#800>**", shown)
+        self.assertIn("🟠 需要處理 · **遊戲頻道 （已刪除）ID 800**", shown)
         self.assertIn("**⚠️ 需要處理**\n找不到已綁定的遊戲頻道，請在控制台重新選擇。", shown)
         self.assertEqual(self.view.children[0].accent_colour, WARN_COLOUR)
         self.assertFalse(self.button("重發遊戲大廳").disabled)
@@ -64,6 +64,17 @@ class GamesPageTests(PanelCase):
         self.channels.pop(800)
         await self.click(self.button("重新整理"))
         self.assertEqual(self.button("重發遊戲大廳").style, primary)
+
+    async def test_lobby_counts_as_needing_attention_only_while_its_hub_is_missing(self) -> None:
+        self.channels[800] = text_channel(800, self.guild)
+        put_setting(self.db, GAMES_CHANNEL_ID, 800)
+        put_setting(self.db, GAMES_HUB_MESSAGE, [799, 801])
+        shown = self.screen(await self.open_panel())
+        self.assertIn("🟠 需要處理 · **🎲 遊戲大廳**\n遊戲頻道裡沒有遊戲大廳訊息，請在控制台重發遊戲大廳", shown)
+        put_setting(self.db, GAMES_HUB_MESSAGE, [800, 801])
+        shown = self.screen(await self.click(self.button("重新整理")))
+        self.assertIn("🟢 狀態正常 · **🎲 遊戲大廳**\n遊戲頻道 <#800>", shown)
+        self.assertIsNone(self.admin.games.attention())
 
     async def test_state_without_bot_member_asks_to_refresh(self) -> None:
         put_setting(self.db, GAMES_CHANNEL_ID, 800)

@@ -11,6 +11,7 @@ from src.admin.adapters.discord.pages.common import (
     bind_channel,
     channel_select,
     footer_note,
+    mentions,
     no_guild_note,
     role_select,
 )
@@ -30,8 +31,8 @@ def games_state(view: AdminPanelView) -> ChannelState:
             "尚未設定遊戲頻道",
             "請在下方選擇遊戲頻道；選擇後會自動發布遊戲大廳。",
         )
-    channel = f"遊戲頻道 <#{channel_id}>"
-    if problem := view.services.games.channel_problem():
+    channel = f"遊戲頻道 {mentions(view, [channel_id])}"
+    if problem := view.services.games.attention():
         return ChannelState("需要處理", channel, problem, problem)
     return ChannelState("狀態正常", channel, channel)
 
@@ -40,7 +41,7 @@ def render_games(view: AdminPanelView, note: tuple[str, str] | None = None) -> N
     channel_id = view.services.games.channel_id
     state = games_state(view)
     role_ids = view.services.games.role_ids
-    roles = " ".join(f"<@&{role_id}>" for role_id in role_ids) or "所有人"
+    roles = mentions(view, role_ids, role=True) or "所有人"
     hub = view.services.games.hub_message
     children = view.header("遊戲大廳", "games")
     status = (
@@ -86,7 +87,7 @@ def render_games(view: AdminPanelView, note: tuple[str, str] | None = None) -> N
                     "重發遊戲大廳",
                     on_click=lambda i: view.run(i, lambda operation: _publish(view, i, operation)),
                     style=discord.ButtonStyle.primary
-                    if not hub or state.label == "需要處理"
+                    if state.label == "需要處理"
                     else discord.ButtonStyle.secondary,
                     disabled=channel_id is None,
                     emoji=ICONS["games"],

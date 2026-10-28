@@ -7,17 +7,19 @@ import discord
 
 from src.core.adapters.discord.brand import BRAND_COLOUR, ICONS, NEUTRAL_COLOUR, WARN_COLOUR
 from src.core.adapters.sqlite.db import transaction
-from src.games.adapters.sqlite.store import GAMES_CHANNEL_ID
+from src.games.adapters.sqlite.store import GAMES_CHANNEL_ID, GAMES_HUB_MESSAGE
 from tests.support.admin import G, OWNER, READY, PanelCase, limits, text_channel
 from tests.support.testing import put_setting, text
 
 
 class OpenTests(PanelCase):
-    async def test_open_publishes_the_overview_with_rate_bars(self) -> None:
+    async def test_open_publishes_the_overview_with_a_one_line_rate_summary(self) -> None:
         opened = await self.open_panel()
         opened.response.defer.assert_awaited_once()
         self.assertEqual(self.title(opened), "## 🏠 管理控制台")
-        self.assertIn("**5 小時**　▰▰▰▰▰▰▰▰▱▱ 剩餘 80%", self.screen(opened))
+        shown = self.screen(opened)
+        self.assertIn("**額度剩餘**　5 小時 80%\n", shown)
+        self.assertNotIn("▰", shown)
 
     async def test_only_administrators_may_open_the_panel(self) -> None:
         refused = self.interaction(admin=False)
@@ -94,7 +96,7 @@ class NavigationTests(PanelCase):
         clicked = await self.click(self.button("返回總覽"))
         self.assertEqual(self.title(clicked), "## 🏠 管理控制台")
         shown = self.screen(clicked)
-        self.assertIn("**5 小時**　▰▰▰▰▰▱▱▱▱▱ 剩餘 50%", shown)
+        self.assertIn("**額度剩餘**　5 小時 50%", shown)
         self.assertIn("有 1 項送出結果待核對", shown)
         clicked.response.edit_message.assert_awaited_once()
         with self.assertRaises(StopIteration):
@@ -130,7 +132,7 @@ class NavigationTests(PanelCase):
         self.codex.get_rate_limits.return_value = limits(50)
         clicked = await self.click(self.button("重新整理"))
         self.assertEqual(self.title(clicked), "## 🏠 管理控制台")
-        self.assertIn("**5 小時**　▰▰▰▰▰▱▱▱▱▱ 剩餘 50%", self.screen(clicked))
+        self.assertIn("**額度剩餘**　5 小時 50%", self.screen(clicked))
         await self.go("樂奈")
         await self.go("技術")
         self.codex.get_runtime_status.return_value = dataclasses.replace(READY, thread_count=7)
@@ -157,6 +159,7 @@ class NavigationTests(PanelCase):
         await self.open_panel()
         self.channels[800] = text_channel(800, self.guild)
         put_setting(self.db, GAMES_CHANNEL_ID, 800)
+        put_setting(self.db, GAMES_HUB_MESSAGE, [800, 801])
         await self.go("遊戲大廳")
         roles = self.select("選擇可用身分組（清空即所有人可用）")
         outsider = self.role(901)

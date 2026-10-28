@@ -107,8 +107,8 @@ class AllowlistTests(unittest.TestCase):
             with self.subTest(guild_id=guild_id, selected=selected, roles=roles), self.assertRaises(ValueError):
                 ai.validate_change(guild_id, selected, roles=roles)
         off, _store, _model = settings(enabled=False, channel_ids=(10,))
-        with self.assertRaises(ValueError):
-            off.validate_change(G, frozenset({10}), roles=False)
+        off.validate_change(G, frozenset({10}), roles=False)
+        off.validate_change(G, frozenset({20}), roles=True)
         no_channels, _store, _model = settings()
         with self.assertRaises(ValueError):
             no_channels.validate_change(G, frozenset({20}), roles=True)

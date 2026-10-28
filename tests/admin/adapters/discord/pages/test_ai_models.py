@@ -21,23 +21,24 @@ class ModelPageTests(PanelCase):
         self.assertNotIn(UNSAVED, text(self.view))
         await self.choose(self.select("選擇主模型"), self.option("Model B"))
         shown = self.screen(await self.choose(self.select("選擇備援模型（可停用）"), "off"))
-        self.assertIn("### 主模型\n**gpt-b** · 推理強度：高", shown)
+        self.assertIn("### 主模型\n**Model B** · 推理強度：高", shown)
+        self.assertNotIn("**gpt-b**", shown)
         self.assertIn(UNSAVED, shown)
         self.assertNotEqual(self.admin.ai.models.primary, ModelChoice("gpt-b"))
         shown = self.screen(await self.click(self.button("儲存設定")))
-        self.assertIn("### 主模型\n**gpt-b** · 推理強度：高", shown)
+        self.assertIn("### 主模型\n**Model B** · 推理強度：高", shown)
         self.assertIn("### 備援模型\n**停用**", shown)
         self.assertIn("已儲存全 Bot 模型設定", shown)
         self.assertNotIn(UNSAVED, shown)
         self.assertEqual(self.admin.ai.models, ModelSettings(ModelChoice("gpt-b"), None))
         shown = self.screen(await self.click(self.button("重新整理")))
-        self.assertIn("### 主模型\n**gpt-b** · 推理強度：高", shown)
+        self.assertIn("### 主模型\n**Model B** · 推理強度：高", shown)
         self.assertNotIn(UNSAVED, shown)
 
         await self.open_panel()
         await self.go("樂奈")
         shown = self.screen(await self.go("模型"))
-        self.assertIn("### 主模型\n**gpt-b** · 推理強度：高", shown)
+        self.assertIn("### 主模型\n**Model B** · 推理強度：高", shown)
         self.assertIn("### 備援模型\n**停用**", shown)
 
     async def test_every_way_out_asks_before_discarding_the_draft(self) -> None:
@@ -58,7 +59,7 @@ class ModelPageTests(PanelCase):
                 self.assertEqual(self.button("繼續編輯").style, discord.ButtonStyle.secondary)
                 shown = self.screen(await self.click(self.button("繼續編輯")))
                 self.assertIn(UNSAVED, shown)
-                self.assertIn("### 主模型\n**gpt-b** · 推理強度：高", shown)
+                self.assertIn("### 主模型\n**Model B** · 推理強度：高", shown)
                 await leave()
                 self.assertEqual(self.title(await self.click(self.button("捨棄"))), title)
                 if self.view.page != "ai_models":
@@ -66,7 +67,7 @@ class ModelPageTests(PanelCase):
                     await self.go("模型")
                 shown = text(self.view)
                 self.assertNotIn(UNSAVED, shown)
-                self.assertNotIn("**gpt-b**", shown)
+                self.assertNotIn("**Model B**", shown)
         self.assertEqual(self.admin.ai.models, saved)
 
     async def test_leaving_without_changes_does_not_ask(self) -> None:

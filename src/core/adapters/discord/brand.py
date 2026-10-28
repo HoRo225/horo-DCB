@@ -102,7 +102,7 @@ def bar(fraction: float, width: int = 10) -> str:
     return "▰" * filled + "▱" * (width - filled)
 
 
-def rana_says(line: str, name: str = "樂奈") -> str:
+def rana_says(line: str, name: str) -> str:
     name = f"**{discord.utils.escape_markdown(name)}**"
     head = f"{APP_EMOJIS['rana']} {name}" if "rana" in APP_EMOJIS else name
     return "\n".join(f"> {part}" for part in f"{head}　{line}".split("\n"))
@@ -194,8 +194,9 @@ def card_title(
     *,
     thumbnail: str | None = None,
     accessory: discord.ui.Button | None = None,
+    note: str = "",
 ) -> discord.ui.Item:
-    text = f"## {heading}" + (f"\n-# {subtitle}" if subtitle else "")
+    text = f"## {heading}" + (f"\n-# {subtitle}" if subtitle else "") + (f"\n{note}" if note else "")
     if thumbnail:
         accessory = discord.ui.Thumbnail(thumbnail)
     if accessory is None:

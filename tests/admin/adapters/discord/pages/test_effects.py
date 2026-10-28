@@ -95,7 +95,8 @@ class EffectsPageTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual({option.description for option in self.select().options}, {"#公告"})
         self.panel.guild = SimpleNamespace(get_channel_or_thread=lambda channel_id: None)
         render_effects(self.panel)
-        self.assertEqual({option.description for option in self.select().options}, {f"頻道 ID {CHANNEL}"})
+        self.assertEqual({option.description for option in self.select().options}, {f"（已刪除）ID {CHANNEL}"})
+        self.assertIn(f"**原頻道**　（已刪除）ID {CHANNEL}", self.shown())
 
     async def test_unregistered_kind_is_other_and_offers_only_skip(self) -> None:
         self.add("legacy", kind="legacy.kind")

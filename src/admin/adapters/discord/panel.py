@@ -31,8 +31,21 @@ from src.core.adapters.discord.brand import (
     tint,
     tone_colour,
 )
+from src.core.adapters.discord.live import name_text
 
 QUICK_REPLY_SECONDS = 1.5
+
+
+@dataclass(frozen=True)
+class Feature:
+    home: str
+    enabled: Callable[[AdminServices], bool]
+
+
+AI = Feature("ai", lambda services: services.ai.enabled)
+VOICE = Feature("voice", lambda services: services.voice.enabled)
+STEAM = Feature("steam", lambda services: services.steam.enabled)
+
 
 @dataclass(frozen=True)
 class Page:
@@ -45,24 +58,35 @@ class Page:
     tab: tuple[str, str] | None = None
     listed: Callable[[AdminPanelView], bool] = lambda view: True
     leave: Callable[[AdminPanelView, Proceed], PendingConfirm | None] | None = None
+    feature: Feature | None = None
 
 
 PAGES = {
     page.key: page
     for page in (
         Page("overview", "總覽", "控制台首頁", "overview", render_overview, load_ai),
-        Page("ai", "AI・狀態", "狀態與額度", "ai", render_ai, load_ai, tab=("狀態", "status")),
-        Page("ai_access", "AI・權限", "頻道與身分組白名單", "access", render_ai_access, tab=("權限", "access")),
+        Page("ai", "AI・狀態", "狀態與額度", "ai", render_ai, load_ai, tab=("狀態", "status"), feature=AI),
+        Page("ai_access", "AI・權限", "頻道與身分組白名單", "access", render_ai_access, tab=("權限", "access"),
+             feature=AI),
         Page("ai_models", "AI・模型", "主模型、備援與推理強度", "models", render_ai_models, load_models,
-             tab=("模型", "models"), leave=leave_models),
-        Page("ai_tech", "AI・技術", "版本、工作與安全邊界", "tech", render_ai_tech, load_ai, tab=("技術", "tech")),
-        Page("voice", "臨時語音", "入口頻道與同步狀態", "voice", render_voice),
-        Page("steam", "Steam 免費遊戲", "通知設定與手動查詢", "steam", render_steam),
+             tab=("模型", "models"), leave=leave_models, feature=AI),
+        Page("ai_tech", "AI・技術", "版本、工作與安全邊界", "tech", render_ai_tech, load_ai, tab=("技術", "tech"),
+             feature=AI),
+        Page("voice", "臨時語音", "入口頻道與同步狀態", "voice", render_voice, feature=VOICE),
+        Page("steam", "Steam 免費遊戲", "通知設定與手動查詢", "steam", render_steam, feature=STEAM),
         Page("games", "遊戲大廳", "頻道與身分組", "games", render_games),
         Page("effects", "待處理項目", "核對通知與資源的待處理結果", "warn", render_effects,
              listed=lambda view: bool(view.services.effects.pending())),
     )
 }
+
+
+def off_notice(page: Page, services: AdminServices) -> str:
+    feature = page.feature
+    if feature is None or feature.enabled(services):
+        return ""
+    where = "按下方的開啟按鈕即可開啟" if feature.home == page.key else f"可在「{PAGES[feature.home].label}」頁開啟"
+    return f"{ICONS['dotoff']} **此功能目前關閉**　{where}；設定仍可修改。"
 
 
 class AdminPanelView(ErrorNotice, discord.ui.LayoutView):
@@ -199,7 +223,7 @@ class AdminPanelView(ErrorNotice, discord.ui.LayoutView):
                     self.button("pending_confirm", pending.confirm, on_click=self._confirm_pending,
                                 style=discord.ButtonStyle.danger, emoji=ICONS["warn"]),
                     self.button("pending_cancel", pending.cancel, on_click=self._cancel_pending,
-                                emoji=ICONS["back"]),
+                                emoji=ICONS["cancel"]),
                 ),
                 accent_colour=WARN_COLOUR,
             )
@@ -289,10 +313,7 @@ class AdminPanelView(ErrorNotice, discord.ui.LayoutView):
         return discord.utils.escape_markdown(self.bot_name)
 
     def bot_text(self, before: str = "", after: str = "", *, markdown: bool = True) -> str:
-        name = self.bot_name_md if markdown else self.bot_name
-        left = " " if before[-1:].isalnum() and name[:1].isascii() else ""
-        right = " " if after[:1].isalnum() and name[-1:].isascii() else ""
-        return f"{before}{left}{name}{right}{after}"
+        return name_text(f"{before}{{name}}{after}", self.bot_name_md if markdown else self.bot_name)
 
     def header(
         self,
@@ -313,7 +334,7 @@ class AdminPanelView(ErrorNotice, discord.ui.LayoutView):
                 on_click=lambda interaction: self.open_page(interaction, "overview"),
                 emoji=ICONS["back"],
             )
-            top = card_title(heading, subtitle, accessory=back)
+            top = card_title(heading, subtitle, accessory=back, note=off_notice(info, self.services))
         children: list[discord.ui.Item] = [top]
         if info.tab is not None:
             children.append(

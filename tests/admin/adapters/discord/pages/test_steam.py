@@ -2,7 +2,7 @@ import unittest
 
 from src.core.adapters.sqlite.db import transaction
 from src.steam import SteamOffer
-from src.steam.adapters.sqlite.store import STEAM_CHANNEL_ID
+from src.steam.adapters.sqlite.store import STEAM_CHANNEL_ID, STEAM_ROLE_IDS
 from tests.support.admin import PanelCase, resolved, text_channel
 from tests.support.steam import fetched
 from tests.support.testing import put_setting
@@ -40,19 +40,22 @@ class SteamPageTests(PanelCase):
         await self.go("Steam 免費遊戲")
         steam, role = self.admin.steam, self.role(900)
         roles = self.select(ROLES)
-        self.assertTrue(roles.disabled)
-        self.assertIn("Steam 自動通知未開啟，未修改身分組設定。", self.screen(await self.choose(roles, role)))
-        self.assertEqual(steam.status().role_ids, ())
-
-        clicked = await self.click(self.button("開啟 Steam 自動通知"))
-        self.assertTrue(steam.enabled)
-        self.assertIn("✅ 已開啟 Steam 自動通知。", self.screen(clicked))
         self.assertFalse(roles.disabled)
-
         shown = self.screen(await self.choose(roles, role))
         self.assertEqual(steam.status().role_ids, (900,))
         self.assertIn("已更新 Steam 免費遊戲通知身分組，共 1 個。", shown)
-        self.assertIn("通知身分組 <@&900>", shown)
+        self.assertIn("### 通知狀態\n⚪ 已關閉\n", shown)
+        self.assertIn("⚪ **此功能目前關閉**　按下方的開啟按鈕即可開啟；設定仍可修改。", shown)
+        self.assertIn("通知 <#700>\n通知身分組 <@&900>", shown)
+
+        clicked = await self.click(self.button("開啟 Steam 自動通知"))
+        self.assertTrue(steam.enabled)
+        shown = self.screen(clicked)
+        self.assertIn("✅ 已開啟 Steam 自動通知。", shown)
+        self.assertIn("### 通知狀態\n🟢 已開啟\n", shown)
+        self.assertNotIn("此功能目前關閉", shown)
+        self.assertFalse(roles.disabled)
+
         shown = self.screen(await self.choose(roles))
         self.assertEqual(steam.status().role_ids, ())
         self.assertIn("已取消 Steam 免費遊戲通知身分組。", shown)
@@ -61,7 +64,15 @@ class SteamPageTests(PanelCase):
         clicked = await self.click(self.button("關閉 Steam 自動通知"))
         self.assertFalse(steam.enabled)
         self.assertIn("✅ 已關閉 Steam 自動通知。", self.screen(clicked))
-        self.assertTrue(roles.disabled)
+        self.assertFalse(roles.disabled)
+
+    async def test_deleted_notification_targets_are_named_by_id(self) -> None:
+        put_setting(self.db, STEAM_CHANNEL_ID, 700)
+        put_setting(self.db, STEAM_ROLE_IDS, [900, 901])
+        self.role(900)
+        await self.open_panel()
+        shown = self.screen(await self.go("Steam 免費遊戲"))
+        self.assertIn("通知 （已刪除）ID 700\n通知身分組 <@&900>、（已刪除）ID 901", shown)
 
     async def test_channel_select_binds_the_notification_channel(self) -> None:
         self.channels[700] = channel = text_channel(700, self.guild)

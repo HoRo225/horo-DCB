@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import discord
 
+from src.core.adapters.discord.live import name_text
+
 _ERROR_TEXT = {
     "busy": "{name} 目前忙碌，請稍後再試。",
     "not_allowed": "{name} 目前沒有在這個頻道或你的身分組開放。",
@@ -17,4 +19,4 @@ _ERROR_TEXT = {
 
 def codex_error_text(code: str, name: str, *, channels: str = "") -> str:
     text = _ERROR_TEXT.get(code, "{name} 暫時無法回覆，請稍後再試。")
-    return text.format(name=discord.utils.escape_markdown(name), channels=channels)
+    return name_text(text.format(name="{name}", channels=channels), discord.utils.escape_markdown(name))

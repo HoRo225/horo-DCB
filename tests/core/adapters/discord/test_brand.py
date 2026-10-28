@@ -150,10 +150,10 @@ class BarTests(unittest.TestCase):
 class FormatTests(unittest.TestCase):
     def test_rana_says(self):
         with patch.dict(APP_EMOJIS, clear=True):
-            self.assertEqual(rana_says("好"), "> **樂奈**　好")
-            self.assertEqual(rana_says("一\n二"), "> **樂奈**　一\n> 二")
+            self.assertEqual(rana_says("好", "樂奈"), "> **樂奈**　好")
+            self.assertEqual(rana_says("一\n二", "樂奈"), "> **樂奈**　一\n> 二")
             APP_EMOJIS["rana"] = "<:rana:1>"
-            self.assertEqual(rana_says("好"), "> <:rana:1> **樂奈**　好")
+            self.assertEqual(rana_says("好", "HoRo"), "> <:rana:1> **HoRo**　好")
             self.assertEqual(rana_says("好", "睦_頭"), "> <:rana:1> **睦\\_頭**　好")
 
     def test_info_card_takes_an_accent(self):

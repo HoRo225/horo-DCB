@@ -85,8 +85,7 @@ class AiSettings:
 
     def validate_change(self, guild_id: int, selected: frozenset[int], *, roles: bool) -> None:
         if (
-            not self.enabled
-            or type(guild_id) is not int
+            type(guild_id) is not int
             or guild_id != self.guild_id
             or not valid_allowlist_ids(selected, minimum=0 if roles else 1)
             or (roles and (not self.channel_ids or guild_id in selected))

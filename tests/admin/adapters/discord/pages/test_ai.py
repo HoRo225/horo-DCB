@@ -6,6 +6,7 @@ import discord
 from src.ai import RuntimeStatus
 from src.core.adapters.discord.brand import ICONS
 from tests.support.admin import G, PanelCase, resolved, text_channel
+from tests.support.testing import text
 
 
 class AiStatusPageTests(PanelCase):
@@ -44,6 +45,7 @@ class AiStatusPageTests(PanelCase):
         self.assertIn(f"### {ICONS['warn']} 確認關閉樂奈\n關閉後會立即中斷所有進行中的樂奈請求", shown)
         self.assertEqual(self.button("確認關閉").style, discord.ButtonStyle.danger)
         self.assertEqual(self.button("取消").style, discord.ButtonStyle.secondary)
+        self.assertEqual(str(self.button("取消").emoji), ICONS["cancel"])
         self.assertTrue(self.admin.ai.enabled)
         self.codex.cancel.assert_not_awaited()
         shown = self.screen(await self.click(self.button("取消")))
@@ -139,6 +141,63 @@ class AiAccessPageTests(PanelCase):
         shown = self.screen(await self.click(self.button("確認清空")))
         self.assertEqual(self.admin.ai.role_ids, frozenset())
         self.assertIn("已清除白名單身分組，目前沒有人可以使用樂奈。", shown)
+
+    async def test_selected_channels_and_roles_are_listed_and_deleted_ones_named_by_id(self) -> None:
+        self.admin.ai.set_allowlist(G, frozenset({600, 601}), roles=False)
+        self.admin.ai.set_allowlist(G, frozenset({700, 701}), roles=True)
+        self.channels[600] = text_channel(600, self.guild)
+        self.role(700)
+        await self.open_access()
+        shown = text(self.view)
+        self.assertIn("### 白名單頻道 · 2 個\n<#600>、（已刪除）ID 601\n", shown)
+        self.assertIn("### 白名單身分組 · 2 個\n<@&700>、（已刪除）ID 701\n", shown)
+
+    async def test_long_role_list_is_cut_with_the_total(self) -> None:
+        role_ids = frozenset(range(700, 725))
+        self.admin.ai.set_allowlist(G, frozenset({600}), roles=False)
+        self.admin.ai.set_allowlist(G, role_ids, roles=True)
+        self.channels[600] = text_channel(600, self.guild)
+        self.guild.get_role.side_effect = lambda role_id: object()
+        await self.open_access()
+        shown = text(self.view)
+        listed = "、".join(f"<@&{role_id}>" for role_id in range(700, 710))
+        self.assertIn(f"### 白名單身分組 · 25 個\n{listed} 等 25 個\n", shown)
+        self.assertNotIn("<@&710>", shown)
+
+
+class AiSwitchedOffTests(PanelCase):
+    async def asyncSetUp(self) -> None:
+        await super().asyncSetUp()
+        await self.admin.ai.set_enabled(False)
+
+    async def test_status_page_points_at_its_own_button_and_shows_the_switch_state(self) -> None:
+        shown = self.screen(await self.open_panel())
+        self.assertIn("⚪ 停用 · **🤖 樂奈**\n未開啟", shown)
+        self.assertNotIn("此功能目前關閉", shown)
+        shown = self.screen(await self.go("樂奈"))
+        self.assertIn("⚪ **此功能目前關閉**　按下方的開啟按鈕即可開啟；設定仍可修改。", shown)
+        self.assertIn("### 目前狀態\n⚪ 已關閉\n", shown)
+        self.assertNotIn("「AI・狀態」頁", shown)
+        self.view.toggled_at.clear()
+        shown = self.screen(await self.click(self.button("開啟樂奈")))
+        self.assertIn("### 目前狀態\n🟢 已開啟\n", shown)
+        self.assertNotIn("此功能目前關閉", shown)
+
+    async def test_other_ai_pages_point_at_the_status_page_and_stay_editable(self) -> None:
+        await self.open_panel()
+        await self.go("樂奈")
+        for tab in ("權限", "模型", "技術"):
+            with self.subTest(tab):
+                shown = self.screen(await self.go(tab))
+                self.assertIn("⚪ **此功能目前關閉**　可在「AI・狀態」頁開啟；設定仍可修改。", shown)
+        await self.go("權限")
+        channels = self.select(AiAccessPageTests.CHANNELS)
+        self.assertFalse(channels.disabled)
+        self.channels[600] = channel = text_channel(600, self.guild)
+        shown = self.screen(await self.choose(channels, resolved(channel)))
+        self.assertEqual(self.admin.ai.channel_ids, frozenset({600}))
+        self.assertIn("✅ 已更新 1 個白名單頻道。", shown)
+        self.assertFalse(self.select("選擇白名單身分組（清空即暫停）").disabled)
 
 
 if __name__ == "__main__":

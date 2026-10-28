@@ -14,6 +14,7 @@ from src.core.adapters.discord.brand import (
     rana_says,
     tint,
 )
+from src.core.adapters.discord.live import name_text
 from src.games.adapters.discord.format import ACTION_LABELS, BANNERS, board, cards_text, points_text, slot_symbol
 from src.games.app.tables import LiveTable
 from src.games.domain import slots
@@ -68,6 +69,9 @@ class SeatView(discord.ui.LayoutView):
         return card_title(f"{ICONS[game.key]} {game.title}", f"<@{self.table.player_id}>",
                           thumbnail=self.table.avatar_url)
 
+    def brief(self) -> str:
+        return name_text(self.table.game.brief, discord.utils.escape_markdown(self.host))
+
     def tail(self) -> list[str]:
         return [rana_says(self.table.taunt, self.host)] if self.table.taunt else []
 
@@ -108,7 +112,7 @@ class BlackjackView(SeatView):
         hand = self.table.state.hand
         items: list[discord.ui.Item] = [self.header()]
         if hand is None:
-            items.append(discord.ui.TextDisplay(self.table.game.brief))
+            items.append(discord.ui.TextDisplay(self.brief()))
             return items, self.tail(), [self.round_row(False)]
         hidden = not hand.done
         dealer = hand.dealer[:1] if hidden else hand.dealer
@@ -146,7 +150,7 @@ class SlotsView(SeatView):
             items.append(discord.ui.TextDisplay("\n".join(board(self.frame))))
             return items, [f"### {ICONS[self.table.game.key]} 轉動中…", *self.tail()], []
         if spin is None:
-            items.append(discord.ui.TextDisplay(self.table.game.brief))
+            items.append(discord.ui.TextDisplay(self.brief()))
         items.append(discord.ui.TextDisplay("\n".join(board(slots.PLACEHOLDER if spin is None else spin.grid))))
         footer = [] if spin is None else slots.summary(spin, slot_symbol)
         return items, [*footer, *self.tail()], [self.round_row(spin is not None)]

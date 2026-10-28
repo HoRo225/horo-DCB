@@ -40,6 +40,9 @@ class DiscordTables:
     def symbol(self, name: str) -> str:
         return slot_symbol(name)
 
+    def host(self) -> str:
+        return self._live.bot_name()
+
     def hub_link(self) -> list[discord.ui.Button]:
         return hub_link(self._lobby.hub_message, self._live.guild_id)
 
@@ -49,13 +52,13 @@ class DiscordTables:
         except discord.HTTPException:
             attachments = []
         if attachments:
-            return {"view": lobby_view(self._live.bot_name()), "attachments": attachments}
+            return {"view": lobby_view(self.host()), "attachments": attachments}
         if interaction.app_permissions.attach_files and (file := await self._banner()):
-            return {"view": lobby_view(self._live.bot_name()), "attachments": [file]}
-        return {"view": lobby_view(self._live.bot_name(), banner=False), "attachments": []}
+            return {"view": lobby_view(self.host()), "attachments": [file]}
+        return {"view": lobby_view(self.host(), banner=False), "attachments": []}
 
     def view(self, table: LiveTable) -> SeatView:
-        return seat_view(table, self._live.bot_name())
+        return seat_view(table, self.host())
 
     def reply(self, interaction: discord.Interaction) -> InteractionReply:
         return InteractionReply(interaction, self)
