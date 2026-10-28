@@ -1,0 +1,98 @@
+from __future__ import annotations
+
+import re
+import unittest
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, MagicMock
+
+import discord
+
+from src.action_service import ActionService
+from src.ai.access import AiSettings
+from src.codex.contracts import Action, IntentDecision
+from src.core.adapters.discord.live import LiveGuild
+from src.core.adapters.sqlite.db import open_db
+from src.core.app.supervisor import WORK, TaskGroup
+from src.games.operations import GameOperations
+from src.games.store import GameStore
+
+GUILD, CHANNEL, ACTOR, ROLE, RECEIPT = 5, 10, 1, 7, 3000
+
+
+class ActionHarness:
+    def __init__(self, test: unittest.TestCase) -> None:
+        self.db = open_db(":memory:")
+        test.addCleanup(self.db.close)
+        self.member = SimpleNamespace(
+            id=ACTOR, roles=[SimpleNamespace(id=ROLE)], guild_permissions=discord.Permissions.none(),
+            display_name="玩家", bot=False, display_avatar=SimpleNamespace(url="https://example.com/a.png"),
+        )
+        self.channel = SimpleNamespace(
+            id=CHANNEL, name="遊戲", send=AsyncMock(return_value=SimpleNamespace(id=RECEIPT, edit=AsyncMock())),
+            permissions_for=lambda member: discord.Permissions(view_channel=True, send_messages=True),
+        )
+        self.guild = MagicMock(spec=discord.Guild, id=GUILD, unavailable=False)
+        self.guild.members, self.guild.roles, self.guild.channels = [self.member], [], [self.channel]
+        self.guild.get_member.return_value = self.member
+        self.guild.fetch_member = AsyncMock(return_value=self.member)
+        self.guild.get_channel_or_thread.return_value = self.channel
+        self.guild.get_channel.return_value = None
+        self.ai = AiSettings(self.db, GUILD)
+        self.ai.enabled = True
+        self.ai.set_allowlist(GUILD, frozenset({CHANNEL}), roles=False)
+        self.ai.set_allowlist(GUILD, frozenset({ROLE}), roles=True)
+        self.games = GameStore(self.db)
+        self.games.set_channel(CHANNEL)
+        self.voice = SimpleNamespace(reconcile=AsyncMock())
+        self.client = SimpleNamespace(
+            games=self.games, ai_settings=self.ai, temp_voice=self.voice,
+            get_guild=lambda guild_id: self.guild if guild_id == GUILD else None,
+            get_channel=lambda channel_id: self.channel if channel_id == CHANNEL else None,
+            get_partial_messageable=lambda channel_id: SimpleNamespace(
+                get_partial_message=lambda message_id: SimpleNamespace(id=message_id, edit=AsyncMock()),
+            ),
+        )
+        self.live = LiveGuild(self.client, GUILD, lambda: False)
+        self.client.game_operations = self.game_operations = GameOperations(
+            self.client, TaskGroup("test.games", WORK), self.live,
+        )
+        self.restart()
+
+    def restart(self) -> None:
+        self.service = ActionService(self.client, self.db, TaskGroup("test.actions", WORK), self.live)
+
+    def admin(self) -> None:
+        self.member.guild_permissions = discord.Permissions(administrator=True)
+
+    def game_snapshot(self) -> dict:
+        return self.game_operations.snapshot(ACTOR)
+
+    async def execute(self, *actions: tuple[str, dict], message_id: int = 1000, game: dict | None = None,
+                      content: str = "") -> list[dict]:
+        source = SimpleNamespace(id=message_id, author=self.member, guild=self.guild, channel=self.channel,
+                                 content=content)
+        decision = IntentDecision("plan", tuple(Action(name, params) for name, params in actions))
+        return await self.service.execute_plan(source, decision, game_snapshot=game)
+
+    def rows(self) -> dict[str, list[tuple]]:
+        tables = {
+            "requests": "SELECT request_id, message_id, actor_id, guild_id, channel_id, plan, status FROM requests "
+                        "ORDER BY rowid",
+            "operations": "SELECT operation_id, kind, inputs, status, result, resource_id FROM operations "
+                          "ORDER BY rowid",
+            "effects": "SELECT effect_id, operation_id, kind, status, channel_id, message_id, nonce, payload, error "
+                       "FROM discord_effects ORDER BY rowid",
+        }
+        names = [request_id for (request_id,) in self.db.execute("SELECT request_id FROM requests ORDER BY rowid")]
+
+        def normal(value: object) -> object:
+            if not isinstance(value, str):
+                return value
+            for index, request_id in enumerate(names):
+                value = value.replace(request_id, f"<req{index}>")
+            value = re.sub(r'"private_ref":"[A-Za-z0-9_-]+"', '"private_ref":"<ref>"', value)
+            value = re.sub(r'"state_token":"[0-9a-f]{32}"', '"state_token":"<token>"', value)
+            return re.sub(r"^[0-9a-f]{24}$", "<nonce>", value)
+
+        return {name: [tuple(normal(value) for value in row) for row in self.db.execute(query)]
+                for name, query in tables.items()}
