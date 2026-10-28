@@ -4,18 +4,18 @@ import asyncio
 
 import discord
 
-from src.core.adapters.discord.brand import (
-    BRAND_COLOUR,
-    GOLD_COLOUR,
-    ICONS,
-    LOSS_COLOUR,
-    NEUTRAL_COLOUR,
-    card_title,
-    rana_says,
-    tint,
-)
+from src.core.adapters.discord.brand import BRAND_COLOUR, ICONS, NEUTRAL_COLOUR, card_title, rana_says, tint
 from src.core.adapters.discord.live import name_text
-from src.games.adapters.discord.format import ACTION_LABELS, BANNERS, board, cards_text, points_text, slot_symbol
+from src.games.adapters.discord.format import (
+    ACTION_LABELS,
+    Outcome,
+    blackjack_outcome,
+    board,
+    cards_text,
+    points_text,
+    seat_text,
+    slots_outcome,
+)
 from src.games.app.tables import LiveTable
 from src.games.domain import slots
 from src.games.domain.table import Blackjack, Slots
@@ -37,30 +37,32 @@ class SeatView(discord.ui.LayoutView):
         return False
 
     @property
-    def colour(self) -> discord.Colour:
-        return BRAND_COLOUR
+    def name(self) -> str:
+        return discord.utils.escape_markdown(self.host)
 
-    def compose(self) -> tuple[list[discord.ui.Item], list[str], Rows]:
+    def compose(self) -> tuple[str, Rows]:
         raise NotImplementedError
 
-    def outcome(self) -> str | None:
+    def outcome(self) -> Outcome | None:
         return None
 
     def render(self) -> None:
         self.actions = {}
         self.clear_items()
+        outcome = self.outcome()
         if self.table.farewell is not None:
-            self.add_item(self.idle_card())
+            self.add_item(self.idle_card(outcome))
             return
-        items, footer, rows = self.compose()
-        if footer:
-            items = [*items, discord.ui.Separator(), discord.ui.TextDisplay("\n".join(footer))]
-        self.add_item(discord.ui.Container(*items, accent_colour=self.colour))
+        content, rows = self.compose()
+        items = [self.header(), discord.ui.Separator(), discord.ui.TextDisplay(content)]
+        if footer := [*self.settlement(outcome), *self.tail()]:
+            items += [discord.ui.Separator(), discord.ui.TextDisplay("\n".join(footer))]
+        self.add_item(discord.ui.Container(*items, accent_colour=outcome.colour if outcome else BRAND_COLOUR))
         for row in rows:
             self.add_item(discord.ui.ActionRow(*row))
 
-    def idle_card(self) -> discord.ui.Container:
-        parts = [self.table.game.title, f"<@{self.table.player_id}>", self.outcome()]
+    def idle_card(self, outcome: Outcome | None) -> discord.ui.Container:
+        parts = [self.table.game.title, f"<@{self.table.player_id}>", outcome and outcome.title]
         line = f"🪑 **{self.table.farewell}**　" + "・".join(part for part in parts if part)
         return discord.ui.Container(discord.ui.TextDisplay(line), accent_colour=NEUTRAL_COLOUR)
 
@@ -69,8 +71,13 @@ class SeatView(discord.ui.LayoutView):
         return card_title(f"{ICONS[game.key]} {game.title}", f"<@{self.table.player_id}>",
                           thumbnail=self.table.avatar_url)
 
+    def settlement(self, outcome: Outcome | None) -> list[str]:
+        if outcome is None:
+            return []
+        return [f"### {outcome.emoji} {outcome.title}", *([outcome.reason] if outcome.reason else [])]
+
     def brief(self) -> str:
-        return name_text(self.table.game.brief, discord.utils.escape_markdown(self.host))
+        return name_text(self.table.game.brief, self.name)
 
     def tail(self) -> list[str]:
         return [rana_says(self.table.taunt, self.host)] if self.table.taunt else []
@@ -99,34 +106,26 @@ class SeatView(discord.ui.LayoutView):
 
 
 class BlackjackView(SeatView):
-    @property
-    def colour(self) -> discord.Colour:
+    def outcome(self) -> Outcome | None:
         hand = self.table.state.hand
-        return BRAND_COLOUR if hand is None or not hand.done else BANNERS[hand.result()][1]
+        return blackjack_outcome(hand, self.name) if hand is not None and hand.done else None
 
-    def outcome(self) -> str | None:
+    def compose(self) -> tuple[str, Rows]:
         hand = self.table.state.hand
-        return BANNERS[hand.result()][0] if hand is not None and hand.done else None
-
-    def compose(self) -> tuple[list[discord.ui.Item], list[str], Rows]:
-        hand = self.table.state.hand
-        items: list[discord.ui.Item] = [self.header()]
         if hand is None:
-            items.append(discord.ui.TextDisplay(self.brief()))
-            return items, self.tail(), [self.round_row(False)]
+            return self.brief(), [self.round_row(False)]
         hidden = not hand.done
         dealer = hand.dealer[:1] if hidden else hand.dealer
         dealer_points = f"明牌 {points_text(dealer)}" if hidden else points_text(hand.dealer, blackjack=hand.dealer_blackjack)
-        host = discord.utils.escape_markdown(self.host)
-        items += [
-            discord.ui.TextDisplay(f"### {host}　{dealer_points}\n## {cards_text(dealer, hidden=1 if hidden else 0)}"),
-            discord.ui.TextDisplay(f"### 你　{points_text(hand.player, blackjack=hand.blackjack)}\n## {cards_text(hand.player)}"),
-        ]
+        content = "\n\n".join([
+            seat_text(self.name, dealer_points, cards_text(dealer, hidden=1 if hidden else 0)),
+            seat_text("你", points_text(hand.player, blackjack=hand.blackjack), cards_text(hand.player)),
+        ])
         if hand.done:
-            return items, [f"# {BANNERS[hand.result()][0]}", *self.tail()], [self.round_row(True)]
+            return content, [self.round_row(True)]
         controls = [self.button(action, label, style, ICONS[icon])
                     for action in hand.legal_actions() for label, style, icon in [ACTION_LABELS[action]]]
-        return items, self.tail(), [controls] if controls else []
+        return content, [controls] if controls else []
 
 
 class SlotsView(SeatView):
@@ -136,24 +135,19 @@ class SlotsView(SeatView):
         self.frame = frame
         super().__init__(table, host)
 
-    @property
-    def colour(self) -> discord.Colour:
+    def outcome(self) -> Outcome | None:
         spin = self.table.state.spin
-        if spin is None or self.frame is not None:
-            return BRAND_COLOUR
-        return GOLD_COLOUR if spin.multiplier else LOSS_COLOUR
-
-    def compose(self) -> tuple[list[discord.ui.Item], list[str], Rows]:
-        spin = self.table.state.spin
-        items: list[discord.ui.Item] = [self.header()]
         if self.frame is not None:
-            items.append(discord.ui.TextDisplay("\n".join(board(self.frame))))
-            return items, [f"### {ICONS[self.table.game.key]} 轉動中…", *self.tail()], []
+            return Outcome(ICONS[self.table.game.key], "轉動中…", None, BRAND_COLOUR)
+        return None if spin is None else slots_outcome(spin)
+
+    def compose(self) -> tuple[str, Rows]:
+        spin = self.table.state.spin
+        if self.frame is not None:
+            return "\n".join(board(self.frame)), []
         if spin is None:
-            items.append(discord.ui.TextDisplay(self.brief()))
-        items.append(discord.ui.TextDisplay("\n".join(board(slots.PLACEHOLDER if spin is None else spin.grid))))
-        footer = [] if spin is None else slots.summary(spin, slot_symbol)
-        return items, [*footer, *self.tail()], [self.round_row(spin is not None)]
+            return "\n".join([self.brief(), *board(slots.PLACEHOLDER)]), [self.round_row(False)]
+        return "\n".join(board(spin.grid)), [self.round_row(True)]
 
     async def present(self, interaction: discord.Interaction) -> None:
         spin = self.table.state.spin

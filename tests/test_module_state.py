@@ -18,7 +18,7 @@ CONSTANTS = {
     "ai/adapters/discord/output.py": {"PROGRESS_OVERRIDES"},
     "ai/adapters/media/images.py": {"_LABELS", "SUPPORTED_IMAGE_TYPES"},
     "core/adapters/discord/brand.py": {"_TONE_EMOJIS", "_TONE_COLOURS"},
-    "games/adapters/discord/format.py": {"SUIT_SYMBOLS", "SLOT_FALLBACK", "ACTION_LABELS", "BANNERS"},
+    "games/adapters/discord/format.py": {"SUIT_SYMBOLS", "SLOT_FALLBACK", "ACTION_LABELS", "RESULTS"},
     "games/adapters/discord/tables.py": {"VIEWS"},
     "games/domain/rules.py": {"OUTCOMES"},
     "games/domain/slots.py": {"PAYS"},

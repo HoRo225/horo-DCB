@@ -9,6 +9,7 @@ from src.games.adapters.discord import tables
 from src.games.adapters.discord.tables import SlotsView
 from src.games.app.tables import Posted
 from src.games.domain.blackjack import Round
+from src.games.domain import slots
 from src.games.domain.slots import evaluate
 from src.games.domain.table import Blackjack, Slots
 from tests.support import testing
@@ -39,6 +40,17 @@ def colour(view: discord.ui.LayoutView) -> discord.Colour:
     return view.children[0].accent_colour
 
 
+def layout(view: discord.ui.LayoutView) -> list[type]:
+    return [type(item) for item in view.children[0].children[1:]]
+
+
+def texts(view: discord.ui.LayoutView) -> list[str]:
+    return [item.content for item in view.children[0].children[1:] if isinstance(item, discord.ui.TextDisplay)]
+
+
+SETTLED = [discord.ui.Separator, discord.ui.TextDisplay, discord.ui.Separator, discord.ui.TextDisplay]
+
+
 class BlackjackViewTests(unittest.TestCase):
     def test_new_table_shows_the_brief_and_a_start_button(self) -> None:
         view = seat_view(table(Blackjack()))
@@ -52,46 +64,79 @@ class BlackjackViewTests(unittest.TestCase):
     def test_round_offers_only_hit_and_stand_and_hides_the_hole_card(self) -> None:
         view = seat_view(table(Blackjack(Round(deck("10", "9", "8", "8")))))
         self.assertEqual(labels(view), ["叫牌", "停牌"])
-        self.assertIn("### 睦\\_頭　明牌 9 點\n## `9♠` 🂠", testing.text(view))
-        self.assertIn("### 你　18 點\n## `10♠` `8♠`", testing.text(view))
+        self.assertEqual(texts(view)[0], "**睦\\_頭** · 明牌 **9** 點\n## `9♠` 🂠\n\n**你** · **18** 點\n## `10♠` `8♠`")
         self.assertNotIn(BLACKJACK_BRIEF, testing.text(view))
+        self.assertEqual(layout(view), [discord.ui.Separator, discord.ui.TextDisplay])
+
+    def test_seats_name_the_host_and_bold_soft_bust_and_blackjack_points(self) -> None:
+        soft = seat_view(table(Blackjack(Round(deck("A", "9", "6", "8")))))
+        self.assertIn("**你** · 軟 **17** 點", testing.text(soft))
+        busted = Blackjack(Round(deck("10", "7", "6", "10", "K"))).play("hit", None)
+        self.assertIn("**你** · **26** 點 · 爆牌", testing.text(seat_view(table(busted))))
+        dealt = seat_view(table(Blackjack(Round(deck("9", "K", "9", "A")))))
+        self.assertIn("**睦\\_頭** · **Blackjack**\n## `K♠` `A♠`", testing.text(dealt))
+        self.assertIn("**HoRo** · 明牌 **9** 點", testing.text(tables.seat_view(table(Blackjack(Round(deck("10", "9", "8", "8")))), "HoRo")))
 
     def test_missing_avatars_leave_plain_text(self) -> None:
         self.assertEqual(thumbnails(seat_view(table(Blackjack(Round(deck("10", "10", "8", "8")))))), [])
 
-    def test_finished_rounds_show_a_banner_in_its_colour(self) -> None:
-        stood = Blackjack(Round(deck("10", "10", "8", "8"))).play("stand", None)
-        busted = Blackjack(Round(deck("10", "7", "6", "10", "K"))).play("hit", None)
-        for state, banner, tone in (
-            (Blackjack(Round(deck("A", "9", "K", "7"))), "# Blackjack！", GOLD_COLOUR),
-            (Blackjack(Round(deck("9", "K", "9", "A"))), "# 你輸了", LOSS_COLOUR),
-            (busted, "# 爆牌，你輸了", LOSS_COLOUR),
-            (stood, "# 打平", NEUTRAL_COLOUR),
+    def test_finished_rounds_settle_with_a_result_and_its_reason(self) -> None:
+        stand = lambda *ranks: Blackjack(Round(deck(*ranks))).play("stand", None)
+        for state, settlement, tone in (
+            (Blackjack(Round(deck("A", "9", "K", "7"))), "### ✨ Blackjack！\n起手 21 點", GOLD_COLOUR),
+            (Blackjack(Round(deck("A", "A", "K", "K"))), "### 🤝 平手\n雙方都是 Blackjack", NEUTRAL_COLOUR),
+            (Blackjack(Round(deck("9", "K", "9", "A"))), "### 💔 你輸了\n睦\\_頭起手 21 點", LOSS_COLOUR),
+            (Blackjack(Round(deck("10", "7", "6", "10", "K"))).play("hit", None), "### 💔 你輸了\n你爆牌", LOSS_COLOUR),
+            (stand("10", "10", "8", "6", "K"), "### 🏆 你贏了\n睦\\_頭爆牌", GOLD_COLOUR),
+            (stand("10", "10", "10", "8"), "### 🏆 你贏了\n20 點對 18 點", GOLD_COLOUR),
+            (stand("10", "10", "8", "8"), "### 🤝 平手\n雙方都是 18 點", NEUTRAL_COLOUR),
+            (stand("10", "9", "8", "7", "5"), "### 💔 你輸了\n18 點對 21 點", LOSS_COLOUR),
         ):
-            with self.subTest(banner):
+            with self.subTest(settlement):
                 view = seat_view(table(state))
-                self.assertIn(banner, testing.text(view))
+                self.assertEqual(texts(view)[-1], settlement)
+                self.assertEqual(layout(view), SETTLED)
                 self.assertEqual(colour(view), tone)
                 self.assertNotEqual(colour(view), ERROR_COLOUR)
                 self.assertEqual(labels(view), ["再來一局", "完整規則", "離桌"])
 
-    def test_line_lands_in_the_footer(self) -> None:
+    def test_dealer_bust_reason_spaces_a_latin_host_name(self) -> None:
+        state = Blackjack(Round(deck("10", "10", "8", "6", "K"))).play("stand", None)
+        self.assertEqual(texts(tables.seat_view(table(state), "HoRo"))[-1], "### 🏆 你贏了\nHoRo 爆牌")
+
+    def test_line_follows_the_settlement(self) -> None:
         view = seat_view(table(Blackjack(Round(deck("A", "9", "K", "7"))), taunt="下次再來"))
+        self.assertEqual(layout(view), SETTLED)
+        self.assertTrue(texts(view)[-1].startswith("### ✨ Blackjack！\n起手 21 點\n"))
         self.assertTrue(testing.text(view).endswith("**睦\\_頭**　下次再來"))
+
+    def test_line_during_a_round_sits_below_its_own_separator(self) -> None:
+        view = seat_view(table(Blackjack(Round(deck("10", "9", "8", "8"))), taunt="叫啊"))
+        self.assertEqual(layout(view), SETTLED)
+        self.assertTrue(texts(view)[-1].endswith("**睦\\_頭**　叫啊"))
+        self.assertNotIn("###", texts(view)[-1])
 
 
 class SlotsViewTests(unittest.TestCase):
     def test_new_table_shows_the_brief_over_an_unknown_board(self) -> None:
         view = seat_view(table(Slots()))
-        self.assertIn(f"{GAMES['slots'].brief}\n## ❔ ❔ ❔", testing.text(view))
+        self.assertEqual(texts(view), [f"{GAMES['slots'].brief}\n## ❔ ❔ ❔\n## ❔ ❔ ❔\n## ❔ ❔ ❔"])
+        self.assertEqual(layout(view), [discord.ui.Separator, discord.ui.TextDisplay])
         self.assertEqual((labels(view), colour(view)), (["開局", "完整規則", "離桌"], BRAND_COLOUR))
 
-    def test_spun_board_shows_the_multiplier_and_lines(self) -> None:
+    def test_winning_spin_settles_with_its_multiplier_and_lines(self) -> None:
         view = seat_view(table(Slots(evaluate((3, 4, 7)))))
-        self.assertIn("# ×4\n中 2 條線：上橫線 🍒🍒 ×2 · 左直線 🍒🍒 ×2", testing.text(view))
+        self.assertEqual(texts(view)[-1], "### 🎉 中獎 ×4\n中 2 條線：上橫線 🍒🍒 ×2 · 左直線 🍒🍒 ×2")
+        self.assertEqual(layout(view), SETTLED)
         self.assertNotIn(GAMES["slots"].brief, testing.text(view))
         self.assertEqual((labels(view)[0], colour(view)), ("再來一局", GOLD_COLOUR))
-        self.assertEqual(colour(seat_view(table(Slots(evaluate((10, 20, 30)))))), LOSS_COLOUR)
+
+    def test_losing_spin_says_no_win_and_why(self) -> None:
+        view = seat_view(table(Slots(evaluate((10, 20, 30)))))
+        self.assertEqual(texts(view)[-1], "### 💨 沒有中獎\n8 條線都沒有連線")
+        self.assertEqual(layout(view), SETTLED)
+        self.assertEqual(colour(view), LOSS_COLOUR)
+        self.assertNotIn("×0", testing.text(view))
 
     def test_header_shows_the_player_avatar(self) -> None:
         self.assertEqual(thumbnails(seat_view(table(Slots()))), [])
@@ -129,10 +174,14 @@ class ControlTests(unittest.TestCase):
                           if isinstance(item, (discord.ui.Button, discord.ui.Select, discord.ui.ActionRow))], [])
         self.assertEqual(view.actions, {})
 
+    def test_closed_idle_slots_table_keeps_its_result_in_the_line(self) -> None:
+        view = seat_view(table(Slots(evaluate((10, 20, 30))), farewell="已閒置結束"))
+        self.assertEqual(testing.text(view), "🪑 **已閒置結束**　拉霸・<@1>・沒有中獎")
+
     def test_finished_round_without_farewell_keeps_its_full_card(self) -> None:
         settled = Blackjack(Round(deck("10", "9", "8", "7", "5"))).settle()
         view = seat_view(table(settled))
-        self.assertIn("# 你輸了", testing.text(view))
+        self.assertIn("### 💔 你輸了", testing.text(view))
         self.assertEqual(labels(view), ["再來一局", "完整規則", "離桌"])
 
     def test_table_views_are_never_stored_for_dispatch(self) -> None:
@@ -149,6 +198,12 @@ class RevealTests(unittest.IsolatedAsyncioTestCase):
         clicked.edit_original_response = AsyncMock(side_effect=record)
         return clicked
 
+    def test_spinning_frame_shares_the_settled_layout_in_brand_colour(self) -> None:
+        state = Slots(evaluate((3, 4, 7)))
+        view = SlotsView(table(state), HOST, frame=slots.stopping(state.spin.grid)[0])
+        self.assertEqual((layout(view), texts(view)[-1], colour(view)), (SETTLED, "### 🎰 轉動中…", BRAND_COLOUR))
+        self.assertEqual(labels(view), [])
+
     async def test_spin_reveals_the_reels_then_the_result(self) -> None:
         shown = []
         clicked = self.interaction(shown)
@@ -158,10 +213,10 @@ class RevealTests(unittest.IsolatedAsyncioTestCase):
             await view.present(clicked)
         self.assertEqual(len(shown), 4)
         self.assertEqual([buttons for buttons, _ in shown], [[], [], [], ["再來一局", "完整規則", "離桌"]])
-        self.assertTrue(all("🎰 轉動中…" in text for _, text in shown[:3]))
+        self.assertTrue(all(text.endswith("\n### 🎰 轉動中…") for _, text in shown[:3]))
         self.assertIn("## ❔ ❔ ❔", shown[0][1])
         self.assertNotIn("轉動中", shown[3][1])
-        self.assertIn("# ×4", shown[3][1])
+        self.assertIn("### 🎉 中獎 ×4", shown[3][1])
 
     async def test_failed_frame_still_attempts_the_result(self) -> None:
         clicked = testing.interaction()
