@@ -1,21 +1,17 @@
 from __future__ import annotations
 
-import asyncio
 import sqlite3
 import unittest
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import discord
 
-from src.games.blackjack import Card
-from src.games.store import GameStore
 from src.core.adapters.sqlite.db import open_db, transaction
 from src.core.adapters.sqlite.operations import OperationStore
 from src.core.adapters.sqlite.settings import SettingsStore
 from src.core.domain.settings import Setting
 from src.core.app.supervisor import PRESENTATION, WORK, Lane, TaskGroup
 
-GAME_TASKS = TaskGroup("test.games", WORK)
 AI_CLEANUPS = TaskGroup("test.ai", PRESENTATION)
 
 
@@ -27,10 +23,6 @@ def text(view: discord.ui.BaseView) -> str:
     return "\n".join(
         item.content for item in view.walk_children() if isinstance(item, discord.ui.TextDisplay)
     )
-
-
-def deck(*ranks: str) -> list[Card]:
-    return [Card(rank, "S") for rank in reversed(ranks)]
 
 
 def group(lane: Lane = WORK) -> TaskGroup:
@@ -50,21 +42,6 @@ def memory_db(test: unittest.TestCase) -> sqlite3.Connection:
     db = open_db(":memory:")
     test.addCleanup(db.close)
     return db
-
-
-def seat(store: GameStore, user_id: int, game: str = "blackjack", message_id: int = 20) -> None:
-    with transaction(store.db):
-        store.replace_table(user_id, game, 10, message_id)
-    store.advance_state(user_id)
-
-
-def quiet_rana(test: unittest.IsolatedAsyncioTestCase, ask: str | None = None) -> AsyncMock:
-    ask_once = AsyncMock(return_value=ask)
-    for patcher in (patch("src.games.rana.ask_once", ask_once), patch("src.games.rana.ready", return_value=True)):
-        patcher.start()
-        test.addCleanup(patcher.stop)
-    test.addAsyncCleanup(lambda: asyncio.gather(*GAME_TASKS.pending(), return_exceptions=True))
-    return ask_once
 
 
 def interaction() -> MagicMock:

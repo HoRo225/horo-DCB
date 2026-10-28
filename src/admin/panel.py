@@ -93,7 +93,6 @@ class AdminPanelView(ErrorNotice, discord.ui.LayoutView):
         self.temp_voice = bot.temp_voice
         self.steam = bot.steam
         self.games = bot.games
-        self.game_operations = bot.game_operations
         self.effects = bot.effects
         self.toggled_at: dict[str, float] = {}
         self._states: dict[type, object] = {}

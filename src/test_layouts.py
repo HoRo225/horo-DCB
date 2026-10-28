@@ -17,15 +17,18 @@ from src.ai.query_views import help_view
 from src.core.adapters.discord.receipts import receipt_view
 from src.bot import HoroBot
 from src.core.adapters.discord.brand import ICONS, WHITE, full_rules, notice_view
-from src.games import slots
-from src.games.blackjack import RANKS, SUITS, Card, Round
-from src.games.tables import TABLES, BlackjackTableView, SlotTableView
-from src.games.views import lobby_view
+from src.games import GAMES, LiveTable
+from src.games.adapters.discord.format import slot_symbol
+from src.games.adapters.discord.tables import seat_view
+from src.games.adapters.discord.views import lobby_view
+from src.games.domain import slots
+from src.games.domain.blackjack import RANKS, SUITS, Card, Round
+from src.games.domain.table import Blackjack, Slots
 from src.core.adapters.sqlite.db import transaction
 from src.testing import put_setting
 from src.steam import SteamFetchResult, SteamOffer
 from src.steam.adapters.discord.views import build_offer_view
-from src.games.store import GAMES_HUB_MESSAGE
+from src.games.adapters.sqlite.store import GAMES_HUB_MESSAGE
 from src.ai.access import AI_ENABLED
 from src.steam.adapters.sqlite.store import STEAM_ENABLED, STEAM_ROLE_IDS
 from src.voice.adapters.sqlite.store import VOICE_ENABLED
@@ -151,40 +154,40 @@ class LayoutBudgetTest(unittest.IsolatedAsyncioTestCase):
             fits("panel closed", view)
             fits("lobby", lobby_view())
             fits("lobby without banner", lobby_view(banner=False))
-            for game, table in TABLES.items():
-                fits(f"{game} full rules", full_rules(f"{ICONS[game]} {table.title} 完整規則", table.sections()))
+            for game in GAMES.values():
+                fits(f"{game.key} full rules", full_rules(f"{ICONS[game.key]} {game.title} 完整規則", game.rules(slot_symbol)))
 
-            store = view.games
-            table = BlackjackTableView(store, OWNER, notice="註", avatar=image)
-            fits("blackjack open", table)
-            table.game = Round([Card("K", "S"), Card("9", "S"), Card("A", "S"), Card("9", "H")])
-            table.render()
-            fits("blackjack dealer blackjack", table)
-            table.game = game = Round([Card("2", "S")] * 60)
-            table.render()
-            fits("blackjack dealt", table)
+            hub = [discord.ui.Button(label="前往遊戲大廳", emoji=ICONS["games"], url="https://discord.com/channels/1/2/3")]
+            table = LiveTable(OWNER, Blackjack(), "t" * 32, avatar_url=image)
+            fits("blackjack open", seat_view(table))
+            table.state = Blackjack(Round([Card("K", "S"), Card("9", "S"), Card("A", "S"), Card("9", "H")]))
+            fits("blackjack dealer blackjack", seat_view(table))
+            game = Round([Card("2", "S")] * 60)
+            table.state = Blackjack(game)
+            fits("blackjack dealt", seat_view(table))
             while not game.done:
                 game.apply("hit")
-                table.render()
-                fits("blackjack hit", table)
+                fits("blackjack hit", seat_view(table))
             self.assertEqual(len(game.player), 11)
             table.taunt = "嘴" * 60
-            table.render()
-            fits("blackjack settled with line", table)
-            self.assertTrue(any(f"**樂奈**　{table.taunt}" in i.content for i in table.walk_children()
+            shown = seat_view(table)
+            fits("blackjack settled with line", shown)
+            self.assertTrue(any(f"**樂奈**　{table.taunt}" in i.content for i in shown.walk_children()
                                 if isinstance(i, discord.ui.TextDisplay)))
+            table.farewell = "註" * 60
+            fits("blackjack closed idle", seat_view(table, hub))
 
-            spin = SlotTableView(store, OWNER, notice="註", avatar=image)
-            fits("slots open", spin)
-            with patch("src.games.slots.spin", lambda: slots.evaluate((0, 0, 0))):
-                spin.multiplier, spin.result, spin.summary = spin.play()
-            spin.render()
-            fits("slots spun", spin)
+            spin = LiveTable(OWNER, Slots(), "t" * 32, avatar_url=image)
+            fits("slots open", seat_view(spin))
+            spin.state = Slots(slots.evaluate((0, 0, 0)))
+            fits("slots spun", seat_view(spin))
             spin.taunt = "嘴" * 60
-            spin.render()
-            fits("slots spun with line", spin)
-            self.assertTrue(any(f"**樂奈**　{spin.taunt}" in i.content for i in spin.walk_children()
+            shown = seat_view(spin)
+            fits("slots spun with line", shown)
+            self.assertTrue(any(f"**樂奈**　{spin.taunt}" in i.content for i in shown.walk_children()
                                 if isinstance(i, discord.ui.TextDisplay)))
+            spin.farewell = "註" * 60
+            fits("slots closed idle", seat_view(spin, hub))
 
             roles = [MagicMock(mention=f"<@&{10**18 + n}>") for n in range(25)]
             offer = SteamOffer(1, name, "NT$1,000,000", "說" * 5000, ("開發商",) * 10, image, ends_at=2**31)

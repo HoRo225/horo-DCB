@@ -78,23 +78,22 @@ class ImportBoundaryTests(unittest.TestCase):
                        "core.domain.clock", "core.app.supervisor", "core.app.maintenance", "core.app.ports",
                        "core.adapters.discord.shutdown", "core.adapters.discord.brand",
                        "core.adapters.discord.channels", "core.adapters.discord.live", "core.adapters.discord.effects", "core.app.effects",
-                       "core.domain.actions", "core.app.actions", "core.adapters.discord.receipts", "core.adapters.discord.private", "core.adapters.discord.watchdog", "core.app.config", "cards"):
+                       "core.domain.actions", "core.app.actions", "core.adapters.discord.receipts", "core.adapters.discord.private", "core.adapters.discord.watchdog", "core.app.config"):
             modules = loaded_modules(f"src.{shared}")
             with self.subTest(shared):
                 self.assertEqual({m for m in modules if m.startswith("src.") and m.split(".")[1] in features}, set())
 
     def test_feature_cogs_do_not_load_other_features(self) -> None:
         features = {"games", "voice", "steam", "ai", "admin"}
-        allowed = {"games": {"ai"}, "steam": {"ai"}}
-        cogs = {"steam": "src.steam.adapters.discord.cog", "voice": "src.voice.adapters.discord.cog"}
         for feature in features - {"admin"}:
-            modules = loaded_modules(cogs.get(feature, f"src.{feature}.cog"))
+            cog = f"src.{feature}.cog" if feature == "ai" else f"src.{feature}.adapters.discord.cog"
+            modules = loaded_modules(cog)
             with self.subTest(feature):
                 loaded = {m.split(".")[1] for m in modules if m.startswith("src.") and m.split(".")[1] in features}
-                self.assertLessEqual(loaded, {feature, *allowed.get(feature, ())})
+                self.assertLessEqual(loaded, {feature})
 
     def test_domain_rules_and_stores_load_no_discord_or_ai_runtime(self) -> None:
-        for module in ("games.store", "games.blackjack", "games.slots"):
+        for module in ("games.adapters.sqlite.store", "games.app.play", "games.app.lobby", "games.domain.catalog"):
             with self.subTest(module=module):
                 loaded = loaded_modules(f"src.{module}")
                 self.assertNotIn("discord", loaded)

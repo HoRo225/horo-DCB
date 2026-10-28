@@ -3,7 +3,7 @@ import sys
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 
-from src.games.cards import banner_png
+from src.games.adapters.discord.art import banner_png
 
 OUT = pathlib.Path(__file__).resolve().parent / "out"
 

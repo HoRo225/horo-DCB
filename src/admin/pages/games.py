@@ -15,12 +15,8 @@ from src.admin.pages.common import (
     role_select,
 )
 from src.core.adapters.discord.brand import BRAND_COLOUR, ICONS
-from src.core.adapters.discord.channels import interaction_operation_id
-from src.games.access import hub_link
-from src.games.hub import (
-    bind_channel as bind_game_channel,
-    channel_problem as game_channel_problem,
-)
+from src.core.adapters.discord.channels import interaction_operation_id, text_channel_problem
+from src.games.adapters.discord.access import hub_link
 
 if TYPE_CHECKING:
     from src.admin.panel import AdminPanelView
@@ -36,8 +32,7 @@ def games_state(view: AdminPanelView) -> ChannelState:
             "請在下方選擇遊戲頻道；選擇後會自動發布遊戲大廳。",
         )
     channel = f"遊戲頻道 <#{channel_id}>"
-    guild = view.live.guild()
-    if guild is not None and (problem := game_channel_problem(guild, view.games)):
+    if problem := view.games.channel_problem():
         return ChannelState("需要處理", channel, problem, problem)
     return ChannelState("狀態正常", channel, channel)
 
@@ -56,7 +51,7 @@ def render_games(view: AdminPanelView, note: tuple[str, str] | None = None) -> N
         f"**常駐訊息**　{'已發布' if hub else '尚未發布'}"
     )
     children.append(
-        discord.ui.Section(status, accessory=link[0]) if (link := hub_link(view._bot)) else discord.ui.TextDisplay(status)
+        discord.ui.Section(status, accessory=link[0]) if (link := hub_link(hub, view.guild_id)) else discord.ui.TextDisplay(status)
     )
     children.extend(
         (
@@ -69,8 +64,7 @@ def render_games(view: AdminPanelView, note: tuple[str, str] | None = None) -> N
                     lambda i, channel: bind_channel(
                         view,
                         i,
-                        lambda guild, current: bind_game_channel(guild, view.game_operations, guild.get_channel(channel.id) if channel else None,
-                            operation_id=interaction_operation_id(i), still_current=lambda: current() and channel is not None and guild.get_channel(channel.id) is not None),
+                        lambda guild, current: bind_game_channel(view, guild, channel, i, current),
                         render_games,
                         "已設定遊戲頻道並發布遊戲大廳。",
                     ),
@@ -104,6 +98,19 @@ def render_games(view: AdminPanelView, note: tuple[str, str] | None = None) -> N
     view.set_container(*children, colour=BRAND_COLOUR, note=note, problem=state.next_step)
 
 
+async def bind_game_channel(
+    view: AdminPanelView, guild: discord.Guild, channel: discord.abc.GuildChannel | None,
+    interaction: discord.Interaction, current: Callable[[], bool],
+) -> str | None:
+    chosen = guild.get_channel(channel.id) if channel else None
+    if problem := text_channel_problem(chosen, guild):
+        return problem
+    return await view.games.bind_channel(
+        chosen.id, operation_id=interaction_operation_id(interaction),
+        still_current=lambda: current() and guild.get_channel(chosen.id) is not None,
+    )
+
+
 async def handle_game_role_select(
     view: AdminPanelView, interaction: discord.Interaction, roles: tuple[discord.Role, ...]
 ) -> None:
@@ -127,8 +134,8 @@ async def _publish(view: AdminPanelView, interaction: discord.Interaction, opera
     guild = view.live.guild()
     if guild is None:
         return lambda: render_games(view, no_guild_note())
-    problem = await view.game_operations.publish_hub(guild, operation_id=interaction_operation_id(interaction),
-                                                   still_current=lambda: view.is_current(operation) and view.live.guild() is guild)
+    problem = await view.games.publish_hub(operation_id=interaction_operation_id(interaction),
+                                           still_current=lambda: view.is_current(operation) and view.live.guild() is guild)
     note = ("warn", problem) if problem else ("ok", "已重發遊戲大廳。")
     return lambda: render_games(view, note)
 

@@ -11,6 +11,7 @@ from src.admin.cog import AdminCog
 from src.admin.sessions import PanelSessionRegistry
 from src.core.adapters.sqlite.operations import OperationStore
 from src.ai.actions import ai_actions
+from src.ai.background import GameRemarks
 from src.ai.cog import AiCog
 from src.ai.access import AiSettings
 from src.ai.access_service import AiAccessService
@@ -23,10 +24,13 @@ from src.core.adapters.discord.effects import EffectResolver, effect_actions
 from src.core.adapters.discord.live import LiveGuild
 from src.core.adapters.discord.receipts import DiscordReceipts
 from src.core.app.actions import ActionEngine, ActionRegistry
-from src.games.actions import game_actions
-from src.games.cog import GamesCog
-from src.games.operations import EFFECT_KINDS as GAME_EFFECT_KINDS, GameOperations
-from src.games.store import GameStore
+from src.games import Lobby, Play, Tables
+from src.games.adapters.discord.access import DiscordPlayers
+from src.games.adapters.discord.actions import game_actions
+from src.games.adapters.discord.cog import GamesCog
+from src.games.adapters.discord.effects import game_effect_kinds
+from src.games.adapters.discord.presenter import DiscordLobbyBoard, DiscordTables
+from src.games.adapters.sqlite.store import SqliteGameStore
 from src.core.adapters.sqlite.db import DB_PATH, hold_lock, open_db
 from src.steam import Steam
 from src.steam.adapters.discord.actions import steam_actions
@@ -87,8 +91,12 @@ class HoroBot(commands.Bot):
         self.steam = steam = Steam(
             steam_store, SteamOfferProvider(), DiscordAnnouncer(self, live), supervisor.group("steam", SCHEDULED),
         )
-        self.games = GameStore(db)
-        self.game_operations = GameOperations(self, supervisor.group("games", WORK), live)
+        game_store, game_tasks = SqliteGameStore(db), supervisor.group("games", WORK)
+        self.games = lobby = Lobby(game_store, DiscordLobbyBoard(self, live), live, game_tasks)
+        game_tables, game_players, game_presenter = Tables(), DiscordPlayers(live), DiscordTables(self, live, lobby)
+        play = Play(game_store, game_tables, lobby, game_players, game_presenter, GameRemarks(self), game_tasks)
+        self._games_cog = GamesCog(self, play, lobby, game_tables, game_presenter, game_players, live,
+                                   supervisor.group("games.cog", SCHEDULED))
         self.admin_panels = PanelSessionRegistry(
             supervisor.group("admin", PRESENTATION), supervisor.group("admin", WORK),
         )
@@ -96,13 +104,13 @@ class HoroBot(commands.Bot):
         self.receipts = DiscordReceipts(self.operations, live, self, registry)
         kinds = EffectRegistry()
         kinds.register(
-            *voice_effect_kinds(voice), *steam_effect_kinds(steam, steam_store), *GAME_EFFECT_KINDS,
+            *voice_effect_kinds(voice), *steam_effect_kinds(steam, steam_store), *game_effect_kinds(),
             self.receipts.effect_kind(),
         )
         self.effects = EffectResolver(self.operations, kinds, live, self)
         registry.register(
-            *game_actions(self.game_operations, live),
-            ai_actions(self.ai_settings, self.access_service, codex.get_models, lambda: self.games.channel_id),
+            *game_actions(play, lobby, live),
+            ai_actions(self.ai_settings, self.access_service, codex.get_models, lambda: lobby.channel_id),
             voice_actions(voice, live),
             steam_actions(steam, live),
             admin_actions(lambda: self.ai_settings.enabled, lambda: voice.enabled,
@@ -136,7 +144,7 @@ class HoroBot(commands.Bot):
         self.add_dynamic_items(self.receipts.private_results.item)
         supervisor, live = self.supervisor, self.live
         for cog in (
-            GamesCog(self, supervisor.group("games.cog", SCHEDULED), live),
+            self._games_cog,
             VoiceCog(self.temp_voice, live),
             AdminCog(self, live),
             AiCog(self, live, requests=supervisor.group("ai", REQUEST), cleanups=supervisor.group("ai", PRESENTATION),

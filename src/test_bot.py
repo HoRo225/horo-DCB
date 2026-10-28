@@ -8,7 +8,9 @@ from src import testing
 from src.ai.cog import AiCog
 from src.bot import HoroBot
 from src.core.app.supervisor import REQUEST
-from src.games.views import GamePickSelect, RulesButton, lobby_view
+from src.games.adapters.discord.presenter import DiscordLobbyBoard
+from src.games.adapters.discord.views import lobby_view
+from src.games.adapters.sqlite.store import GAMES_CHANNEL_ID
 from src.steam import SteamOffer
 from src.steam.adapters.discord.views import build_offer_view
 
@@ -65,9 +67,10 @@ class HoroBotTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual({c.name: c.to_dict(tree) for c in tree.get_commands(guild=discord.Object(G))}, COMMANDS)
         self.assertEqual(tree.get_commands(), [])
         self.assertIn("on_interaction", self.bot.extra_events)
+        games = self.bot.get_cog("GamesCog")
         self.assertEqual(
             set(self.bot._connection._view_store._dynamic_items.values()),
-            {GamePickSelect, RulesButton, self.bot.receipts.private_results.item, self.bot.get_cog("SteamCog").claim},
+            {games.pick, games.rules, self.bot.receipts.private_results.item, self.bot.get_cog("SteamCog").claim},
         )
 
     async def test_hub_custom_ids_reach_registered_handlers(self) -> None:
@@ -161,17 +164,19 @@ class HoroShutdownTests(unittest.IsolatedAsyncioTestCase):
         order = []
         self.db.execute("CREATE TABLE shutdown_check (owner TEXT)")
 
-        async def game_action(*_args, **_kwargs):
+        async def post(*_args, **_kwargs):
             order.append("game")
             entered.set()
             await gate.wait()
             self.db.execute("INSERT INTO shutdown_check VALUES (?)", ("game",))
 
+        testing.put_setting(self.db, GAMES_CHANNEL_ID, 10)
         with (
-            patch.object(self.bot.game_operations, "_execute", side_effect=game_action),
+            patch.object(DiscordLobbyBoard, "has_channel", return_value=True),
+            patch.object(DiscordLobbyBoard, "post", side_effect=post),
             patch("discord.Client.close", step(order, "discord")),
         ):
-            game = asyncio.create_task(self.bot.game_operations.execute(None, "deal"))
+            game = asyncio.create_task(self.bot.games.publish_hub())
             async with asyncio.timeout(2):
                 await entered.wait()
             self.assertIn(game, self.bot.supervisor.pending())

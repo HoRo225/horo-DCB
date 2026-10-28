@@ -19,7 +19,7 @@ from src.steam import SteamFetchResult, SteamOffer
 from src.testing import group, text
 from src.core.app.supervisor import PRESENTATION, WORK
 from src.ai.access import AI_ENABLED
-from src.games.store import GAMES_HUB_MESSAGE
+from src.games.adapters.sqlite.store import GAMES_CHANNEL_ID, GAMES_HUB_MESSAGE
 from src.steam.adapters.sqlite.store import STEAM_CHANNEL_ID
 from src.voice.adapters.sqlite.store import VOICE_ENABLED, VOICE_ENTRY_CHANNEL_ID
 
@@ -725,7 +725,7 @@ class AdminPanelTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(resolve.await_args.kwargs["message_id"], 501)
 
     async def test_unusable_game_channel_needs_attention(self) -> None:
-        self.bot.games.set_channel(800)
+        put_setting(self.db, GAMES_CHANNEL_ID, 800)
         shown = self.screen(await self.open_panel())
         self.assertIn("2 個需要處理", shown)
         self.assertIn("🟠 需要處理 · **🎲 遊戲大廳**\n找不到已綁定的遊戲頻道，請在控制台重新選擇", shown)
@@ -739,7 +739,7 @@ class AdminPanelTest(unittest.IsolatedAsyncioTestCase):
     async def test_blue_marks_only_the_next_step(self) -> None:
         primary, secondary = discord.ButtonStyle.primary, discord.ButtonStyle.secondary
         self.channels[800] = text_channel(800, self.guild)
-        self.bot.games.set_channel(800)
+        put_setting(self.db, GAMES_CHANNEL_ID, 800)
         await self.open_panel()
         await self.go("遊戲大廳")
         self.assertEqual(self.button("重發遊戲大廳").style, primary)
@@ -767,7 +767,7 @@ class AdminPanelTest(unittest.IsolatedAsyncioTestCase):
     async def test_warning_note_turns_page_orange(self) -> None:
         await self.open_panel()
         self.channels[800] = text_channel(800, self.guild)
-        self.bot.games.set_channel(800)
+        put_setting(self.db, GAMES_CHANNEL_ID, 800)
         await self.go("遊戲大廳")
         roles = self.select("選擇可用身分組（清空即所有人可用）")
         outsider = self.role(901)
@@ -785,7 +785,7 @@ class AdminPanelTest(unittest.IsolatedAsyncioTestCase):
         self.assertIn(f"## {ICONS['closed']} 管理控制台\n-# 已關閉", text(self.view))
 
     async def test_games_state_without_bot_member(self) -> None:
-        self.bot.games.set_channel(800)
+        put_setting(self.db, GAMES_CHANNEL_ID, 800)
         self.channels[800] = text_channel(800, self.guild)
         await self.open_panel()
         self.guild.me = None

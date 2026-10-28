@@ -18,9 +18,11 @@ from src.core.app.actions import ActionEngine, ActionRegistry
 from src.core.app.ports import Source
 from src.core.app.supervisor import WORK, TaskGroup
 from src.core.domain.actions import Action, Plan
-from src.games.actions import game_actions
-from src.games.operations import GameOperations
-from src.games.store import GameStore
+from src.games import Lobby, Play, Tables
+from src.games.adapters.discord.access import DiscordPlayers
+from src.games.adapters.discord.actions import game_actions
+from src.games.adapters.discord.presenter import DiscordLobbyBoard, DiscordTables
+from src.games.adapters.sqlite.store import SqliteGameStore
 from src.voice.adapters.discord.actions import voice_actions
 
 GUILD, CHANNEL, ACTOR, ROLE, RECEIPT = 5, 10, 1, 7, 3000
@@ -48,11 +50,10 @@ class ActionHarness:
         self.ai.enabled = True
         self.ai.set_allowlist(GUILD, frozenset({CHANNEL}), roles=False)
         self.ai.set_allowlist(GUILD, frozenset({ROLE}), roles=True)
-        self.games = GameStore(self.db)
-        self.games.set_channel(CHANNEL)
+        store = SqliteGameStore(self.db)
+        store.set_channel(CHANNEL, operation_id=None)
         self.voice = SimpleNamespace(reconcile=AsyncMock())
         self.client = SimpleNamespace(
-            games=self.games,
             get_guild=lambda guild_id: self.guild if guild_id == GUILD else None,
             get_channel=lambda channel_id: self.channel if channel_id == CHANNEL else None,
             get_partial_messageable=lambda channel_id: SimpleNamespace(
@@ -60,14 +61,17 @@ class ActionHarness:
             ),
         )
         self.live = LiveGuild(self.client, GUILD, lambda: False)
-        self.game_operations = GameOperations(self.client, TaskGroup("test.games", WORK), self.live)
+        tasks = TaskGroup("test.games", WORK)
+        self.games = Lobby(store, DiscordLobbyBoard(self.client, self.live), self.live, tasks)
+        self.play = Play(store, Tables(), self.games, DiscordPlayers(self.live),
+                         DiscordTables(self.client, self.live, self.games), AsyncMock(), tasks)
         self.access = AiAccessService(self.ai, SimpleNamespace(cancel=AsyncMock()), TaskGroup("test.access", WORK))
         self.restart()
 
     def restart(self) -> None:
         registry = ActionRegistry()
         registry.register(
-            *game_actions(self.game_operations, self.live),
+            *game_actions(self.play, self.games, self.live),
             ai_actions(self.ai, self.access, AsyncMock(return_value=()), lambda: self.games.channel_id),
             voice_actions(self.voice, self.live),
         )
@@ -79,7 +83,7 @@ class ActionHarness:
         self.member.guild_permissions = discord.Permissions(administrator=True)
 
     def game_snapshot(self) -> dict:
-        return self.game_operations.snapshot(ACTOR)
+        return self.play.snapshot(ACTOR)
 
     async def execute(self, *actions: tuple[str, dict], message_id: int = 1000, game: dict | None = None,
                       content: str = "") -> list[dict]:

@@ -13,8 +13,8 @@ from src.core.adapters.sqlite.db import open_db, transaction
 from src.core.adapters.sqlite.operations import OperationStore
 from src.core.app.effects import EffectKind, EffectRegistry, MessageProof, ResourceProof
 from src.core.adapters.sqlite.settings import SettingsStore
-from src.games.operations import EFFECT_KINDS as GAME_EFFECT_KINDS
-from src.games.store import GAMES_HUB_MESSAGE
+from src.games.adapters.discord.effects import game_effect_kinds
+from src.games.adapters.sqlite.store import GAMES_HUB_MESSAGE
 from tests.support.discord import Client, Guild, member
 
 G, CHANNEL, ADMIN, BOT = 100, 101, 102, 103
@@ -332,7 +332,7 @@ class ResolverTests(Harness):
 class FeatureKindTests(Harness):
     def setUp(self) -> None:
         super().setUp()
-        self.kinds.register(*GAME_EFFECT_KINDS)
+        self.kinds.register(*game_effect_kinds())
         self.effects = self.resolver()
 
     async def resolve(self, effect_id: str, resolution: str, **kwargs) -> str | None:

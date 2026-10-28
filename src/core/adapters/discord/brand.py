@@ -60,7 +60,6 @@ APP_EMOJIS: dict[str, str] = {}
 WHITE: dict[str, str] = {}
 _TONE_EMOJIS = {"warn": "lowarn", "error": "lrerror"}
 _TONE_COLOURS = {"warn": WARN_COLOUR, "error": ERROR_COLOUR, "deadline": NEUTRAL_COLOUR}
-PENDING_CHECK = "結果待查，請管理員到 /控制台「待處理項目」核對；不會自動重送。"
 _brand_urls: dict[str, str | None] = {"card": None}
 
 
