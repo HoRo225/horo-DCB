@@ -77,7 +77,7 @@ def init_problems(path: Path, source: str) -> list[str]:
 
 
 def layered() -> list[Path]:
-    return sorted(path for path in SRC.iterdir() if (path / "domain").is_dir() or (path / "app").is_dir())
+    return sorted(path for path in SRC.iterdir() if any((path / layer).is_dir() for layer in ("domain", "app", "adapters")))
 
 
 def sources(package: Path):
@@ -87,8 +87,9 @@ def sources(package: Path):
 
 
 class LayerTests(unittest.TestCase):
-    def test_voice_is_layered(self) -> None:
+    def test_voice_and_admin_are_layered(self) -> None:
         self.assertIn(SRC / "voice", layered())
+        self.assertIn(SRC / "admin", layered())
 
     def test_layers_import_only_inward(self) -> None:
         for package in layered():

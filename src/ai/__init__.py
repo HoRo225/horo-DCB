@@ -9,6 +9,7 @@ from src.ai.app.ports import (
     RateWindow,
     RuntimeStatus,
     StatusReason,
+    StoreError,
     TextModel,
 )
 from src.ai.app.settings import MAX_CODEX_ALLOWED_CHANNELS, AiSettings
@@ -52,6 +53,7 @@ __all__ = [
     "RateWindow",
     "RuntimeStatus",
     "StatusReason",
+    "StoreError",
     "TextModel",
     "find_model",
     "model_identifier",

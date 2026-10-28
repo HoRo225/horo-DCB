@@ -4,21 +4,20 @@ import asyncio
 import logging
 from collections.abc import Awaitable, Callable, Coroutine
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 import discord
 
-from src.admin.pages.ai import load_ai, render_ai, render_ai_access, render_ai_tech
-from src.admin.pages.ai_models import load_models, render_ai_models
-from src.admin.pages.common import IDLE_TIMEOUT_SECONDS
-from src.admin.pages.games import render_games
-from src.admin.pages.effects import render_effects
-from src.admin.pages.overview import render_overview
-from src.admin.pages.steam import render_steam
-from src.admin.pages.voice import render_voice
-from src.admin.ports import CodexAccount
-from src.admin.sessions import PanelSession
-from src.core.adapters.discord.live import LiveGuild
+from src.admin.adapters.discord.pages.ai import load_ai, render_ai, render_ai_access, render_ai_tech
+from src.admin.adapters.discord.pages.ai_models import load_models, render_ai_models
+from src.admin.adapters.discord.pages.common import IDLE_TIMEOUT_SECONDS
+from src.admin.adapters.discord.pages.games import render_games
+from src.admin.adapters.discord.pages.effects import render_effects
+from src.admin.adapters.discord.pages.overview import render_overview
+from src.admin.adapters.discord.pages.steam import render_steam
+from src.admin.adapters.discord.pages.voice import render_voice
+from src.admin.adapters.discord.ports import AdminServices
+from src.admin.adapters.discord.sessions import PanelSession
 from src.core.adapters.discord.brand import (
     BRAND_COLOUR,
     ICONS,
@@ -32,9 +31,6 @@ from src.core.adapters.discord.brand import (
     tint,
     tone_colour,
 )
-
-if TYPE_CHECKING:
-    from src.bot import HoroBot
 
 QUICK_REPLY_SECONDS = 1.5
 
@@ -77,29 +73,19 @@ NAV_PAGES = {
 
 
 class AdminPanelView(ErrorNotice, discord.ui.LayoutView):
-    def __init__(
-        self, bot: HoroBot, live: LiveGuild, session: PanelSession, interaction: discord.Interaction
-    ) -> None:
+    def __init__(self, services: AdminServices, session: PanelSession, interaction: discord.Interaction) -> None:
         super().__init__(timeout=IDLE_TIMEOUT_SECONDS)
         self.page = "overview"
         self.user_id = interaction.user.id
-        self._bot = bot
-        self.live = live
+        self.services = services
         self.guild = interaction.guild
         self.guild_id = self.guild.id
-        self.codex_client: CodexAccount = bot.codex
-        self.ai_settings = bot.ai_settings
-        self.access_service = bot.access_service
-        self.temp_voice = bot.temp_voice
-        self.steam = bot.steam
-        self.games = bot.games
-        self.effects = bot.effects
         self.toggled_at: dict[str, float] = {}
         self._states: dict[type, object] = {}
-        self._panel_registry = bot.admin_panels
+        self._panel_registry = services.panels
         self._panel_session = session
         self._interaction: discord.Interaction | None = None
-        self._retirement_task: asyncio.Task[None] | None = None
+        self.retirement_task: asyncio.Task[None] | None = None
         self._idle_closed = False
         self._operation = 0
         self._edit_lock = asyncio.Lock()
@@ -361,7 +347,7 @@ class AdminPanelView(ErrorNotice, discord.ui.LayoutView):
         for task in tuple(self._panel_session.tasks):
             if (
                 task is not current
-                and task is not self._retirement_task
+                and task is not self.retirement_task
                 and not task.done()
                 and not task.cancelling()
             ):
@@ -373,9 +359,9 @@ class AdminPanelView(ErrorNotice, discord.ui.LayoutView):
             self._interaction = interaction
 
     def close_stale_message(self) -> None:
-        if self._retirement_task is not None:
+        if self.retirement_task is not None:
             return
-        self._retirement_task = self.spawn(self._close_stale_message())
+        self.retirement_task = self.spawn(self._close_stale_message())
 
     async def _close_stale_message(self) -> None:
         async with self._edit_lock:
@@ -453,8 +439,9 @@ class AdminPanelView(ErrorNotice, discord.ui.LayoutView):
         return operation == self._operation and self.alive and self._authorized()
 
     def _authorized(self) -> bool:
-        guild = self.live.guild()
-        if guild is None or not self.live.admin(self.user_id):
+        live = self.services.live
+        guild = live.guild()
+        if guild is None or not live.admin(self.user_id):
             return False
         self.guild = guild
         return True

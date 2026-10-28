@@ -1,26 +1,26 @@
 from __future__ import annotations
-from src.core.adapters.discord.channels import interaction_operation_id
 
 import logging
-import sqlite3
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
 import discord
 
-from src.admin.pages.common import footer_note, spacer
+from src.admin.adapters.discord.pages.common import footer_note, spacer
 from src.ai import (
     DEFAULT_MODEL_SETTINGS,
     ModelChoice,
     ModelInfo,
     ModelSettings,
+    StoreError,
     find_model,
 )
 from src.core.adapters.discord.brand import BRAND_COLOUR, ICONS
+from src.core.adapters.discord.channels import interaction_operation_id
 
 if TYPE_CHECKING:
-    from src.admin.panel import AdminPanelView
+    from src.admin.adapters.discord.panel import AdminPanelView
 
 EFFORT_LABELS = {
     "none": "無",
@@ -52,7 +52,7 @@ async def load_models(view: AdminPanelView, operation: int) -> bool:
     if not view.is_current(operation):
         return False
     try:
-        catalog = await view.codex_client.get_models()
+        catalog = await view.services.codex.get_models()
     except Exception:
         logging.exception("Admin panel failed to load model catalog.")
         catalog = ()
@@ -60,8 +60,8 @@ async def load_models(view: AdminPanelView, operation: int) -> bool:
         return False
     editor.catalog = catalog
     try:
-        saved = view.ai_settings.models
-    except sqlite3.Error, ValueError:
+        saved = view.services.ai.models
+    except StoreError, ValueError:
         saved = DEFAULT_MODEL_SETTINGS
     if editor.draft is None:
         editor.draft = saved
@@ -209,8 +209,8 @@ async def save_models(view: AdminPanelView, interaction: discord.Interaction) ->
             editor.notice = ("warn", "模型或推理強度已失效，請重新選擇；已儲存設定未變更。")
         else:
             try:
-                view.ai_settings.save_models(editor.draft, operation_id=interaction_operation_id(interaction))
-            except sqlite3.Error, ValueError:
+                view.services.ai.save_models(editor.draft, operation_id=interaction_operation_id(interaction))
+            except StoreError, ValueError:
                 editor.notice = ("warn", "設定無法儲存；原設定未變更。")
             else:
                 editor.notice = ("ok", "已儲存全 Bot 模型設定；只影響後續接納的請求。")

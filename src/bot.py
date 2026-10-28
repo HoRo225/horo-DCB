@@ -6,13 +6,15 @@ import sqlite3
 import discord
 from discord.ext import commands
 
-from src.admin.actions import admin_actions
-from src.admin.cog import AdminCog
-from src.admin.sessions import PanelSessionRegistry
+from src.admin.adapters.discord.cog import AdminCog
+from src.admin.adapters.discord.ports import AdminServices
+from src.admin.adapters.discord.sessions import PanelSessionRegistry
+from src.admin.adapters.discord.status import admin_actions
 from src.core.adapters.sqlite.operations import OperationStore
 from src.ai import AiAccess, AiSettings, AiText
 from src.ai.adapters.discord.actions import ai_actions
 from src.ai.adapters.discord.cog import AiCog
+from src.ai.adapters.discord.errors import codex_error_text
 from src.ai.adapters.discord.help import help_actions
 from src.ai.adapters.discord.messages import AiMessages
 from src.ai.adapters.media.frames import Frames
@@ -40,6 +42,7 @@ from src.steam.adapters.discord.actions import steam_actions
 from src.steam.adapters.discord.announcer import DiscordAnnouncer
 from src.steam.adapters.discord.cog import SteamCog
 from src.steam.adapters.discord.effects import steam_effect_kinds
+from src.steam.adapters.discord.views import offer_summary
 from src.steam.adapters.http.provider import SteamOfferProvider
 from src.steam.adapters.sqlite.store import SqliteSteamStore
 from src.core.adapters.discord.shutdown import Shutdown
@@ -80,63 +83,68 @@ class HoroBot(commands.Bot):
         self.guild_id = guild_id
         self._db = db
         self.supervisor = supervisor = Supervisor()
-        self.live = live = LiveGuild(self, guild_id, lambda: supervisor.closing)
-        self.operations = OperationStore(db)
-        self.maintenance = Maintenance(self.operations, supervisor.group("maintenance", SCHEDULED))
+        live = LiveGuild(self, guild_id, lambda: supervisor.closing)
+        operations = OperationStore(db)
+        self.maintenance = Maintenance(operations, supervisor.group("maintenance", SCHEDULED))
         self.maintenance.recover()
-        self.codex = codex
-        self.ai_settings = ai_settings = AiSettings(SqliteAiStore(db), codex, guild_id)
-        self.access_service = AiAccess(
-            ai_settings, codex, supervisor.group("access", WORK), role_ids_for_user=self._member_roles,
-        )
-        self.temp_voice = voice = Voice(SqliteVoiceStore(db), DiscordVoiceGateway(live), supervisor.group("voice", WORK))
+        ai_settings = AiSettings(SqliteAiStore(db), codex, guild_id)
+
+        def member_roles(user_id: int) -> frozenset[int] | None:
+            member = live.member(user_id)
+            return member_role_ids(member) if member is not None else None
+
+        access = AiAccess(ai_settings, codex, supervisor.group("access", WORK), role_ids_for_user=member_roles)
+        voice = Voice(SqliteVoiceStore(db), DiscordVoiceGateway(live), supervisor.group("voice", WORK))
         steam_store = SqliteSteamStore(db)
-        self.steam = steam = Steam(
-            steam_store, SteamOfferProvider(), DiscordAnnouncer(self, live), supervisor.group("steam", SCHEDULED),
-        )
+        steam = Steam(steam_store, SteamOfferProvider(), DiscordAnnouncer(self, live), supervisor.group("steam", SCHEDULED))
         game_store, game_tasks = SqliteGameStore(db), supervisor.group("games", WORK)
-        self.games = lobby = Lobby(game_store, DiscordLobbyBoard(self, live), live, game_tasks)
+        lobby = Lobby(game_store, DiscordLobbyBoard(self, live), live, game_tasks)
         game_tables, game_players, game_presenter = Tables(), DiscordPlayers(live), DiscordTables(self, live, lobby)
         play = Play(game_store, game_tables, lobby, game_players, game_presenter, AiText(ai_settings, codex), game_tasks)
-        self._games_cog = GamesCog(self, play, lobby, game_tables, game_presenter, game_players, live,
-                                   supervisor.group("games.cog", SCHEDULED))
-        self.admin_panels = PanelSessionRegistry(
-            supervisor.group("admin", PRESENTATION), supervisor.group("admin", WORK),
-        )
+        games_cog = GamesCog(self, play, lobby, game_tables, game_presenter, game_players, live,
+                             supervisor.group("games.cog", SCHEDULED))
+        panels = PanelSessionRegistry(supervisor.group("admin", PRESENTATION), supervisor.group("admin", WORK))
         registry = ActionRegistry()
-        self.receipts = DiscordReceipts(self.operations, live, self, registry)
+        receipts = DiscordReceipts(operations, live, self, registry)
         kinds = EffectRegistry()
         kinds.register(
             *voice_effect_kinds(voice), *steam_effect_kinds(steam, steam_store), *game_effect_kinds(),
-            self.receipts.effect_kind(),
+            receipts.effect_kind(),
         )
-        self.effects = EffectResolver(self.operations, kinds, live, self)
+        effects = EffectResolver(operations, kinds, live, self)
         registry.register(
             *game_actions(play, lobby, live),
-            ai_actions(ai_settings, self.access_service, codex.get_models),
+            ai_actions(ai_settings, access, codex.get_models),
             help_actions(lobby),
             voice_actions(voice, live),
             steam_actions(steam, live),
             admin_actions(lambda: ai_settings.enabled, lambda: voice.enabled,
-                          lambda: steam.status().running, lambda: len(self.effects.pending())),
-            effect_actions(self.effects),
+                          lambda: steam.status().running, lambda: len(effects.pending())),
+            effect_actions(effects),
         )
-        self.actions = ActionEngine(registry, self.operations, live, self.receipts, supervisor.group("actions", WORK))
-        messages = AiMessages(live, ai_settings, codex, self.actions, lobby, MediaReader(Frames()),
+        actions = ActionEngine(registry, operations, live, receipts, supervisor.group("actions", WORK))
+        messages = AiMessages(live, ai_settings, codex, actions, lobby, MediaReader(Frames()),
                               cleanups=supervisor.group("ai", PRESENTATION))
-        self._ai_cog = AiCog(self, live, ai_settings, codex, messages, requests=supervisor.group("ai", REQUEST))
+        ai_cog = AiCog(self, live, ai_settings, codex, messages, requests=supervisor.group("ai", REQUEST))
+        admin = AdminServices(
+            live=live, panels=panels, codex=codex, ai=ai_settings, access=access, voice=voice, steam=steam,
+            games=lobby, effects=effects, codex_error=codex_error_text, hub_link=game_presenter.hub_link,
+            offer_summary=offer_summary,
+        )
+        self._dynamic_items = (receipts.private_results.item,)
+        self._cogs: tuple[commands.Cog, ...] = (games_cog, VoiceCog(voice, live), AdminCog(admin), ai_cog, SteamCog(self, steam))
         self._watchdog = supervisor.group("watchdog", SCHEDULED)
         self.shutdown = Shutdown(
             supervisor,
             (
-                (("access", self.access_service), ("codex", codex)),
-                (("actions", self.actions),),
+                (("access", access), ("codex", codex)),
+                (("actions", actions),),
                 (("steam", steam),),
                 (("voice", voice),),
-                (("panel", self.admin_panels),),
+                (("panel", panels),),
             ),
             interrupt=lambda: codex.cancel(guild_id),
-            stop_resolver=self.effects.stop_new_work,
+            stop_resolver=effects.stop_new_work,
             detach=self._remove_cogs,
             transport=super().close,
         )
@@ -148,25 +156,14 @@ class HoroBot(commands.Bot):
 
     async def add_cogs(self) -> None:
         guild = discord.Object(id=self.guild_id)
-        self.add_dynamic_items(self.receipts.private_results.item)
-        live = self.live
-        for cog in (
-            self._games_cog,
-            VoiceCog(self.temp_voice, live),
-            AdminCog(self, live),
-            self._ai_cog,
-            SteamCog(self, self.steam),
-        ):
+        self.add_dynamic_items(*self._dynamic_items)
+        for cog in self._cogs:
             await self.add_cog(cog, guild=guild)
 
     async def _remove_cogs(self) -> None:
         guild = discord.Object(id=self.guild_id)
         for name in tuple(self.cogs):
             await self.remove_cog(name, guild=guild)
-
-    def _member_roles(self, user_id: int) -> frozenset[int] | None:
-        member = self.live.member(user_id)
-        return member_role_ids(member) if member is not None else None
 
     async def setup_hook(self) -> None:
         sync_discord_brand(self)

@@ -1,7 +1,7 @@
 import json
 import unittest
 from pathlib import Path
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 from src.ai.domain.conversation import MAX_PROMPT_CHARACTERS
 from src.ai.domain.intent import envelope_schema
@@ -18,6 +18,7 @@ from src.ai.domain.prompts import (
 )
 from src.bot import HoroBot
 from src.core.adapters.sqlite.db import open_db
+from src.core.app.actions import ActionEngine
 
 FIXTURES = Path(__file__).resolve().parents[2] / "fixtures"
 GOLDEN = json.loads((FIXTURES / "intent.json").read_text(encoding="utf-8"))
@@ -48,7 +49,9 @@ class IntentGoldenTests(unittest.TestCase):
     def setUp(self) -> None:
         db = open_db(":memory:")
         self.addCleanup(db.close)
-        self.catalogue = HoroBot(MagicMock(), guild_id=1, db=db).actions.catalogue
+        with patch("src.bot.ActionEngine", wraps=ActionEngine) as engine:
+            HoroBot(MagicMock(), guild_id=1, db=db)
+        self.catalogue = engine.call_args.args[0].freeze()
 
     def test_instructions_are_verbatim(self) -> None:
         self.assertEqual(intent_instructions(self.catalogue.hints()), GOLDEN["instructions"])

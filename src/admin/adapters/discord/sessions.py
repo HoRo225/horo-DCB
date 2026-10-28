@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING, Any
 from src.core.app.supervisor import TaskGroup, cancel_all, consume_task_exception, wait_until
 
 if TYPE_CHECKING:
-    from src.admin.panel import AdminPanelView
+    from src.admin.adapters.discord.panel import AdminPanelView
 
 
 @dataclass(eq=False)
@@ -110,7 +110,7 @@ class PanelSessionRegistry:
 
     async def _drain(self, deadline: float) -> None:
         tasks = {task for session in self._live for task in session.tasks
-                 if task is not getattr(session.view, "_retirement_task", None)}
+                 if session.view is None or task is not session.view.retirement_task}
         for session in tuple(self._live):
             self.retire(session)
         cancel_all(tasks)

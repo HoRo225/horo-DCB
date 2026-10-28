@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING
 import discord
 from src.core.adapters.discord.channels import interaction_operation_id, text_channel_problem
 
-from src.admin.pages.common import (
+from src.admin.adapters.discord.pages.common import (
     status_text,
     bind_channel,
     channel_select,
@@ -20,10 +20,10 @@ from src.admin.pages.common import (
     spacer,
 )
 from src.core.adapters.discord.brand import BRAND_COLOUR, ICONS
-from src.steam import SteamConfigurationError, SteamFetchResult, SteamOffer, SteamStatus
+from src.steam import SteamConfigurationError, SteamFetchResult, SteamStatus
 
 if TYPE_CHECKING:
-    from src.admin.panel import AdminPanelView
+    from src.admin.adapters.discord.panel import AdminPanelView
 
 
 MAX_STEAM_OFFERS_SHOWN = 3
@@ -52,35 +52,21 @@ class _SteamState:
         return f"每 {int(self.status.poll_interval_seconds // 60)} 分鐘檢查"
 
 
-def _offer_summary(offer: SteamOffer) -> discord.ui.Item:
-    price = f"~~{discord.utils.escape_markdown(offer.old_price)}~~ → **免費**" if offer.old_price else "**免費**"
-    deadline = (
-        f"\n{ICONS['deadline']} <t:{offer.ends_at}:f> 截止（<t:{offer.ends_at}:R>）" if offer.ends_at is not None else ""
-    )
-    text = f"**{discord.utils.escape_markdown(offer.name)}**\n{price}{deadline}"
-    if offer.header_image:
-        return discord.ui.Section(
-            text,
-            accessory=discord.ui.Thumbnail(offer.header_image, description=f"{offer.name} Steam 商店圖片"),
-        )
-    return discord.ui.TextDisplay(text)
-
-
 def steam_notification_problem(view: AdminPanelView, status: SteamStatus) -> str | None:
-    if not view.steam.enabled:
+    if not view.services.steam.enabled:
         return None
-    guild = view.live.guild()
+    guild = view.services.live.guild()
     if guild is None:
         return None
     if status.channel_id is None:
         return None
-    return view.steam.notification_problem()
+    return view.services.steam.notification_problem()
 
 
 def steam_state(view: AdminPanelView) -> _SteamState:
-    status = view.steam.status()
+    status = view.services.steam.status()
     problem = steam_notification_problem(view, status)
-    if not view.steam.enabled:
+    if not view.services.steam.enabled:
         label, detail = "停用", "自動通知未開啟"
         channel, role_status, next_step = "手動查詢仍可使用", "身分組通知未開啟", None
     else:
@@ -126,7 +112,7 @@ def render_steam(view: AdminPanelView, note: tuple[str, str] | None = None) -> N
                 view,
                 "steam_free_games",
                 "Steam 自動通知",
-                owner=view.steam,
+                owner=view.services.steam,
                 render=render_steam,
             ),
         )
@@ -141,7 +127,7 @@ def render_steam(view: AdminPanelView, note: tuple[str, str] | None = None) -> N
                 lambda i, channel: bind_channel(
                     view,
                     i,
-                    lambda guild, current: view.steam.bind_channel(
+                    lambda guild, current: view.services.steam.bind_channel(
                         None if text_channel_problem(channel, guild) else channel.id,
                         still_current=current, operation_id=interaction_operation_id(i),
                     ),
@@ -159,7 +145,7 @@ def render_steam(view: AdminPanelView, note: tuple[str, str] | None = None) -> N
                 "選擇通知身分組（清空即取消）",
                 status.role_ids,
                 lambda i, roles: handle_steam_role_select(view, i, roles),
-                disabled=not view.steam.enabled,
+                disabled=not view.services.steam.enabled,
             )
         )
     )
@@ -196,7 +182,7 @@ def render_steam(view: AdminPanelView, note: tuple[str, str] | None = None) -> N
         else:
             children.append(discord.ui.TextDisplay(f"### 查詢結果{query_time}"))
         if offers:
-            children.extend(_offer_summary(offer) for offer in offers)
+            children.extend(view.services.offer_summary(offer) for offer in offers)
             if len(result.offers) > len(offers):
                 children.append(
                     discord.ui.TextDisplay(
@@ -218,7 +204,7 @@ def render_steam(view: AdminPanelView, note: tuple[str, str] | None = None) -> N
                 ),
                 view.button(
                     "steam_effects",
-                    f"待處理項目（{len(view.effects.pending())}）",
+                    f"待處理項目（{len(view.services.effects.pending())}）",
                     on_click=lambda i: view.open_page(i, "effects"),
                     emoji=ICONS["warn"],
                 ),
@@ -234,17 +220,17 @@ async def handle_steam_role_select(
     roles: tuple[discord.Role, ...],
 ) -> None:
     async def work(operation: int) -> Callable[[], None]:
-        guild = view.live.guild()
-        had_roles = bool(view.steam.status().role_ids)
-        if not view.steam.enabled:
+        guild = view.services.live.guild()
+        had_roles = bool(view.services.steam.status().role_ids)
+        if not view.services.steam.enabled:
             note = ("info", "Steam 自動通知未開啟，未修改身分組設定。")
         elif roles and guild is None:
             note = no_guild_note()
         else:
             try:
-                await view.steam.set_roles(
+                await view.services.steam.set_roles(
                     [role.id for role in roles],
-                    still_current=lambda: view.is_current(operation) and view.live.guild() is guild,
+                    still_current=lambda: view.is_current(operation) and view.services.live.guild() is guild,
                     operation_id=interaction_operation_id(interaction),
                 )
             except SteamConfigurationError as exc:
@@ -264,7 +250,7 @@ async def handle_steam_role_select(
 async def query_steam(view: AdminPanelView, interaction: discord.Interaction) -> None:
     async def work(_operation: int) -> Callable[[], None]:
         try:
-            result = await view.steam.fetch_current_offers()
+            result = await view.services.steam.fetch_current_offers()
         except Exception:
             logging.exception("Admin panel Steam free games query failed.")
             result = None

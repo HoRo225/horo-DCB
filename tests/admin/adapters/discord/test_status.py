@@ -1,6 +1,6 @@
 import unittest
 
-from src.admin.actions import admin_actions
+from src.admin.adapters.discord.status import admin_actions
 from src.core.adapters.discord.brand import ICONS
 from src.core.app.ports import Actor
 from src.testing import text

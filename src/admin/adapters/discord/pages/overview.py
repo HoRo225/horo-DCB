@@ -4,15 +4,15 @@ from typing import TYPE_CHECKING
 
 import discord
 
-from src.admin.pages.ai import AiReadings, ai_state, rate_period_label, rate_visible
-from src.admin.pages.common import IDLE_TIMEOUT_SECONDS, status_text
-from src.admin.pages.games import games_state
-from src.admin.pages.steam import steam_state
-from src.admin.pages.voice import voice_state
+from src.admin.adapters.discord.pages.ai import AiReadings, ai_state, rate_period_label, rate_visible
+from src.admin.adapters.discord.pages.common import IDLE_TIMEOUT_SECONDS, status_text
+from src.admin.adapters.discord.pages.games import games_state
+from src.admin.adapters.discord.pages.steam import steam_state
+from src.admin.adapters.discord.pages.voice import voice_state
 from src.core.adapters.discord.brand import ICONS, bar
 
 if TYPE_CHECKING:
-    from src.admin.panel import AdminPanelView
+    from src.admin.adapters.discord.panel import AdminPanelView
 
 
 def rate_bars(view: AdminPanelView) -> str:
@@ -65,7 +65,7 @@ def render_overview(view: AdminPanelView) -> None:
                 ),
             )
         )
-    pending = len(view.effects.pending())
+    pending = len(view.services.effects.pending())
     attention = "、".join(name for _, name, label, _ in rows if label == "需要處理")
     problems = [f"{attention}需要處理，請按「管理」查看"] if attention else []
     if pending:

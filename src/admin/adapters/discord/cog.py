@@ -1,26 +1,20 @@
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
-
 import discord
 from discord import app_commands
 from discord.ext import commands
 
-from src.admin.panel import AdminPanelView
+from src.admin.adapters.discord.panel import AdminPanelView
+from src.admin.adapters.discord.ports import AdminServices
 from src.core.adapters.discord.brand import send_notice
-from src.core.adapters.discord.live import LiveGuild
-
-if TYPE_CHECKING:
-    from src.bot import HoroBot
 
 
 class AdminCog(commands.Cog):
-    def __init__(self, bot: HoroBot, live: LiveGuild) -> None:
-        self.bot = bot
-        self._live = live
+    def __init__(self, services: AdminServices) -> None:
+        self._services = services
 
     async def _allowed(self, interaction: discord.Interaction) -> bool:
-        if reason := self._live.unavailable_reason(interaction.guild_id):
+        if reason := self._services.live.unavailable_reason(interaction.guild_id):
             await send_notice(interaction, reason)
             return False
         if interaction.guild is not None and interaction.permissions.administrator:
@@ -34,8 +28,7 @@ class AdminCog(commands.Cog):
     async def control_panel(self, interaction: discord.Interaction) -> None:
         if not await self._allowed(interaction):
             return
-        bot = self.bot
-        key = (interaction.guild.id, interaction.user.id)
-        session = bot.admin_panels.begin(key)
-        view = AdminPanelView(bot, self._live, session, interaction)
-        await bot.admin_panels.run_child(session, view.open_panel(interaction))
+        panels = self._services.panels
+        session = panels.begin((interaction.guild.id, interaction.user.id))
+        view = AdminPanelView(self._services, session, interaction)
+        await panels.run_child(session, view.open_panel(interaction))

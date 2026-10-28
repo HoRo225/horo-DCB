@@ -5,7 +5,7 @@ from dataclasses import dataclass
 import discord
 
 from src.core.adapters.discord.brand import ICONS, ErrorNotice, send_notice
-from src.admin.pages.common import footer_note
+from src.admin.adapters.discord.pages.common import footer_note
 
 STATES = {"pending": "待送出", "unknown": "結果不明", "failed": "送出失敗"}
 
@@ -39,7 +39,7 @@ class ConfirmDelivery(ErrorNotice, discord.ui.Modal, title="核對已送達"):
 
 async def resolve(view, interaction, resolution, effect_id, message_id=None):
     async def work(operation):
-        problem = await view.effects.resolve(
+        problem = await view.services.effects.resolve(
             effect_id, resolution, message_id=message_id, actor_id=interaction.user.id,
             still_current=lambda: view.is_current(operation) and view.page == "effects" and view.state(EffectPick).effect_id == effect_id,
         )
@@ -54,7 +54,7 @@ def channel_name(view, channel_id: int | None) -> str:
 
 
 def render_effects(view, note=None):
-    pending = view.effects.pending()
+    pending = view.services.effects.pending()
     picked = view.state(EffectPick)
     if view.page != "effects":
         picked.confirming = None

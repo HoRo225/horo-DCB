@@ -7,7 +7,10 @@ import discord
 from src import testing
 from src.ai.adapters.discord.cog import AiCog
 from src.bot import HoroBot
-from src.core.app.supervisor import REQUEST
+from src.core.adapters.discord.live import LiveGuild
+from src.core.app.maintenance import Maintenance
+from src.core.app.supervisor import REQUEST, WORK
+from src.games import Lobby
 from src.games.adapters.discord.presenter import DiscordLobbyBoard
 from src.games.adapters.discord.views import lobby_view
 from src.games.adapters.sqlite.store import GAMES_CHANNEL_ID
@@ -68,10 +71,11 @@ class HoroBotTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(tree.get_commands(), [])
         self.assertIn("on_interaction", self.bot.extra_events)
         games = self.bot.get_cog("GamesCog")
-        self.assertEqual(
-            set(self.bot._connection._view_store._dynamic_items.values()),
-            {games.pick, games.rules, self.bot.receipts.private_results.item, self.bot.get_cog("SteamCog").claim},
-        )
+        items = set(self.bot._connection._view_store._dynamic_items.values())
+        features = {games.pick, games.rules, self.bot.get_cog("SteamCog").claim}
+        self.assertLessEqual(features, items)
+        [private] = items - features
+        self.assertEqual(private.__discord_ui_compiled_template__.pattern, r"horo:private:(?P<token>[A-Za-z0-9_-]+)")
 
     async def test_hub_custom_ids_reach_registered_handlers(self) -> None:
         await self.start()
@@ -104,7 +108,7 @@ class HoroBotTests(unittest.IsolatedAsyncioTestCase):
             patch.object(self.bot.tree, "sync", step(order, "sync")),
             patch("src.bot.install_stack_dump_signal"),
             patch("src.bot.run_watchdog", AsyncMock()) as watchdog,
-            patch.object(self.bot.maintenance, "start") as maintenance,
+            patch.object(Maintenance, "start") as maintenance,
         ):
             await self.bot.setup_hook()
             await asyncio.sleep(0)
@@ -124,20 +128,23 @@ class HoroBotTests(unittest.IsolatedAsyncioTestCase):
         ):
             messages = MagicMock(handle=AsyncMock())
             await self.bot.on_message(message)
-            await AiCog(self.bot, self.bot.live, self.bot.ai_settings, self.bot.codex, messages,
+            await AiCog(self.bot, LiveGuild(self.bot, G, lambda: False), MagicMock(), MagicMock(), messages,
                         requests=testing.group(REQUEST)).on_message(message)
         process_commands.assert_not_awaited()
         messages.handle.assert_awaited_once_with(message, BOT)
 
 class HoroShutdownTests(unittest.IsolatedAsyncioTestCase):
     def setUp(self) -> None:
-        codex = MagicMock()
+        self.codex = codex = MagicMock()
         codex.request_counts.return_value = (0, 0)
         codex.start = AsyncMock()
         codex.close = AsyncMock()
         codex.cancel = AsyncMock()
         self.db = testing.memory_db(self)
-        self.bot = HoroBot(codex, guild_id=G, db=self.db)
+        lobbies = []
+        with patch("src.bot.Lobby", side_effect=lambda *args: lobbies.append(Lobby(*args)) or lobbies[-1]):
+            self.bot = HoroBot(codex, guild_id=G, db=self.db)
+        [self.lobby] = lobbies
 
     async def test_accepted_mutation_finishes_before_transport_shutdown(self) -> None:
         self.db.execute("CREATE TABLE shutdown_check (value INTEGER)")
@@ -150,7 +157,7 @@ class HoroShutdownTests(unittest.IsolatedAsyncioTestCase):
             self.assertFalse(self.bot.db_safe_to_close)
             order.append("commit")
 
-        owner = self.bot.admin_panels.mutate(accepted())
+        owner = self.bot.supervisor.group("admin", WORK).spawn(accepted())
         asyncio.get_running_loop().call_later(0.03, gate.set)
         with patch("discord.Client.close", step(order, "discord")):
             await self.bot.close()
@@ -158,7 +165,7 @@ class HoroShutdownTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(owner.done())
         self.assertTrue(self.bot.db_safe_to_close)
         self.assertEqual(self.db.execute("SELECT value FROM shutdown_check").fetchone(), (1,))
-        self.bot.codex.close.assert_awaited_once()
+        self.codex.close.assert_awaited_once()
 
     async def test_operation_owners_drain_before_transport_shutdown(self) -> None:
         gate, entered = asyncio.Event(), asyncio.Event()
@@ -177,7 +184,7 @@ class HoroShutdownTests(unittest.IsolatedAsyncioTestCase):
             patch.object(DiscordLobbyBoard, "post", side_effect=post),
             patch("discord.Client.close", step(order, "discord")),
         ):
-            game = asyncio.create_task(self.bot.games.publish_hub())
+            game = asyncio.create_task(self.lobby.publish_hub())
             async with asyncio.timeout(2):
                 await entered.wait()
             self.assertIn(game, self.bot.supervisor.pending())

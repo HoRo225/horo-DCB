@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING
 
 import discord
 
-from src.admin.pages.common import (
+from src.admin.adapters.discord.pages.common import (
     status_text,
     defaults,
     feature_button,
@@ -17,9 +17,9 @@ from src.admin.pages.common import (
     role_select,
     spacer,
 )
-from src.admin.ports import CodexAccount
-from src.ai import MAX_CODEX_ALLOWED_CHANNELS, DeviceLogin, ModelError, RateLimits, RuntimeStatus
-from src.ai.adapters.discord.errors import codex_error_text
+from src.admin.adapters.discord.codex_login import account_items
+from src.admin.adapters.discord.ports import CodexAccount
+from src.ai import MAX_CODEX_ALLOWED_CHANNELS, RateLimits, RuntimeStatus
 from src.core.adapters.discord.brand import BRAND_COLOUR, ICONS, bar
 from src.core.adapters.discord.channels import (
     VIEW_AND_SEND,
@@ -30,7 +30,7 @@ from src.core.adapters.discord.channels import (
 )
 
 if TYPE_CHECKING:
-    from src.admin.panel import AdminPanelView
+    from src.admin.adapters.discord.panel import AdminPanelView
 
 
 @dataclass(frozen=True, slots=True)
@@ -46,9 +46,6 @@ class _AiState:
 class AiReadings:
     codex_status: RuntimeStatus = RuntimeStatus()
     rate_limits: RateLimits = RateLimits()
-    login: DeviceLogin | None = None
-    login_task: asyncio.Task[None] | None = None
-    confirm_logout: bool = False
 
 
 def ai_display(view: AdminPanelView) -> tuple[str, str]:
@@ -63,7 +60,7 @@ def ai_display(view: AdminPanelView) -> tuple[str, str]:
 
 
 def rate_visible(view: AdminPanelView) -> bool:
-    return view.ai_settings.enabled
+    return view.services.ai.enabled
 
 
 async def load_codex_status(client: CodexAccount) -> RuntimeStatus:
@@ -86,8 +83,8 @@ async def load_ai(view: AdminPanelView, operation: int) -> bool:
     if not view.is_current(operation):
         logging.info("Admin panel skipped AI status update before read.")
         return False
-    status = view.spawn(load_codex_status(view.codex_client))
-    limits = view.spawn(load_codex_rate_limits(view.codex_client)) if rate_visible(view) else None
+    status = view.spawn(load_codex_status(view.services.codex))
+    limits = view.spawn(load_codex_rate_limits(view.services.codex)) if rate_visible(view) else None
     await asyncio.gather(*(task for task in (status, limits) if task is not None))
     if not view.is_current(operation):
         logging.info("Admin panel skipped AI status update after read.")
@@ -136,10 +133,10 @@ def rate_item(view: AdminPanelView) -> discord.ui.TextDisplay:
 
 
 def codex_stale_allowlist_counts(view: AdminPanelView) -> tuple[int | None, int | None]:
-    access = view.ai_settings
+    access = view.services.ai
     if not access.enabled:
         return None, None
-    guild = view.live.guild()
+    guild = view.services.live.guild()
     if guild is None:
         return None, None
 
@@ -165,10 +162,10 @@ def codex_stale_detail(
 
 
 def codex_channel_permission_detail(view: AdminPanelView) -> str | None:
-    access = view.ai_settings
+    access = view.services.ai
     if not access.enabled or not access.channel_ids:
         return None
-    guild = view.live.guild()
+    guild = view.services.live.guild()
     if guild is None:
         return None
     bot_member = guild.me
@@ -196,7 +193,7 @@ def codex_channel_permission_detail(view: AdminPanelView) -> str | None:
 
 
 def ai_state(view: AdminPanelView) -> _AiState:
-    access = view.ai_settings
+    access = view.services.ai
     status = view.state(AiReadings).codex_status
     stale_counts = codex_stale_allowlist_counts(view)
     permission_detail = codex_channel_permission_detail(view)
@@ -245,7 +242,7 @@ def render_ai(view: AdminPanelView, note: tuple[str, str] | None = None) -> None
                 view,
                 "ai",
                 "{name}",
-                owner=view.ai_settings,
+                owner=view.services.ai,
                 render=render_ai,
                 after=_after_ai_toggle,
             ),
@@ -255,10 +252,12 @@ def render_ai(view: AdminPanelView, note: tuple[str, str] | None = None) -> None
         children.append(
             discord.ui.TextDisplay(
                 f"### {ICONS['warn']} 最近錯誤\n"
-                f"{codex_error_text(code, view.bot_name)}\n**錯誤代碼**　`{code}`"
+                f"{view.services.codex_error(code, view.bot_name)}\n**錯誤代碼**　`{code}`"
             )
         )
-    children.extend((spacer(), *account_items(view)))
+    children.extend((spacer(), *account_items(
+        view, status, lambda note: render_ai(view, note), lambda operation: load_ai(view, operation),
+    )))
     if rate_visible(view):
         children.extend((spacer(), rate_item(view)))
     children.extend(
@@ -270,7 +269,7 @@ def render_ai(view: AdminPanelView, note: tuple[str, str] | None = None) -> None
                     view,
                     "ai_text_display",
                     "卡片顯示",
-                    owner=view.ai_settings,
+                    owner=view.services.ai,
                     attr="text_display",
                     render=render_ai,
                 ),
@@ -295,118 +294,6 @@ async def _after_ai_toggle(
     if not await load_ai(view, operation):
         logging.warning("AI status refresh after toggle failed; showing previous status.")
     return note
-
-
-def account_items(view: AdminPanelView) -> tuple[discord.ui.Item, ...]:
-    readings = view.state(AiReadings)
-    status = readings.codex_status
-    if status.authenticated and readings.confirm_logout:
-        return (
-            discord.ui.TextDisplay("### 確認登出 Codex\n登出後 AI 功能會停止，直到再次登入。"),
-            discord.ui.ActionRow(
-                view.button("logout_confirm", "確認登出", on_click=lambda interaction: _logout(view, interaction),
-                            style=discord.ButtonStyle.danger, emoji=ICONS["leave"]),
-                view.button("logout_cancel", "取消", on_click=lambda interaction: _ask_logout(view, interaction, False),
-                            emoji=ICONS["cancel"]),
-            ),
-        )
-    if status.authenticated:
-        return (discord.ui.Section(
-            "### Codex 帳號\n已登入 ChatGPT 帳號。",
-            accessory=view.button("logout", "登出", on_click=lambda interaction: _ask_logout(view, interaction, True),
-                                  emoji=ICONS["leave"]),
-        ),)
-    if status.reason != "auth_required":
-        return ()
-    if (login := readings.login) is not None:
-        return (
-            discord.ui.TextDisplay(
-                "### 登入 Codex\n"
-                f"1. 開啟 {login.verification_url}\n"
-                f"2. 輸入代碼 `{login.user_code}`\n"
-                "完成後這裡會自動更新；代碼約 15 分鐘後失效。"
-            ),
-            discord.ui.ActionRow(
-                view.button("login_cancel", "取消登入", on_click=lambda interaction: _cancel_login(view, interaction),
-                            emoji=ICONS["cancel"]),
-            ),
-        )
-    return (discord.ui.Section(
-        "### Codex 帳號\n尚未登入。按「登入」取得裝置碼，再用 ChatGPT 帳號完成登入。",
-        accessory=view.button("login", "登入", on_click=lambda interaction: _start_login(view, interaction),
-                              style=discord.ButtonStyle.primary, emoji=ICONS["access"]),
-    ),)
-
-
-async def _start_login(view: AdminPanelView, interaction: discord.Interaction) -> None:
-    async def work(operation: int) -> Callable[[], None]:
-        readings = view.state(AiReadings)
-        try:
-            login = await view.codex_client.login_start()
-        except ModelError:
-            return lambda: render_ai(view, ("warn", "目前無法開始登入，請稍後再試。"))
-        if readings.login_task is not None:
-            readings.login_task.cancel()
-        readings.login = login
-        readings.login_task = view.spawn(_watch_login(view, login))
-        return lambda: render_ai(view)
-
-    await view.run(interaction, work)
-
-
-async def _watch_login(view: AdminPanelView, login: DeviceLogin) -> None:
-    readings = view.state(AiReadings)
-    client = view.codex_client
-    try:
-        success = await client.wait_login(login.login_id)
-    except TimeoutError:
-        success = None
-    except asyncio.CancelledError:
-        await asyncio.shield(client.login_cancel(login.login_id))
-        raise
-    finally:
-        if readings.login is login:
-            readings.login, readings.login_task = None, None
-    if success is None:
-        await client.login_cancel(login.login_id)
-    note = ("ok", "已登入 Codex。") if success else ("warn", "登入未完成，請重新按「登入」。")
-    await view.refresh("ai", lambda: render_ai(view, note))
-
-
-async def _cancel_login(view: AdminPanelView, interaction: discord.Interaction) -> None:
-    async def work(operation: int) -> Callable[[], None]:
-        readings = view.state(AiReadings)
-        task, readings.login, readings.login_task = readings.login_task, None, None
-        if task is not None:
-            task.cancel()
-            await asyncio.gather(task, return_exceptions=True)
-        return lambda: render_ai(view, ("info", "已取消登入。"))
-
-    await view.run(interaction, work)
-
-
-async def _ask_logout(view: AdminPanelView, interaction: discord.Interaction, confirm: bool) -> None:
-    async def work(operation: int) -> Callable[[], None]:
-        view.state(AiReadings).confirm_logout = confirm
-        return lambda: render_ai(view)
-
-    await view.run(interaction, work)
-
-
-async def _logout(view: AdminPanelView, interaction: discord.Interaction) -> None:
-    async def work(operation: int) -> Callable[[], None] | None:
-        view.state(AiReadings).confirm_logout = False
-        try:
-            await view.codex_client.logout()
-        except ModelError:
-            note = ("warn", "登出失敗，請稍後再試。")
-        else:
-            note = ("ok", "已登出 Codex。")
-        if not await load_ai(view, operation):
-            return None
-        return lambda: render_ai(view, note)
-
-    await view.run(interaction, work)
 
 
 def access_note(result: str, roles: bool, count: int) -> tuple[str, str]:
@@ -456,9 +343,9 @@ async def handle_codex_allowlist(
         ):
             return lambda: render_ai_access(view, rejected)
         selected = frozenset(getattr(item, "id", None) for item in items)
-        guild = view.live.guild()
+        guild = view.services.live.guild()
         def current() -> bool:
-            if not view.is_current(operation) or guild is None or view.live.guild() is not guild:
+            if not view.is_current(operation) or guild is None or view.services.live.guild() is not guild:
                 return False
             return all(
                 (guild.get_role(item_id) is not None) if roles else is_text_channel(guild.get_channel(item_id))
@@ -468,7 +355,7 @@ async def handle_codex_allowlist(
         if not current():
             return lambda: render_ai_access(view, rejected)
         try:
-            result = await view.access_service.change(
+            result = await view.services.access.change(
                 guild_id,
                 selected,
                 roles=roles,
@@ -492,9 +379,9 @@ def render_ai_access(view: AdminPanelView, note: tuple[str, str] | None = None) 
     ai = ai_state(view)
     stale_channel_count, stale_role_count = ai.stale_counts
     permission_detail = ai.permission_detail
-    channel_ids = view.ai_settings.channel_ids
-    role_ids = view.ai_settings.role_ids
-    if not view.ai_settings.enabled:
+    channel_ids = view.services.ai.channel_ids
+    role_ids = view.services.ai.role_ids
+    if not view.services.ai.enabled:
         channel_detail = view.bot_text(after=f"未開啟，可在「{view.bot_name_md}」頁開啟")
     elif not channel_ids:
         channel_detail = view.bot_text("請選擇可使用", "的文字頻道")
@@ -508,7 +395,7 @@ def render_ai_access(view: AdminPanelView, note: tuple[str, str] | None = None) 
     if stale_role_count:
         role_detail += f"；{stale_role_count} 個白名單身分組已不存在，請重新選擇"
     current_allowed = (
-        view.ai_settings.denial_reason(
+        view.services.ai.denial_reason(
             view.guild_id, next(iter(channel_ids), None), member_role_ids(view.interaction_user)
         )
         is None
@@ -520,7 +407,7 @@ def render_ai_access(view: AdminPanelView, note: tuple[str, str] | None = None) 
             discord.ui.ActionRow(
                 codex_channel_select(
                     view,
-                    disabled=not view.ai_settings.enabled,
+                    disabled=not view.services.ai.enabled,
                     channel_ids=channel_ids,
                 )
             ),
@@ -537,7 +424,7 @@ def render_ai_access(view: AdminPanelView, note: tuple[str, str] | None = None) 
                     "選擇白名單身分組（清空即暫停）",
                     role_ids,
                     lambda i, roles: handle_codex_allowlist(view, i, roles, roles=True),
-                    disabled=not view.ai_settings.enabled or not channel_ids,
+                    disabled=not view.services.ai.enabled or not channel_ids,
                 )
             ),
             discord.ui.Separator(),
@@ -551,7 +438,7 @@ def render_ai_access(view: AdminPanelView, note: tuple[str, str] | None = None) 
 def render_ai_tech(view: AdminPanelView) -> None:
     plan, runtime = ai_display(view)
     status = view.state(AiReadings).codex_status
-    bot_active, bot_queued = view.codex_client.request_counts()
+    bot_active, bot_queued = view.services.codex.request_counts()
     children = view.header(view.bot_text(after="技術資訊"), "ai_tech")
     children.extend(
         (

@@ -1,17 +1,17 @@
 import json
 import unittest
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, patch
 
 import discord
 
-from src.admin.pages.effects import ConfirmDelivery, EffectPick, render_effects
-from src.admin.panel import AdminPanelView
-from src.bot import HoroBot
+from src.admin.adapters.discord.pages.effects import ConfirmDelivery, EffectPick, render_effects
+from src.admin.adapters.discord.panel import AdminPanelView
 from src.core.adapters.sqlite.db import open_db, transaction
 from src.core.adapters.sqlite.operations import OperationStore
 from src.core.app.effects import EffectKind, EffectRegistry, MessageProof, PendingEffect
 from src.testing import interaction
+from tests.support.admin import G, PanelCase
 
 CHANNEL, ADMIN = 101, 102
 
@@ -19,7 +19,7 @@ CHANNEL, ADMIN = 101, 102
 class Panel(discord.ui.LayoutView):
     def __init__(self, effects) -> None:
         super().__init__(timeout=None)
-        self.effects, self.page = effects, "effects"
+        self.services, self.page = SimpleNamespace(effects=effects), "effects"
         named = SimpleNamespace(name="公告")
         self.guild = SimpleNamespace(get_channel_or_thread=lambda channel_id: named if channel_id == CHANNEL else None)
         self._states, self._control_cache, self.operation = {}, {}, 0
@@ -163,29 +163,84 @@ class EffectsPageTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.effects.resolve.await_args.kwargs["message_id"], 501)
 
 
-class RegisteredKindsTest(unittest.TestCase):
-    def test_every_feature_effect_has_its_page_label_and_actions(self) -> None:
-        db = open_db(":memory:")
-        self.addCleanup(db.close)
-        codex = MagicMock()
-        codex.request_counts.return_value = (0, 0)
-        bot = HoroBot(codex, guild_id=1, db=db)
-        expected = {
-            "action.receipt": ("AI 操作結果卡", True, True),
-            "game_hub_publish": ("發布遊戲大廳", True, False),
-            "game_table_open": ("開啟賭桌", False, False),
-            "game_table_edit": ("更新賭桌", True, False),
-            "game_table_delete": ("收起賭桌", False, False),
-            "steam.announce": ("Steam 免費遊戲通知", True, True),
-            "voice.create": ("建立臨時語音房", True, False),
-            "voice.delete": ("刪除臨時語音房", False, True),
-        }
-        records = OperationStore(db)
-        with transaction(db):
-            for kind in expected:
-                records.create_effect(kind, kind, CHANNEL, {})
-        shown = {item.effect.kind: (item.kind.label, item.confirmable, item.retryable) for item in bot.effects.pending()}
-        self.assertEqual(shown, expected)
+class EffectsThroughPanelTests(PanelCase):
+    def pending(self, *effects: tuple[str, str]) -> None:
+        with transaction(self.db):
+            for effect_id, kind in effects:
+                self.admin.operations.create_effect(effect_id, kind, 700, {})
+
+    def status(self, effect_id: str) -> str:
+        return self.admin.operations.get_effect(effect_id).status
+
+    def picker(self) -> discord.ui.Select:
+        return next(item for item in self.view.walk_children() if isinstance(item, discord.ui.Select))
+
+    async def test_skip_and_retry_ask_before_acting(self) -> None:
+        self.pending(("first", "action.receipt"), ("second", "action.receipt"))
+        await self.open_panel()
+        await self.click(self.button("待處理項目（2）"))
+        await self.choose(self.picker(), "second")
+        danger = discord.ButtonStyle.danger
+        self.assertEqual((self.button("已查核未送達，重送").style, self.button("略過此次").style), (danger, danger))
+        for leave in (
+            lambda: self.click(self.button("取消")),
+            lambda: self.choose(self.picker(), "second"),
+            lambda: self.go("返回總覽"),
+        ):
+            await self.click(self.button("略過此次"))
+            self.assertEqual(self.button("確定要略過此次？無法復原").style, danger)
+            self.assertEqual(self.button("取消").style, discord.ButtonStyle.secondary)
+            with self.assertRaises(StopIteration):
+                self.button("核對後標記已送達")
+            await leave()
+            if self.view.page != "effects":
+                await self.click(self.button("待處理項目（2）"))
+            self.button("略過此次")
+        await self.click(self.button("略過此次"))
+        self.assertEqual((self.status("first"), self.status("second")), ("pending", "pending"))
+        shown = self.screen(await self.click(self.button("確定要略過此次？無法復原")))
+        self.assertEqual((self.status("first"), self.status("second")), ("pending", "skipped"))
+        self.assertIn("已處理；僅變更通知結果，不重做原本的功能操作。", shown)
+        self.assertIn("**1 項待處理**", shown)
+
+        async def resend(effect_id, *, allow_unknown, still_current):
+            self.assertTrue(still_current())
+            return False
+
+        with patch.object(self.admin.receipts, "resend", side_effect=resend) as resent:
+            await self.click(self.button("已查核未送達，重送"))
+            resent.assert_not_awaited()
+            shown = self.screen(await self.click(self.button("確定要重送？無法復原")))
+        self.assertEqual(resent.await_args.args[0], "first")
+        self.assertIn("已處理送出要求；尚未確認送達，請重新整理查看狀態。", shown)
+
+    async def test_only_valid_actions_are_offered_and_a_message_link_confirms(self) -> None:
+        self.pending(("delete", "voice.delete"), ("open", "game_table_open"),
+                     ("failed", "action.receipt"), ("sent", "action.receipt"))
+        with transaction(self.db):
+            self.admin.operations.update_effect("failed", "failed")
+        await self.open_panel()
+        await self.click(self.button("待處理項目（4）"))
+        only_skip = "這類項目不能核對或重送，請到原頻道確認並清理後按略過。"
+        for effect_id, labels in (
+            ("delete", ["已查核未送達，重送", "略過此次"]),
+            ("open", ["略過此次"]),
+            ("failed", ["已查核未送達，重送", "略過此次"]),
+            ("sent", ["核對後標記已送達", "已查核未送達，重送", "略過此次"]),
+        ):
+            with self.subTest(effect_id=effect_id):
+                shown = self.screen(await self.choose(self.picker(), effect_id))
+                bottom = self.view.children[-1].children[-2]
+                self.assertEqual([button.label for button in bottom.children], [*labels, "重新整理"])
+                self.assertEqual(only_skip in shown, labels == ["略過此次"])
+                self.assertIn("**原頻道**　<#700>", shown)
+        clicked = await self.click(self.button("核對後標記已送達"))
+        modal = clicked.response.send_modal.await_args.args[0]
+        modal.resource._value = f"https://discord.com/channels/{G}/700/501/"
+        with patch.object(self.admin.effects, "resolve", AsyncMock(return_value=None)) as resolve:
+            await modal.on_submit(self.interaction())
+        self.assertEqual(resolve.await_args.args, ("sent", "confirmed"))
+        self.assertEqual(resolve.await_args.kwargs["message_id"], 501)
 
 
 if __name__ == "__main__":

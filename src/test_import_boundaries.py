@@ -101,7 +101,7 @@ class ImportBoundaryTests(unittest.TestCase):
 
     def test_panel_pages_do_not_import_state(self) -> None:
         pattern = re.compile(r"^\s*(?:from|import)\s+src\.core\.adapters\.sqlite\b", re.M)
-        for path in (Path(__file__).parent / "admin" / "pages").glob("*.py"):
+        for path in (Path(__file__).parent / "admin").rglob("*.py"):
             with self.subTest(path.name):
                 self.assertIsNone(pattern.search(path.read_text(encoding="utf-8")))
 

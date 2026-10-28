@@ -12,7 +12,7 @@ from src.core.adapters.discord.brand import ICONS, note_text
 from src.core.adapters.discord.channels import interaction_operation_id
 
 if TYPE_CHECKING:
-    from src.admin.panel import AdminPanelView
+    from src.admin.adapters.discord.panel import AdminPanelView
 
 STATUS_DOTS = {"狀態正常": "dotok", "需要處理": "dotwarn", "停用": "dotoff"}
 
@@ -77,10 +77,10 @@ async def bind_channel(
     ok: str,
 ) -> None:
     async def work(operation: int) -> Callable[[], None]:
-        guild = view.live.guild()
+        guild = view.services.live.guild()
         if guild is None:
             note = no_guild_note()
-        elif problem := await bind(guild, lambda: view.is_current(operation) and view.live.guild() is guild):
+        elif problem := await bind(guild, lambda: view.is_current(operation) and view.services.live.guild() is guild):
             note = ("warn", problem)
         else:
             note = ("ok", ok)

@@ -5,17 +5,17 @@ from unittest.mock import MagicMock, patch
 import discord
 
 from src import testing
-from src.admin.pages.ai import AiReadings, render_ai, render_ai_access
-from src.admin.pages.ai_models import ModelEditor
-from src.admin.pages.effects import render_effects
-from src.admin.pages.games import render_games
-from src.admin.pages.steam import SteamQuery, render_steam
-from src.admin.pages.voice import render_voice
-from src.admin.panel import PAGES, AdminPanelView
+from src.admin.adapters.discord.codex_login import CodexLogin
+from src.admin.adapters.discord.pages.ai import AiReadings, render_ai, render_ai_access
+from src.admin.adapters.discord.pages.ai_models import ModelEditor
+from src.admin.adapters.discord.pages.effects import render_effects
+from src.admin.adapters.discord.pages.games import render_games
+from src.admin.adapters.discord.pages.steam import SteamQuery, render_steam
+from src.admin.adapters.discord.pages.voice import render_voice
+from src.admin.adapters.discord.panel import PAGES
 from src.ai import DeviceLogin, ModelChoice, ModelInfo, ModelSettings, RateLimits, RateWindow, RuntimeStatus
 from src.ai.adapters.discord.help import help_view
 from src.core.adapters.discord.receipts import receipt_view
-from src.bot import HoroBot
 from src.core.adapters.discord.brand import ICONS, WHITE, full_rules, notice_view
 from src.games import GAMES, LiveTable
 from src.games.adapters.discord.format import slot_symbol
@@ -32,6 +32,7 @@ from src.games.adapters.sqlite.store import GAMES_HUB_MESSAGE
 from src.ai.adapters.sqlite.store import AI_ENABLED
 from src.steam.adapters.sqlite.store import STEAM_ENABLED, STEAM_ROLE_IDS
 from src.voice.adapters.sqlite.store import VOICE_ENABLED
+from tests.support.admin import Admin
 
 G, OWNER, MEMBER = 100, 200, 300
 
@@ -90,9 +91,7 @@ class LayoutBudgetTest(unittest.IsolatedAsyncioTestCase):
             for switch in (AI_ENABLED, VOICE_ENABLED, STEAM_ENABLED):
                 put_setting(db, switch, True)
             put_setting(db, STEAM_ROLE_IDS, list(range(1, 26)))
-            codex = MagicMock()
-            codex.request_counts.return_value = (0, 0)
-            bot = HoroBot(codex, guild_id=G, db=db)
+            admin = Admin(db)
             interaction = testing.interaction()
             interaction.user.id = OWNER
             interaction.guild.id = G
@@ -100,8 +99,8 @@ class LayoutBudgetTest(unittest.IsolatedAsyncioTestCase):
             interaction.guild.me.display_name = "樂奈"
             interaction.guild.get_channel.return_value = None
             interaction.guild.get_role.return_value = None
-            bot.get_guild = MagicMock(return_value=interaction.guild)
-            view = AdminPanelView(bot, bot.live, bot.admin_panels.begin((G, OWNER)), interaction)
+            admin.client.get_guild.side_effect = lambda guild_id: interaction.guild
+            view = admin.panel(interaction)
             view.state(AiReadings).codex_status = RuntimeStatus(
                 reason="auth_required", plan="plus", runtime_version="1.0", thread_count=3, last_error="auth_required",
             )
@@ -119,7 +118,7 @@ class LayoutBudgetTest(unittest.IsolatedAsyncioTestCase):
             )
             view.state(ModelEditor).draft = ModelSettings(ModelChoice("gpt-0"), ModelChoice("gpt-1"))
             view.state(ModelEditor).notice = ("warn", "註" * 60)
-            view.games.set_roles(range(1, 26))
+            admin.games.set_roles(range(1, 26))
 
             for key, page in PAGES.items():
                 page.render(view)
@@ -130,12 +129,12 @@ class LayoutBudgetTest(unittest.IsolatedAsyncioTestCase):
                 fits(f"{render.__name__} with note", view)
                 if render is not render_ai_access:
                     self.assertEqual(len(view.children), 2, render.__name__)
-            readings = view.state(AiReadings)
-            readings.login = DeviceLogin("login-1", "https://auth.openai.com/codex/device", "ABCD-1234")
+            readings, login = view.state(AiReadings), view.state(CodexLogin)
+            login.login = DeviceLogin("login-1", "https://auth.openai.com/codex/device", "ABCD-1234")
             render_ai(view, ("warn", "註" * 60))
             fits("render_ai with device code", view)
             readings.codex_status = RuntimeStatus(reason="ready", authenticated=True, plan="plus", last_error="timeout")
-            readings.confirm_logout = True
+            login.confirm_logout = True
             render_ai(view, ("warn", "註" * 60))
             fits("render_ai confirming logout", view)
             put_setting(db, GAMES_HUB_MESSAGE, [10**18, 10**18])
@@ -145,7 +144,7 @@ class LayoutBudgetTest(unittest.IsolatedAsyncioTestCase):
             interaction.guild.get_channel_or_thread.return_value = None
             with transaction(db):
                 for n in range(30):
-                    bot.operations.create_effect(f"e{n}", "steam.announce", 10**18 + n, {})
+                    admin.operations.create_effect(f"e{n}", "steam.announce", 10**18 + n, {})
             render_effects(view)
             fits("effects pending", view)
             render_effects(view, ("warn", "註" * 60))
@@ -196,7 +195,7 @@ class LayoutBudgetTest(unittest.IsolatedAsyncioTestCase):
             receipt = [{"ok": n % 2 == 0, "text": "果" * 200, "private_ref": f"ref{n}"} for n in range(3)] + [
                 {"ok": True, "text": "果" * 200}]
             for said in ("", "說" * 1500):
-                fits(f"ai receipt explained={bool(said)}", receipt_view(receipt, said, buttons=bot.receipts.private_results.make_buttons(
+                fits(f"ai receipt explained={bool(said)}", receipt_view(receipt, said, buttons=admin.receipts.private_results.make_buttons(
                     item["private_ref"] for item in receipt if "private_ref" in item)))
             fits("notice", notice_view("註" * 2000, title="標" * 100))
 
