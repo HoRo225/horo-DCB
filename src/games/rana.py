@@ -1,19 +1,11 @@
 from __future__ import annotations
 
-import asyncio
-from collections.abc import Coroutine
 from typing import Any
 
 from src.ai.background import ask_once, clean_reply, persona_prompt
-from src.core.app.supervisor import track
 
 REMARK_SECONDS = 45
 LINE_EFFORT = "low"
-TASKS: set[asyncio.Task] = set()
-
-
-def spawn(work: Coroutine[Any, Any, Any]) -> asyncio.Task:
-    return track(TASKS, asyncio.create_task(work), log=True)
 
 
 def ready(bot: Any) -> bool:

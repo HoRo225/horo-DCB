@@ -8,7 +8,7 @@ import discord
 from src.core.adapters.discord.brand import WARN_COLOUR
 from src.core.adapters.sqlite.db import open_db, transaction
 from src.testing import put_setting
-from src.testing import text
+from src.testing import group, text
 from src.voice.cog import VoiceCog
 from src.voice.manager import AUDIT_REASON, TempVoiceManager, build_temp_voice_name
 from src.voice.manager import VOICE_ENABLED, VOICE_ENTRY_CHANNEL_ID
@@ -29,8 +29,9 @@ class TempVoiceManagerTest(unittest.IsolatedAsyncioTestCase):
         self.entry = self.voice(ENTRY, user_limit=5, bitrate=384000)
         db = open_db(":memory:")
         self.addCleanup(db.close)
+        self.tasks = group()
         put_setting(db, VOICE_ENABLED, True)
-        self.manager = TempVoiceManager(db, get_guild=lambda guild_id: self.guild if guild_id == G else None)
+        self.manager = TempVoiceManager(db, self.tasks, get_guild=lambda guild_id: self.guild if guild_id == G else None)
         self.assertIsNone(await self.manager.bind_entry(self.guild, self.entry))
 
     def voice(self, channel_id: int | None = None, **attrs: object) -> MagicMock:
@@ -353,10 +354,10 @@ class TempVoiceManagerTest(unittest.IsolatedAsyncioTestCase):
             caller.cancel()
             with self.assertRaises(asyncio.CancelledError):
                 await caller
-            self.assertTrue(self.manager._tasks)
+            self.assertTrue(self.tasks.pending())
         await self.manager.close(deadline=asyncio.get_running_loop().time() + 0.5)
         self.assertEqual(self.rooms(), 0)
-        self.assertFalse(self.manager._tasks)
+        self.assertFalse(self.tasks.pending())
         self.assertIn("關閉", await self.manager.bind_entry(self.guild, self.entry))
         with self.assertRaises(RuntimeError):
             self.manager.set_enabled(False)
@@ -383,7 +384,7 @@ class TempVoiceManagerTest(unittest.IsolatedAsyncioTestCase):
         with self.assertLogs(level="WARNING"):
             await caller
         await asyncio.sleep(0)
-        self.assertFalse(self.manager._tasks)
+        self.assertFalse(self.tasks.pending())
 
     async def test_cancelled_create_caller_keeps_accepted_work_owned_until_shutdown_drain(self) -> None:
         started, release = asyncio.Event(), asyncio.Event()
@@ -401,10 +402,10 @@ class TempVoiceManagerTest(unittest.IsolatedAsyncioTestCase):
         caller.cancel()
         with self.assertRaises(asyncio.CancelledError):
             await caller
-        self.assertTrue(self.manager._tasks)
+        self.assertTrue(self.tasks.pending())
         release.set()
         await self.manager.close(deadline=asyncio.get_running_loop().time() + 0.5)
-        self.assertFalse(self.manager._tasks)
+        self.assertFalse(self.tasks.pending())
         self.assertEqual(self.rooms(), 1)
         self.assertEqual(self.manager.operations.effects(kind="voice.create")[0].status, "done")
         self.created()[0].delete.assert_not_awaited()
@@ -427,7 +428,7 @@ class TempVoiceManagerTest(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(asyncio.CancelledError):
             await caller
         await asyncio.sleep(0)
-        self.assertFalse(self.manager._tasks)
+        self.assertFalse(self.tasks.pending())
         self.assertEqual(self.manager.operations.effects(kind="voice.create")[0].status, "unknown")
 
     async def test_disabled_reconcile_still_cleans_empty_managed_rooms(self) -> None:

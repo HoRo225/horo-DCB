@@ -8,16 +8,16 @@ from typing import Literal
 from src.ai.access import AiSettings
 from src.codex.service import CodexService
 from src.codex.protocol import CodexError, scope_matches
-from src.core.app.supervisor import cancel_all, track, wait_until
+from src.core.app.supervisor import TaskGroup, cancel_all, wait_until
 
 AccessChangeOutcome = Literal["unchanged", "updated"]
 
 
 class AiAccessService:
-    def __init__(self, access: AiSettings, client: CodexService, *, role_ids_for_user: Callable[[int], frozenset[int] | None] | None = None) -> None:
+    def __init__(self, access: AiSettings, client: CodexService, tasks: TaskGroup, *, role_ids_for_user: Callable[[int], frozenset[int] | None] | None = None) -> None:
         self.access = access
         self.client = client
-        self._tasks: set[asyncio.Task[AccessChangeOutcome]] = set()
+        self._tasks = tasks
         self._lock = asyncio.Lock()
         self._closed = False
         self._role_ids_for_user = role_ids_for_user
@@ -34,8 +34,8 @@ class AiAccessService:
         self.access.validate_change(guild_id, selected, roles=roles)
         if self._closed or (still_current is not None and not still_current()):
             return "unchanged"
-        task = track(
-            self._tasks, asyncio.create_task(self._change(guild_id, selected, roles=roles, still_current=still_current, operation_id=operation_id))
+        task = self._tasks.spawn(
+            self._change(guild_id, selected, roles=roles, still_current=still_current, operation_id=operation_id), log=False,
         )
         return await asyncio.shield(task)
 
@@ -84,9 +84,12 @@ class AiAccessService:
                 if detach:
                     self.access.resume(removed)
 
+    def stop_new_work(self) -> None:
+        pass
+
     async def close(self, *, deadline: float) -> None:
         self._closed = True
-        pending = await wait_until(self._tasks, deadline)
+        pending = await wait_until(self._tasks.pending(), deadline)
         cancel_all(pending)
         if pending:
             await asyncio.sleep(0)

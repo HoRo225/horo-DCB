@@ -7,13 +7,16 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import discord
 
-from src.games import rana
 from src.games.blackjack import Card
 from src.games.store import GameStore
 from src.core.adapters.sqlite.db import open_db, transaction
 from src.core.adapters.sqlite.operations import OperationStore
 from src.core.adapters.sqlite.settings import SettingsStore
 from src.core.domain.settings import Setting
+from src.core.app.supervisor import PRESENTATION, WORK, Lane, TaskGroup
+
+GAME_TASKS = TaskGroup("test.games", WORK)
+AI_CLEANUPS = TaskGroup("test.ai", PRESENTATION)
 
 
 class Fatal(BaseException):
@@ -28,6 +31,10 @@ def text(view: discord.ui.BaseView) -> str:
 
 def deck(*ranks: str) -> list[Card]:
     return [Card(rank, "S") for rank in reversed(ranks)]
+
+
+def group(lane: Lane = WORK) -> TaskGroup:
+    return TaskGroup("test", lane)
 
 
 def put_setting(db: sqlite3.Connection, setting: Setting[object], value: object) -> None:
@@ -56,7 +63,7 @@ def quiet_rana(test: unittest.IsolatedAsyncioTestCase, ask: str | None = None) -
     for patcher in (patch("src.games.rana.ask_once", ask_once), patch("src.games.rana.ready", return_value=True)):
         patcher.start()
         test.addCleanup(patcher.stop)
-    test.addAsyncCleanup(lambda: asyncio.gather(*rana.TASKS, return_exceptions=True))
+    test.addAsyncCleanup(lambda: asyncio.gather(*GAME_TASKS.pending(), return_exceptions=True))
     return ask_once
 
 

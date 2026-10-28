@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import asyncio
 import logging
 import sqlite3
 
@@ -27,7 +26,9 @@ from src.games.store import GameStore
 from src.core.adapters.sqlite.db import DB_PATH, hold_lock, open_db
 from src.steam.cog import SteamCog
 from src.steam.notifier import SteamFreeGamesNotifier
-from src.core.app.supervisor import stage
+from src.core.adapters.discord.shutdown import Shutdown
+from src.core.app.maintenance import Maintenance
+from src.core.app.supervisor import PRESENTATION, REQUEST, SCHEDULED, WORK, Supervisor
 from src.voice.cog import VoiceCog
 from src.voice.manager import TempVoiceManager
 from src.core.adapters.discord.watchdog import install_stack_dump_signal, run_watchdog
@@ -57,28 +58,62 @@ class HoroBot(commands.Bot):
         )
         self.guild_id = guild_id
         self._db = db
+        self.supervisor = supervisor = Supervisor()
         self.operations = OperationStore(db)
-        self.operations.interrupt_requests()
+        self.maintenance = Maintenance(self.operations, supervisor.group("maintenance", SCHEDULED))
+        self.maintenance.recover()
         self.codex = codex
         self.ai_settings = AiSettings(db, guild_id)
-        self.access_service = AiAccessService(self.ai_settings, codex, role_ids_for_user=self._member_roles)
-        self.temp_voice = TempVoiceManager(db, get_guild=self.get_guild)
-        self.steam_free_games = SteamFreeGamesNotifier(db, guild_id)
+        self.access_service = AiAccessService(
+            self.ai_settings, codex, supervisor.group("access", WORK), role_ids_for_user=self._member_roles,
+        )
+        self.temp_voice = TempVoiceManager(db, supervisor.group("voice", WORK), get_guild=self.get_guild)
+        self.steam_free_games = SteamFreeGamesNotifier(db, guild_id, supervisor.group("steam", SCHEDULED))
         self.games = GameStore(db)
-        self.game_operations = GameOperations(self)
-        self.admin_panels = PanelSessionRegistry()
+        self.game_operations = GameOperations(self, supervisor.group("games", WORK))
+        self.admin_panels = PanelSessionRegistry(
+            supervisor.group("admin", PRESENTATION), supervisor.group("admin", WORK),
+        )
         self.effects = EffectService(self, db)
-        self.actions = ActionService(self, db)
+        self.actions = ActionService(self, db, supervisor.group("actions", WORK))
+        self._watchdog = supervisor.group("watchdog", SCHEDULED)
+        self.shutdown = Shutdown(
+            supervisor,
+            (
+                (("access", self.access_service), ("codex", codex)),
+                (("actions", self.actions),),
+                (("steam", self.steam_free_games),),
+                (("voice", self.temp_voice),),
+                (("panel", self.admin_panels),),
+            ),
+            interrupt=lambda: codex.cancel(guild_id),
+            stop_resolver=self.effects.stop_new_work,
+            detach=self._remove_cogs,
+            transport=super().close,
+        )
         self.tree.error(report_interaction_error)
-        self._closing = False
-        self._close_task: asyncio.Task[None] | None = None
-        self._watchdog: asyncio.Task[None] | None = None
+
+    @property
+    def db_safe_to_close(self) -> bool:
+        return self.shutdown.safe_to_close_db
 
     async def add_cogs(self) -> None:
         guild = discord.Object(id=self.guild_id)
         self.add_dynamic_items(PrivateResultButton)
-        for cog in (GamesCog, VoiceCog, AdminCog, AiCog, SteamCog):
-            await self.add_cog(cog(self), guild=guild)
+        supervisor = self.supervisor
+        for cog in (
+            GamesCog(self, supervisor.group("games.cog", SCHEDULED)),
+            VoiceCog(self),
+            AdminCog(self),
+            AiCog(self, requests=supervisor.group("ai", REQUEST), cleanups=supervisor.group("ai", PRESENTATION)),
+            SteamCog(self),
+        ):
+            await self.add_cog(cog, guild=guild)
+
+    async def _remove_cogs(self) -> None:
+        guild = discord.Object(id=self.guild_id)
+        for name in tuple(self.cogs):
+            await self.remove_cog(name, guild=guild)
 
     def _member_roles(self, user_id: int) -> frozenset[int] | None:
         guild = self.get_guild(self.guild_id)
@@ -86,7 +121,7 @@ class HoroBot(commands.Bot):
         return member_role_ids(member) if member is not None else None
 
     def unavailable_reason(self, guild_id: int | None) -> str | None:
-        if self._closing:
+        if self.supervisor.closing:
             return "Bot 正在重新啟動，請稍後再試。"
         if guild_id != self.guild_id:
             return "此 Bot 只服務 .env 的 DISCORD_GUILD_ID 伺服器。"
@@ -97,138 +132,24 @@ class HoroBot(commands.Bot):
         await load_app_emojis(self)
         await self.add_cogs()
         install_stack_dump_signal()
-        self._watchdog = asyncio.create_task(run_watchdog(self))
+        self._watchdog.spawn(run_watchdog(self))
+        self.maintenance.start()
         try:
             await self.tree.sync(guild=discord.Object(id=self.guild_id))
         except discord.HTTPException:
             logging.exception("Discord slash command sync failed; continuing startup.")
 
     async def close(self) -> None:
-        from src.core.app import supervisor
-
-        if self._close_task is None:
-            self._closing = True
-            self._db_safe_to_close = False
-            self._shutdown_limit = asyncio.get_running_loop().time() + supervisor.SHUTDOWN_SECONDS
-            self._shutdown_cogs = tuple(self.cogs.values())
-            self._shutdown_seen: set[asyncio.Task] = set()
-            for service in (self.codex, getattr(self, "actions", None), self.steam_free_games, self.temp_voice, self.admin_panels):
-                if service is not None:
-                    service.stop_new_work()
-            self._shutdown_owners()
-            scheduled = {self._watchdog, getattr(self.steam_free_games, "_task", None)}
-            for cog in self._shutdown_cogs:
-                for field in ("_tasks", "_redrawing", "_requests"):
-                    scheduled.update(getattr(cog, field, ()))
-            supervisor.cancel_all(task for task in scheduled if isinstance(task, asyncio.Task))
-            self._close_task = asyncio.create_task(self._shutdown())
-        cancelled = False
-        while not self._close_task.done():
-            try:
-                await asyncio.wait({self._close_task})
-            except asyncio.CancelledError:
-                cancelled = True
-        self._close_task.result()
-        if cancelled:
-            raise asyncio.CancelledError
-
-    def _shutdown_owners(self) -> set[asyncio.Task]:
-        from src.core.app import supervisor
-        from src.ai.output import CARD_CLEANUPS
-
-        found = {*supervisor._stage_tasks, *CARD_CLEANUPS}
-        for owner, field in ((getattr(self, "actions", None), "_tasks"), (self.temp_voice, "_tasks"),
-                             (self.access_service, "_tasks"),
-                             (getattr(self, "effects", None), "_tasks")):
-            found.update(getattr(owner, field, ()))
-        found.update(self.game_operations.pending_tasks())
-        found.update(self.admin_panels.pending_tasks())
-        for cog in self._shutdown_cogs:
-            for field in ("_tasks", "_redrawing", "_requests"):
-                found.update(getattr(cog, field, ()))
-        found.update((self._watchdog, getattr(self.steam_free_games, "_task", None)))
-        self._shutdown_seen.update(task for task in found if isinstance(task, asyncio.Task))
-        return {task for task in self._shutdown_seen if not task.done() and task is not asyncio.current_task()}
-
-    def _shutdown_presentations(self) -> set[asyncio.Task]:
-        from src.ai.output import CARD_CLEANUPS
-
-        tasks = self.admin_panels.presentation_tasks()
-        tasks.update(CARD_CLEANUPS)
-        for cog in self._shutdown_cogs:
-            tasks.update(getattr(cog, "_requests", ()))
-        return {task for task in tasks if not task.done() and task is not asyncio.current_task()}
-
-    def _shutdown_failstop(self) -> None:
-        import os
-        from src.core.adapters.discord.watchdog import dump_stacks
-
-        try:
-            dump_stacks()
-        except Exception:
-            logging.exception("Shutdown stack dump failed.")
-        logging.critical("Bot shutdown deadline reached with live owners; retaining database and lock, exiting for recovery.")
-        logging.shutdown()
-        os._exit(1)
-
-    async def _shutdown(self) -> None:
-        from src.core.app import supervisor
-
-        deadline = self._shutdown_limit
-        work_deadline = deadline - supervisor.SHUTDOWN_STAGE_SECONDS
-        token = supervisor.shutdown_deadline.set(deadline)
-        cleanup: set[asyncio.Task] = set()
-        try:
-            supervisor.track(cleanup, asyncio.create_task(stage("ai cancellation", self.codex.cancel(self.guild_id))))
-            while owners := self._shutdown_owners() | cleanup:
-                pending = await supervisor.wait_until(owners, work_deadline)
-                if pending:
-                    break
-            effects = getattr(self, "effects", None)
-            if effects is not None:
-                effects.stop_new_work()
-            supervisor.cancel_all((self._shutdown_owners() | cleanup) - self._shutdown_presentations())
-            cog_names = tuple(self.cogs)
-            for name in cog_names:
-                supervisor.track(cleanup, asyncio.create_task(self.remove_cog(name, guild=discord.Object(id=self.guild_id))))
-            if "AiCog" not in cog_names:
-                supervisor.track(cleanup, asyncio.create_task(stage("access", self.access_service.close(deadline=deadline))))
-                supervisor.track(cleanup, asyncio.create_task(stage("codex", self.codex.close(deadline=deadline))))
-            if "AdminCog" not in cog_names:
-                supervisor.track(cleanup, asyncio.create_task(stage("panel", self.admin_panels.close(deadline=deadline))))
-            if "VoiceCog" not in cog_names:
-                supervisor.track(cleanup, asyncio.create_task(stage("voice", self.temp_voice.close(deadline=deadline))))
-            if "SteamCog" not in cog_names:
-                supervisor.track(cleanup, asyncio.create_task(stage("steam", self.steam_free_games.close())))
-            actions = getattr(self, "actions", None)
-            if actions is not None:
-                supervisor.track(cleanup, asyncio.create_task(stage("actions", actions.close(deadline=deadline))))
-            await asyncio.sleep(0)
-            while presentations := self._shutdown_presentations():
-                if await supervisor.wait_until(presentations, deadline):
-                    self._shutdown_failstop()
-            discord_close = supervisor.track(cleanup, asyncio.create_task(stage("discord", super().close())))
-            while pending := self._shutdown_owners() | {task for task in cleanup if not task.done()}:
-                if await supervisor.wait_until(pending, deadline):
-                    supervisor.cancel_all(pending)
-                    await asyncio.sleep(0)
-                    if self._shutdown_owners() or any(not task.done() for task in cleanup):
-                        self._shutdown_failstop()
-                    break
-            if discord_close.cancelled() or not discord_close.done() or discord_close.result() is not True:
-                self._shutdown_failstop()
-            self._db_safe_to_close = True
-        finally:
-            supervisor.shutdown_deadline.reset(token)
+        await self.shutdown.run()
 
     async def on_ready(self) -> None:
-        if self._closing:
+        if self.supervisor.closing:
             return
         sync_discord_brand(self)
         logging.info("Discord bot logged in: %s", self.user)
 
     async def on_user_update(self, before: discord.User, after: discord.User) -> None:
-        if self._closing or after.id != self.user.id:
+        if self.supervisor.closing or after.id != self.user.id:
             return
         sync_discord_brand(self)
 
@@ -252,7 +173,7 @@ def main() -> None:
         bot = HoroBot(codex, guild_id=config.guild_id, db=db)
         bot.run(config.discord_token, log_handler=None)
     finally:
-        if bot is not None and not getattr(bot, "_db_safe_to_close", False):
+        if bot is not None and not bot.db_safe_to_close:
             import os
             logging.critical("Bot stopped before owners finished; retaining database and lock.")
             logging.shutdown()

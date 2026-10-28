@@ -6,7 +6,7 @@ from dataclasses import dataclass, field
 from collections.abc import Coroutine
 from typing import TYPE_CHECKING, Any
 
-from src.core.app.supervisor import cancel_all, consume_task_exception, wait_until, track
+from src.core.app.supervisor import TaskGroup, cancel_all, consume_task_exception, wait_until
 
 if TYPE_CHECKING:
     from src.admin.panel import AdminPanelView
@@ -21,24 +21,19 @@ class PanelSession:
 
 
 class PanelSessionRegistry:
-    def __init__(self) -> None:
+    def __init__(self, presentations: TaskGroup, mutations: TaskGroup) -> None:
         self._current: dict[tuple[int, int], PanelSession] = {}
         self._live: set[PanelSession] = set()
         self._closed = False
         self._close_task: asyncio.Task[None] | None = None
-        self.mutations: set[asyncio.Task] = set()
+        self._presentations = presentations
+        self._mutations = mutations
 
-    def own_mutation(self, task: asyncio.Task) -> asyncio.Task:
-        return track(self.mutations, task, log=True)
+    def mutate[T](self, coro: Coroutine[Any, Any, T]) -> asyncio.Task[T]:
+        return self._mutations.spawn(coro)
 
-    def presentation_tasks(self) -> set[asyncio.Task]:
+    def _session_tasks(self) -> set[asyncio.Task]:
         return {task for session in self._live for task in session.tasks if not task.done()}
-
-    def pending_tasks(self) -> set[asyncio.Task]:
-        tasks = self.presentation_tasks() | {task for task in self.mutations if not task.done()}
-        if self._close_task is not None and not self._close_task.done():
-            tasks.add(self._close_task)
-        return tasks
 
     def stop_new_work(self) -> None:
         self._closed = True
@@ -61,7 +56,8 @@ class PanelSessionRegistry:
             not self._closed and not session.retired and self._current.get(session.key) is session
         )
 
-    def track(self, session: PanelSession, task: asyncio.Task) -> None:
+    def spawn[T](self, session: PanelSession, coro: Coroutine[Any, Any, T]) -> asyncio.Task[T]:
+        task = self._presentations.spawn(coro, log=False)
         self._live.add(session)
         session.tasks.add(task)
 
@@ -72,10 +68,10 @@ class PanelSessionRegistry:
             self._collect(session)
 
         task.add_done_callback(completed)
+        return task
 
     async def run_child[T](self, session: PanelSession, coro: Coroutine[Any, Any, T]) -> T | None:
-        child = asyncio.create_task(coro)
-        self.track(session, child)
+        child = self.spawn(session, coro)
         try:
             return await child
         except asyncio.CancelledError:
@@ -108,8 +104,7 @@ class PanelSessionRegistry:
     async def close(self, *, deadline: float) -> None:
         if self._close_task is None:
             self.stop_new_work()
-            self._close_task = asyncio.create_task(self._drain(deadline))
-            self._close_task.add_done_callback(consume_task_exception)
+            self._close_task = self._mutations.spawn(self._drain(deadline), log=False)
         await asyncio.wait({self._close_task})
         self._close_task.result()
 
@@ -120,7 +115,7 @@ class PanelSessionRegistry:
             self.retire(session)
         cancel_all(tasks)
         while self._live:
-            tasks = self.presentation_tasks()
+            tasks = self._session_tasks()
             if not tasks:
                 break
             if pending := await wait_until(tasks, deadline):
@@ -129,7 +124,7 @@ class PanelSessionRegistry:
                 raise TimeoutError("Admin panel shutdown timed out.")
             for session in tuple(self._live):
                 self._collect(session)
-        if pending := await wait_until(self.mutations, deadline):
+        if pending := await wait_until(self._mutations.pending() - {asyncio.current_task()}, deadline):
             cancel_all(pending)
             await asyncio.sleep(0)
             raise TimeoutError("Admin operations shutdown timed out.")

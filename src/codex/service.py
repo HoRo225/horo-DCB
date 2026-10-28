@@ -28,7 +28,7 @@ from src.codex.rate_limits import CodexRateLimits, normalize_rate_limits
 from src.codex.rpc import AppServerClient, ConnectionLost, Notification, Phase, RpcError, ThreadEvents
 from src.codex.turns import TurnResult, collect_turn, extract_reply_image_urls, normalize_error
 from src.core.app.config import CODEX_WORKSPACE
-from src.core.app.supervisor import cancel_all, shutdown_deadline, track
+from src.core.app.supervisor import cancel_all, track
 
 CLIENT_VERSION = "1.0.0"
 SERVICE_NAME = "horo-dcb"
@@ -139,8 +139,6 @@ class CodexService:
         self._admission.closed = True
 
     async def close(self, *, deadline: float | None = None) -> None:
-        if deadline is None:
-            deadline = shutdown_deadline.get()
         self._admission.closed = True
         cancel_all(self._tasks)
         for future in self._logins.values():

@@ -20,7 +20,7 @@ from src.core.adapters.sqlite.operations import OperationStore
 from src.core.adapters.sqlite.settings import SettingsStore
 from src.core.domain.json import json_value
 from src.core.domain.settings import Setting
-from src.core.app.supervisor import track, wait_until, cancel_all
+from src.core.app.supervisor import TaskGroup, cancel_all, wait_until
 
 CHANNEL_NAME_PREFIX = "▍"
 CHANNEL_NAME_SUFFIX = " 的語音-🔊"
@@ -54,12 +54,12 @@ def build_temp_voice_name(display_name: str) -> str:
 
 
 class TempVoiceManager:
-    def __init__(self, db: sqlite3.Connection, *, get_guild=None) -> None:
+    def __init__(self, db: sqlite3.Connection, tasks: TaskGroup, *, get_guild=None) -> None:
         self._db = db
         self._lock = asyncio.Lock()
         self._closing = False
         self._closed = False
-        self._tasks: set[asyncio.Task] = set()
+        self._tasks = tasks
         self.operations = OperationStore(db)
         self._settings = SettingsStore(db, self.operations)
         self._get_guild = get_guild
@@ -101,16 +101,16 @@ class TempVoiceManager:
         if self._closing:
             coroutine.close()
             return None
-        task = track(self._tasks, asyncio.create_task(coroutine), log=True)
+        task = self._tasks.spawn(coroutine)
         return await asyncio.shield(task)
 
     async def close(self, *, deadline: float) -> None:
         self.stop_new_work()
         try:
-            await wait_until(self._tasks, deadline)
+            await wait_until(self._tasks.pending(), deadline)
         finally:
             self._closed = True
-            cancel_all(self._tasks)
+            cancel_all(self._tasks.pending())
             await asyncio.sleep(0)
 
     def set_enabled(self, value: bool, *, operation_id: str | None = None) -> bool:

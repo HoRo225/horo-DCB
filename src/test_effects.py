@@ -16,7 +16,8 @@ from src.core.adapters.sqlite.db import open_db, transaction
 from src.testing import put_setting, get_setting
 from src.steam.models import SteamOffer
 from src.steam.notifier import SteamFreeGamesNotifier
-from src.testing import interaction
+from src.testing import group, interaction
+from src.core.app.supervisor import SCHEDULED
 from src.voice.manager import TempVoiceManager
 from src.games.store import GAMES_HUB_MESSAGE
 from src.steam.notifier import STEAM_ENABLED
@@ -55,9 +56,9 @@ class EffectsTest(unittest.IsolatedAsyncioTestCase):
         self.bot.codex = SimpleNamespace(request_counts=MagicMock(return_value=(0, 0)))
         self.bot.get_guild = lambda guild_id: self.guild if guild_id == GUILD else None
         self.bot.get_partial_messageable = lambda channel_id: self.guild.get_channel(channel_id)
-        self.bot.steam_free_games = SteamFreeGamesNotifier(self.db, GUILD)
+        self.bot.steam_free_games = SteamFreeGamesNotifier(self.db, GUILD, group(SCHEDULED))
         self.bot.steam_free_games._client = self.bot
-        self.bot.temp_voice = TempVoiceManager(self.db)
+        self.bot.temp_voice = TempVoiceManager(self.db, group())
         self.bot.games = SimpleNamespace(channel_id=CHANNEL)
         self.service = EffectService(self.bot, self.db)
         self.records = OperationStore(self.db)

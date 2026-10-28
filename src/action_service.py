@@ -22,7 +22,7 @@ from src.games.hub import bind_channel
 from src.core.adapters.sqlite.operations import OperationStore
 from src.core.domain.json import json_value
 from src.core.adapters.sqlite.db import transaction
-from src.core.app.supervisor import cancel_all, track, wait_until
+from src.core.app.supervisor import TaskGroup, cancel_all, wait_until
 
 ADMIN_ACTIONS = frozenset({"admin_status", "voice_sync", "publish_hub",
     "steam_query", "ai_enabled", "ai_display", "voice_enabled", "steam_enabled", "ai_channels", "ai_roles",
@@ -46,12 +46,12 @@ def _static_action_problem(action, explicit, content="") -> str | None:
 
 
 class ActionService:
-    def __init__(self, bot, db) -> None:
+    def __init__(self, bot, db, tasks: TaskGroup) -> None:
         self.bot, self.db = bot, db
         self.records = OperationStore(db)
         self.games = bot.game_operations
         self.private_results = PrivateResults(self._authorize_private, self._render_private, QUERY_LABELS)
-        self._tasks: set[asyncio.Task] = set()
+        self._tasks = tasks
         self._running: dict[int, asyncio.Task] = {}
         self._stop_remaining: dict[int, asyncio.Event] = {}
         self._receipts: OrderedDict[int, object | None] = OrderedDict()
@@ -172,7 +172,7 @@ class ActionService:
             return [self._failure("busy", "收到訊息時賭桌仍在處理上一個動作，請等完成後再要求下一局。")]
         if (task := self._running.get(source.id)) is None:
             stop_remaining = self._stop_remaining[source.id] = asyncio.Event()
-            task = track(self._tasks, asyncio.create_task(self._run_plan(source, decision, game_snapshot, deadline, stop_remaining)), log=True)
+            task = self._tasks.spawn(self._run_plan(source, decision, game_snapshot, deadline, stop_remaining))
             self._running[source.id] = task
             def finished(owner):
                 self._running.pop(source.id, None)
@@ -598,7 +598,7 @@ class ActionService:
 
     async def close(self, *, deadline: float) -> None:
         self.stop_new_work()
-        pending = await wait_until(self._tasks, deadline)
+        pending = await wait_until(self._tasks.pending(), deadline)
         cancel_all(pending)
         if pending:
             await asyncio.sleep(0)

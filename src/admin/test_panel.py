@@ -19,7 +19,8 @@ from src.core.adapters.discord.brand import BRAND_COLOUR, ICONS, NEUTRAL_COLOUR,
 from src.core.adapters.sqlite.db import open_db, transaction
 from src.testing import put_setting
 from src.steam.models import SteamFetchResult, SteamOffer
-from src.testing import text
+from src.testing import group, text
+from src.core.app.supervisor import PRESENTATION, WORK
 from src.ai.access import AI_ENABLED
 from src.games.store import GAMES_HUB_MESSAGE
 from src.steam.notifier import STEAM_CHANNEL_ID
@@ -29,34 +30,32 @@ G, OWNER = 100, 200
 
 
 class PanelShutdownTests(unittest.IsolatedAsyncioTestCase):
-    async def test_task_snapshots_include_retired_sessions_mutations_and_shutdown(self) -> None:
+    def registry(self):
         from src.admin.sessions import PanelSessionRegistry
 
-        registry = PanelSessionRegistry()
+        self.presentations, self.mutations = group(PRESENTATION), group(WORK)
+        return PanelSessionRegistry(self.presentations, self.mutations)
+
+    async def test_retired_sessions_mutations_and_shutdown_stay_owned(self) -> None:
+        registry = self.registry()
         session = registry.begin((G, OWNER))
         gate = asyncio.Event()
-        presentation = asyncio.create_task(gate.wait())
-        registry.track(session, presentation)
-        mutation = registry.own_mutation(asyncio.create_task(gate.wait()))
-        self.assertEqual(registry.presentation_tasks(), {presentation})
-        snapshot = registry.pending_tasks()
-        self.assertEqual(snapshot, {presentation, mutation})
-        snapshot.clear()
+        presentation = registry.spawn(session, gate.wait())
+        mutation = registry.mutate(gate.wait())
+        self.assertEqual((self.presentations.pending(), self.mutations.pending()), ({presentation}, {mutation}))
         registry.retire(session)
-        self.assertEqual(registry.pending_tasks(), {presentation, mutation})
+        self.assertEqual((self.presentations.pending(), self.mutations.pending()), ({presentation}, {mutation}))
         closing = asyncio.create_task(registry.close(deadline=asyncio.get_running_loop().time() + 1))
         await asyncio.sleep(0)
-        self.assertEqual(registry.pending_tasks() - {presentation, mutation}, {registry._close_task})
+        self.assertEqual(len(self.mutations.pending() - {mutation}), 1)
         gate.set()
         await closing
-        self.assertEqual(registry.presentation_tasks(), set())
-        self.assertEqual(registry.pending_tasks(), set())
+        self.assertEqual((self.presentations.pending(), self.mutations.pending()), (set(), set()))
 
     async def test_shutdown_does_not_cancel_screen_retirement_cleanup(self) -> None:
-        from src.admin.sessions import PanelSessionRegistry
         from types import SimpleNamespace
 
-        registry = PanelSessionRegistry()
+        registry = self.registry()
         session = registry.begin((G, OWNER))
         deleted = []
 
@@ -68,8 +67,7 @@ class PanelShutdownTests(unittest.IsolatedAsyncioTestCase):
 
         def retire():
             if view._retirement_task is None:
-                view._retirement_task = asyncio.create_task(cleanup())
-                registry.track(session, view._retirement_task)
+                view._retirement_task = registry.spawn(session, cleanup())
 
         view.retire_session = retire
         registry.attach_view(session, view)
@@ -78,30 +76,28 @@ class PanelShutdownTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(view._retirement_task.cancelled())
 
     async def test_retirement_and_cancelled_close_keep_mutation_owned(self) -> None:
-        from src.admin.sessions import PanelSessionRegistry
-
-        registry = PanelSessionRegistry()
+        registry = self.registry()
         session = registry.begin((G, OWNER))
         gate = asyncio.Event()
-        mutation = registry.own_mutation(asyncio.create_task(gate.wait()))
+        mutation = registry.mutate(gate.wait())
         registry.stop_new_work()
         self.assertTrue(session.retired)
         self.assertFalse(registry.is_current(session))
-        self.assertIn(mutation, registry.mutations)
+        self.assertIn(mutation, self.mutations.pending())
         self.assertFalse(mutation.cancelling())
         deadline = asyncio.get_running_loop().time() + 1
         caller = asyncio.create_task(registry.close(deadline=deadline))
         await asyncio.sleep(0)
-        shared = registry._close_task
+        [shared] = self.mutations.pending() - {mutation}
         caller.cancel()
         with self.assertRaises(asyncio.CancelledError):
             await caller
         self.assertFalse(shared.done())
-        self.assertIn(mutation, registry.mutations)
+        self.assertIn(mutation, self.mutations.pending())
         gate.set()
         await registry.close(deadline=deadline + 1)
-        self.assertIs(registry._close_task, shared)
-        self.assertFalse(registry.mutations)
+        self.assertTrue(shared.done())
+        self.assertFalse(self.mutations.pending())
 
 STATUS = CodexRuntimeStatus(reason="ready", authenticated=True, plan="plus", runtime_version="1.0", thread_count=3)
 LOGGED_OUT = CodexRuntimeStatus(reason="auth_required", runtime_version="1.0")

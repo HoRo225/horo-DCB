@@ -19,7 +19,7 @@ from src.ai.formatting import (
     split_reasoning_summary,
 )
 from src.core.adapters.discord.brand import BRAND_COLOUR, ICONS, notice_view
-from src.core.app.supervisor import track
+from src.core.app.supervisor import TaskGroup
 
 PROGRESS_FALLBACK = ("thinking", "{name} 正在思考")
 PROGRESS_OVERRIDES = {
@@ -64,11 +64,12 @@ def build_ai_progress_view(
 
 
 class AiProgress:
-    def __init__(self, *, can_send: Any, deadline: float, name: str) -> None:
+    def __init__(self, *, can_send: Any, deadline: float, name: str, cleanups: TaskGroup) -> None:
         self.message: discord.Message | None = None
         self.name = name
         self.can_send = can_send
         self.deadline = deadline
+        self._cleanups = cleanups
         self.started_at = int(time.time())
         self._latest = ("generating", "")
         self._published = self._latest
@@ -145,11 +146,9 @@ class AiProgress:
             message, self.message = self.message, None
             await _delete_card(message)
         elif self._late is not None:
-            track(CARD_CLEANUPS, asyncio.create_task(_delete_when_landed(self._late)))
+            self._cleanups.spawn(_delete_when_landed(self._late), log=False)
             self._late = None
 
-
-CARD_CLEANUPS: set[asyncio.Task[None]] = set()
 
 
 async def _delete_card(message: discord.Message) -> None:

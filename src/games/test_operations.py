@@ -7,6 +7,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import discord
 
+from src.testing import GAME_TASKS
+
 from src.games import rana
 from src.games.operations import GameOperations
 from src.games.tables import LIVE_TABLES, BlackjackTableView, SlotTableView
@@ -44,7 +46,7 @@ class GameOperationsTest(unittest.IsolatedAsyncioTestCase):
         self.guild = SimpleNamespace(id=5, fetch_member=AsyncMock(return_value=self.actor), get_member=lambda uid: self.actor,
                                      get_channel_or_thread=lambda channel_id: self.source.channel)
         self.bot.get_guild = lambda guild_id: self.guild if guild_id == 5 else None
-        self.operations = self.bot.game_operations = GameOperations(self.bot)
+        self.operations = self.bot.game_operations = GameOperations(self.bot, GAME_TASKS)
         self.records = OperationStore(self.store.db)
         patcher = patch.dict(LIVE_TABLES, clear=True)
         patcher.start()
@@ -159,7 +161,7 @@ class GameOperationsTest(unittest.IsolatedAsyncioTestCase):
         with patch("src.games.rana.round_line", line):
             await blackjack_win("small")
             token = self.table.state_token
-            await asyncio.gather(*rana.TASKS)
+            await asyncio.gather(*GAME_TASKS.pending())
             line.assert_awaited_once()
             self.assertEqual(line.await_args.args[2], {"遊戲": "21 點", "玩家暱稱": "阿明", "結果": "贏"})
             self.assertEqual(line.await_args.kwargs, {})
@@ -185,13 +187,13 @@ class GameOperationsTest(unittest.IsolatedAsyncioTestCase):
             await self.operations._line(context, self.table, token, {})
             self.assertEqual((self.table.message.edit.await_count, self.table.taunt), (edits, None))
             await self.execute("stand", operation_id="next-stand")
-            await asyncio.gather(*rana.TASKS, return_exceptions=True)
+            await asyncio.gather(*GAME_TASKS.pending(), return_exceptions=True)
             line.side_effect, line.return_value = None, "這把手氣也太好"
 
             self.open_table("slots")
             self.table.play = MagicMock(return_value=(3, ["r"], ["s"]))
             await self.execute("deal", operation_id="slots-small")
-            await asyncio.gather(*rana.TASKS)
+            await asyncio.gather(*GAME_TASKS.pending())
             self.assertEqual(line.await_args.args[2], {"遊戲": "拉霸", "玩家暱稱": "阿明", "倍數": 3})
             self.assertIn("**樂奈**　這把手氣也太好", text(self.table.message.edit.await_args.kwargs["view"]))
 
@@ -199,7 +201,7 @@ class GameOperationsTest(unittest.IsolatedAsyncioTestCase):
             line.return_value = "下次再來"
             with patch("src.games.tables.shoe", return_value=deck("9", "10", "8", "A")):
                 await self.execute("deal", operation_id="loss")
-            await asyncio.gather(*rana.TASKS)
+            await asyncio.gather(*GAME_TASKS.pending())
         self.assertEqual(line.await_args.args[2]["結果"], "輸")
         self.assertEqual(self.table.taunt, "下次再來")
         self.source.channel.send.assert_not_awaited()
@@ -210,7 +212,7 @@ class GameOperationsTest(unittest.IsolatedAsyncioTestCase):
         line = AsyncMock(return_value="不該出現")
         with patch("src.games.rana.round_line", line), patch("src.games.rana.ready", return_value=False):
             await self.execute("deal", operation_id="off")
-            await asyncio.gather(*rana.TASKS)
+            await asyncio.gather(*GAME_TASKS.pending())
         line.assert_not_awaited()
         self.assertIsNone(self.table.taunt)
 
@@ -352,7 +354,7 @@ class GameOperationsTest(unittest.IsolatedAsyncioTestCase):
         clicked.response.defer.assert_awaited_once()
         clicked.response.edit_message.assert_not_awaited()
         clicked.edit_original_response.assert_awaited_once()
-        self.assertFalse(self.operations.pending_tasks())
+        self.assertNotIn(asyncio.current_task(), GAME_TASKS.pending())
 
     async def test_reidentified_game_channel_and_cache_miss_cannot_use_old_source_permissions(self):
         live = SimpleNamespace(id=10, permissions_for=lambda actor: discord.Permissions.none(), send=AsyncMock())
@@ -403,26 +405,6 @@ class GameOperationsTest(unittest.IsolatedAsyncioTestCase):
                                                expected_token=self.store.state_token(1), operation_id="ai-open")
         self.assertTrue(result["ok"])
         self.assertEqual(self.guild.fetch_member.await_count, 2)
-
-
-class MidnightPruneTest(unittest.TestCase):
-    def test_midnight_job_prunes_old_operations(self) -> None:
-        from src.games.cog import GamesCog
-
-        db = memory_db(self)
-        operations = OperationStore(db)
-        with transaction(db):
-            operations.complete("op-done", "credit", {}, None)
-            db.execute("UPDATE operations SET created_at = unixepoch() - 31 * 86400")
-        bot = SimpleNamespace(operations=operations)
-        with patch("src.games.cog.daily", AsyncMock()) as daily:
-            asyncio.run(GamesCog(bot)._prune())
-        hour, job = daily.await_args.args
-        self.assertEqual(hour, 0)
-        with self.assertLogs(level="INFO") as logs:
-            asyncio.run(job())
-        self.assertIsNone(operations.get("op-done"))
-        self.assertIn("Pruned 0 effects, 1 operations and 0 requests older than 30 days.", logs.output[-1])
 
 
 if __name__ == "__main__":

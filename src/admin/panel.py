@@ -2,9 +2,9 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Coroutine
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import discord
 
@@ -334,8 +334,8 @@ class AdminPanelView(ErrorNotice, discord.ui.LayoutView):
             ),
         )
 
-    def track(self, task: asyncio.Task) -> None:
-        self._panel_registry.track(self._panel_session, task)
+    def spawn[T](self, coro: Coroutine[Any, Any, T]) -> asyncio.Task[T]:
+        return self._panel_registry.spawn(self._panel_session, coro)
 
     @property
     def interaction_user(self) -> discord.User | discord.Member | None:
@@ -373,8 +373,7 @@ class AdminPanelView(ErrorNotice, discord.ui.LayoutView):
     def close_stale_message(self) -> None:
         if self._retirement_task is not None:
             return
-        self._retirement_task = asyncio.create_task(self._close_stale_message())
-        self.track(self._retirement_task)
+        self._retirement_task = self.spawn(self._close_stale_message())
 
     async def _close_stale_message(self) -> None:
         async with self._edit_lock:
@@ -432,7 +431,7 @@ class AdminPanelView(ErrorNotice, discord.ui.LayoutView):
                     return None
                 return await work(operation)
 
-            working = self._panel_registry.own_mutation(asyncio.create_task(authorized_work()))
+            working = self._panel_registry.mutate(authorized_work())
             await asyncio.wait({working}, timeout=QUICK_REPLY_SECONDS)
             if not working.done() or self._edit_lock.locked():
                 await self.acknowledge(interaction)

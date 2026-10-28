@@ -9,55 +9,40 @@ from discord.ext import commands
 from discord import app_commands
 
 from src.ai import discord as ai_discord
-from src.ai.output import CARD_CLEANUPS
 from src.codex.protocol import CodexError
 from src.core.adapters.discord.channels import is_text_channel, member_role_ids
 from src.core.adapters.discord.brand import send_notice
 from src.codex.protocol import conversation_key
-from src.core.app.supervisor import SHUTDOWN_STAGE_SECONDS, stage, wait_until, shutdown_deadline
+from src.core.app.supervisor import TaskGroup
 
 if TYPE_CHECKING:
     from src.bot import HoroBot
 
 
 class AiCog(commands.Cog):
-    def __init__(self, bot: HoroBot) -> None:
+    def __init__(self, bot: HoroBot, *, requests: TaskGroup, cleanups: TaskGroup) -> None:
         self.bot = bot
-        self._requests: set[asyncio.Task[None]] = set()
+        self._requests = requests
+        self._cleanups = cleanups
 
     async def cog_load(self) -> None:
         await self.bot.codex.start()
-
-    async def cog_unload(self) -> None:
-        deadline = shutdown_deadline.get() or (asyncio.get_running_loop().time() + SHUTDOWN_STAGE_SECONDS)
-        await stage("access", self.bot.access_service.close(deadline=deadline))
-        await stage("codex", self.bot.codex.close())
-        await stage("ai cleanup", self._drain())
-
-    async def _drain(self) -> None:
-        deadline = shutdown_deadline.get() or (asyncio.get_running_loop().time() + SHUTDOWN_STAGE_SECONDS)
-        while tasks := self._requests | CARD_CLEANUPS:
-            if await wait_until(tasks, deadline):
-                return
 
     @commands.Cog.listener()
     async def on_message(self, message: discord.Message) -> None:
         bot = self.bot
         if message.guild is None or bot.unavailable_reason(message.guild.id):
             return
-        task = asyncio.current_task()
-        self._requests.add(task)
-        try:
+        with self._requests.adopt():
             await ai_discord.handle_message(
                 message,
                 bot_user_id=bot.user.id,
                 codex=bot.codex,
                 access=bot.ai_settings,
+                cleanups=self._cleanups,
                 actions=getattr(bot, "actions", None),
                 bot=bot,
             )
-        finally:
-            self._requests.discard(task)
 
     @app_commands.command(name="新話題", description="開始新的 AI 對話，封存這個範圍的舊對話")
     @app_commands.guild_only()

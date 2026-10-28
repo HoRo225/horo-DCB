@@ -15,6 +15,7 @@ from src.core.adapters.discord.channels import post_problem, text_channel_proble
 from src.core.adapters.sqlite.db import transaction
 from src.core.adapters.sqlite.operations import OperationStore
 from src.core.adapters.sqlite.settings import SettingsStore
+from src.core.app.supervisor import TaskGroup
 from src.core.domain.records import DiscordEffect
 from src.core.domain.settings import Setting
 from src.steam.models import SteamConfigurationError, SteamFetchResult, SteamOffer, SteamStatus, offer_from_payload
@@ -28,11 +29,12 @@ STEAM_ROLE_IDS: Setting[list[int]] = Setting("steam.role_ids", [])
 
 
 class SteamFreeGamesNotifier:
-    def __init__(self, db: sqlite3.Connection, guild_id: int) -> None:
+    def __init__(self, db: sqlite3.Connection, guild_id: int, tasks: TaskGroup) -> None:
         self._db = db
         self.guild_id = guild_id
         self._lock = asyncio.Lock()
         self.provider = SteamOfferProvider()
+        self._tasks = tasks
         self._task: asyncio.Task[None] | None = None
         self._closing = False
         self._client: discord.Client | None = None
@@ -197,12 +199,12 @@ class SteamFreeGamesNotifier:
             if self._task.cancelling():
                 self._task.add_done_callback(lambda _: self.start(client) if not self._closing and self.enabled else None)
             return
-        self._task = asyncio.create_task(self._run_loop(client), name="steam-free-games-notifier")
+        self._task = self._tasks.spawn(self._run_loop(client), name="steam-free-games-notifier")
 
     def stop_new_work(self) -> None:
         self._closing = True
 
-    async def close(self) -> None:
+    async def close(self, *, deadline: float) -> None:
         self.stop_new_work()
         try:
             if self._task is not None:

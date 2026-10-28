@@ -6,6 +6,7 @@ from pathlib import Path
 from src.core.adapters.sqlite.db import open_db, transaction
 from src.core.adapters.sqlite.operations import OperationStore
 from src.core.adapters.sqlite.settings import SettingsStore
+from src.core.app.supervisor import SCHEDULED, WORK, TaskGroup
 from src.core.domain.settings import Setting
 
 SRC = Path(__file__).resolve().parents[1] / "src"
@@ -64,8 +65,8 @@ class SettingsContractTests(unittest.TestCase):
         settings = SettingsStore(db, OperationStore(db))
         components = {
             AI_ENABLED: AiSettings(db, 1),
-            VOICE_ENABLED: TempVoiceManager(db),
-            STEAM_ENABLED: SteamFreeGamesNotifier(db, 1),
+            VOICE_ENABLED: TempVoiceManager(db, TaskGroup("voice", WORK)),
+            STEAM_ENABLED: SteamFreeGamesNotifier(db, 1, TaskGroup("steam", SCHEDULED)),
         }
         for switch, component in components.items():
             with self.subTest(switch.key):

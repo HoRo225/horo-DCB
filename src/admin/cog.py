@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import asyncio
 from typing import TYPE_CHECKING
 
 import discord
@@ -9,7 +8,6 @@ from discord.ext import commands
 
 from src.admin.panel import AdminPanelView
 from src.core.adapters.discord.brand import send_notice
-from src.core.app.supervisor import SHUTDOWN_STAGE_SECONDS, shutdown_deadline, stage
 
 if TYPE_CHECKING:
     from src.bot import HoroBot
@@ -18,10 +16,6 @@ if TYPE_CHECKING:
 class AdminCog(commands.Cog):
     def __init__(self, bot: HoroBot) -> None:
         self.bot = bot
-
-    async def cog_unload(self) -> None:
-        deadline = shutdown_deadline.get() or asyncio.get_running_loop().time() + SHUTDOWN_STAGE_SECONDS
-        await stage("panel", self.bot.admin_panels.close(deadline=deadline))
 
     async def _allowed(self, interaction: discord.Interaction) -> bool:
         if reason := self.bot.unavailable_reason(interaction.guild_id):

@@ -89,13 +89,9 @@ async def load_ai(view: AdminPanelView, operation: int) -> bool:
     if not view.is_current(operation):
         logging.info("Admin panel skipped AI status update before read.")
         return False
-    async with asyncio.TaskGroup() as group:
-        status = group.create_task(load_codex_status(view.codex_client))
-        view.track(status)
-        limits = None
-        if rate_visible(view):
-            limits = group.create_task(load_codex_rate_limits(view.codex_client))
-            view.track(limits)
+    status = view.spawn(load_codex_status(view.codex_client))
+    limits = view.spawn(load_codex_rate_limits(view.codex_client)) if rate_visible(view) else None
+    await asyncio.gather(*(task for task in (status, limits) if task is not None))
     if not view.is_current(operation):
         logging.info("Admin panel skipped AI status update after read.")
         return False
@@ -361,8 +357,7 @@ async def _start_login(view: AdminPanelView, interaction: discord.Interaction) -
         if readings.login_task is not None:
             readings.login_task.cancel()
         readings.login = login
-        readings.login_task = asyncio.create_task(_watch_login(view, login))
-        view.track(readings.login_task)
+        readings.login_task = view.spawn(_watch_login(view, login))
         return lambda: render_ai(view)
 
     await view.run(interaction, work)

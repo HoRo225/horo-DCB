@@ -6,10 +6,13 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import discord
+
+from src.testing import GAME_TASKS, group
+from src.core.app.supervisor import SCHEDULED
 from discord.components import _component_factory
 
 from src.core.adapters.discord.brand import BRAND_COLOUR, ERROR_COLOUR, GOLD_COLOUR, ICONS, NEUTRAL_COLOUR, PENDING_CHECK
-from src.games import hub, rana, tables, views
+from src.games import hub, tables, views
 from src.games.cog import GamesCog
 from src.games.store import GameStore
 from src.games.access import play_problem
@@ -50,7 +53,7 @@ def interaction(store=None) -> MagicMock:
     fake.user.display_name = "玩家"
     if store is not None:
         fake.client.games = store
-        fake.client.game_operations = GameOperations(fake.client)
+        fake.client.game_operations = GameOperations(fake.client, GAME_TASKS)
     return fake
 
 
@@ -171,7 +174,7 @@ class SlotTableTest(unittest.IsolatedAsyncioTestCase):
         self.table.message.edit.side_effect = lambda **_: shown.append(screen(self.table))
         with patch("src.games.tables.SPIN_DELAYS", (0, 0, 0)):
             await self.table.act(clicked, "again")
-        await asyncio.gather(*rana.TASKS)
+        await asyncio.gather(*GAME_TASKS.pending())
         self.assertEqual(len(shown), 4)
         self.assertFalse(any("樂奈" in text for text in shown[:3]))
         self.assertFalse(any(tables.SLOT_BRIEF in text for text in shown))
@@ -194,7 +197,7 @@ class SlotTableTest(unittest.IsolatedAsyncioTestCase):
         await asyncio.sleep(0)
         self.assertTrue(pending.cancelled())
         gate.set()
-        await asyncio.gather(*rana.TASKS, return_exceptions=True)
+        await asyncio.gather(*GAME_TASKS.pending(), return_exceptions=True)
         self.table.message.edit.assert_not_awaited()
         self.assertNotIn("**樂奈**　", screen(self.table))
 
@@ -204,7 +207,7 @@ class SlotTableTest(unittest.IsolatedAsyncioTestCase):
         self.ask.return_value = "手氣不錯嘛"
         self.table.message.edit.side_effect = discord.HTTPException(MagicMock(status=500), "down")
         await self.table.act(interaction(self.store), "again")
-        await asyncio.gather(*rana.TASKS, return_exceptions=True)
+        await asyncio.gather(*GAME_TASKS.pending(), return_exceptions=True)
         self.table.message.edit.assert_awaited_once()
         self.assertEqual(self.labels()[0], "再來一局")
         await self.table.act(interaction(self.store), "again")
@@ -531,7 +534,7 @@ class RestoreTablesTest(unittest.IsolatedAsyncioTestCase):
         clicked.client = client
         client.get_guild.return_value = clicked.guild
         clicked.client.games = store
-        clicked.client.game_operations = GameOperations(clicked.client)
+        clicked.client.game_operations = GameOperations(clicked.client, GAME_TASKS)
         clicked.channel.send.return_value = MagicMock(id=21)
         with patch("src.games.access.play_problem", return_value=None):
             await open_table(clicked, "slots")
@@ -550,11 +553,12 @@ class RestoreTablesTest(unittest.IsolatedAsyncioTestCase):
         client.get_guild.return_value = None
         message = client.get_partial_messageable.return_value.get_partial_message
         edit = message.return_value.edit = AsyncMock()
-        cog = GamesCog(client)
-        with patch("src.games.cog.daily", AsyncMock()):
+        scheduled = group(SCHEDULED)
+        cog = GamesCog(client, scheduled)
+        with patch.object(GamesCog, "_sweep", AsyncMock()):
             await cog.cog_load()
             client.add_dynamic_items.assert_called_once_with(GamePickSelect, RulesButton)
-            await asyncio.gather(*cog._redrawing)
+            await asyncio.gather(*scheduled.pending())
         edit.assert_awaited_once()
         client.get_guild.assert_called_once_with(5)
         [table] = LIVE_TABLES.values()
@@ -587,7 +591,7 @@ class PublishHubTest(unittest.IsolatedAsyncioTestCase):
     async def test_admin_revocation_during_banner_render_prevents_any_send(self) -> None:
         store = new_store(self)
         channel, guild = self.channel(store)
-        operations = GameOperations(SimpleNamespace(games=store))
+        operations = GameOperations(SimpleNamespace(games=store), GAME_TASKS)
         drawing, release = asyncio.Event(), asyncio.Event()
         allowed = True
 
@@ -599,7 +603,7 @@ class PublishHubTest(unittest.IsolatedAsyncioTestCase):
         with patch("src.games.hub._banner", side_effect=banner):
             owner = asyncio.create_task(operations.publish_hub(guild, operation_id="revoked", still_current=lambda: allowed))
             await drawing.wait()
-            self.assertIn(owner, operations.pending_tasks())
+            self.assertIn(owner, GAME_TASKS.pending())
             self.assertTrue(store._hub_lock.locked())
             allowed = False
             release.set()
@@ -607,12 +611,12 @@ class PublishHubTest(unittest.IsolatedAsyncioTestCase):
         channel.send.assert_not_awaited()
         self.assertIsNone(store.hub_message)
         self.assertEqual(OperationStore(store.db).get_effect("revoked:game-hub").status, "failed")
-        self.assertFalse(operations.pending_tasks())
+        self.assertFalse(GAME_TASKS.pending())
 
     async def test_same_publication_is_serialized_and_never_sends_twice(self) -> None:
         store = new_store(self)
         channel, guild = self.channel(store)
-        operations = GameOperations(SimpleNamespace(games=store))
+        operations = GameOperations(SimpleNamespace(games=store), GAME_TASKS)
         drawing, release = asyncio.Event(), asyncio.Event()
 
         async def banner():
@@ -625,7 +629,7 @@ class PublishHubTest(unittest.IsolatedAsyncioTestCase):
             await drawing.wait()
             second = asyncio.create_task(operations.publish_hub(guild, operation_id="same"))
             await asyncio.sleep(0)
-            self.assertEqual(operations.pending_tasks(), {first, second})
+            self.assertEqual(GAME_TASKS.pending(), {first, second})
             channel.send.assert_not_awaited()
             release.set()
             await asyncio.gather(first, second)
@@ -812,7 +816,7 @@ class GamePickTest(unittest.IsolatedAsyncioTestCase):
 class IdleTableTest(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self) -> None:
         self.store = new_store(self)
-        self.operations = GameOperations(SimpleNamespace(games=self.store))
+        self.operations = GameOperations(SimpleNamespace(games=self.store), GAME_TASKS)
         for patcher in (
             patch("src.games.access.play_problem", return_value=None),
             patch.dict("src.games.tables.LIVE_TABLES", clear=True),
@@ -873,7 +877,7 @@ class IdleTableTest(unittest.IsolatedAsyncioTestCase):
     async def test_sweep_closes_only_idle_tables_not_busy_or_recent(self) -> None:
         idle, busy, recent = self.seat(1, 20), self.seat(2, 30), self.seat(3, 40)
         idle.touched = busy.touched = time.monotonic() - tables.IDLE_SECONDS - 1
-        cog = GamesCog(MagicMock(game_operations=self.operations))
+        cog = GamesCog(MagicMock(game_operations=self.operations), group(SCHEDULED))
         with patch("src.games.cog.asyncio.sleep", AsyncMock(side_effect=[None, asyncio.CancelledError])):
             async with busy._lock:
                 with self.assertRaises(asyncio.CancelledError):
@@ -902,7 +906,7 @@ class LobbyBumpTest(unittest.IsolatedAsyncioTestCase):
         self.channel = self.bot.get_guild.return_value.get_channel.return_value
         self.channel.last_message_id = 60
         self.publish = self.bot.game_operations.publish_hub = AsyncMock(return_value=None)
-        self.cog = GamesCog(self.bot)
+        self.cog = GamesCog(self.bot, group(SCHEDULED))
         self.now, self.waits, self.during = 1000.0, [], None
         clock = patch("src.games.cog.time", SimpleNamespace(monotonic=lambda: self.now))
         clock.start()
@@ -960,7 +964,7 @@ class LobbyBumpTest(unittest.IsolatedAsyncioTestCase):
         self.assertIsNotNone(self.cog._bump)
 
     async def test_lobby_event_before_set_hub_does_not_start_a_wait(self) -> None:
-        operations = self.bot.game_operations = GameOperations(self.bot)
+        operations = self.bot.game_operations = GameOperations(self.bot, GAME_TASKS)
         self.channel.id = 10
         self.channel.get_partial_message.return_value.delete = AsyncMock()
 

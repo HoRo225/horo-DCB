@@ -15,10 +15,9 @@ from src.ai.discord import TIPPED, handle_message
 from src.ai.formatting import codex_error_text
 from src.codex.instructions import CHAT_INSTRUCTIONS
 from src.codex.model_settings import DEFAULT_MODEL_SETTINGS
-from src.ai.output import CARD_CLEANUPS
 from src.codex.protocol import MAX_PROMPT_CHARACTERS, CodexError, CodexChatReply
-from src.core.app.supervisor import track
-from src.testing import text as _text
+from src.core.app.supervisor import REQUEST
+from src.testing import AI_CLEANUPS, group, text as _text
 
 BOT, GUILD, CHANNEL, USER = 10, 20, 30, 40
 STICKER_URL = "https://cdn.discordapp.com/stickers/7.png"
@@ -112,6 +111,7 @@ async def _handle(message, codex, access=None) -> None:
     await handle_message(
         message,
         bot_user_id=BOT,
+        cleanups=AI_CLEANUPS,
         codex=codex,
         access=access or _Access(),
     )
@@ -225,7 +225,7 @@ class HandleMessageTests(unittest.IsolatedAsyncioTestCase):
         message = _message()
         codex = _Codex()
         codex.chat.return_value = CodexChatReply("最終答案", restarted=True)
-        await handle_message(message, bot_user_id=BOT, codex=codex, access=_Access(), bot=SimpleNamespace())
+        await handle_message(message, bot_user_id=BOT, cleanups=AI_CLEANUPS, codex=codex, access=_Access(), bot=SimpleNamespace())
         self.assertEqual(
             _text(message.channel.send.await_args.kwargs["view"]),
             "-# ℹ️ 已開始新的對話（先前的無法接續） · 第一次來？跟我說「說明」看看我能做什麼\n最終答案",
@@ -236,7 +236,7 @@ class HandleMessageTests(unittest.IsolatedAsyncioTestCase):
         for words in ("說明", "你會什麼？", "你會什麼?"):
             message = _message(f"<@{BOT}>  {words} ")
             codex = _Codex()
-            await handle_message(message, bot_user_id=BOT, codex=codex, access=_Access(), bot=bot)
+            await handle_message(message, bot_user_id=BOT, cleanups=AI_CLEANUPS, codex=codex, access=_Access(), bot=bot)
             self.assertIn("<#99>", _text(message.channel.send.await_args.kwargs["view"]))
             codex.try_start_request.assert_not_called()
             codex.chat.assert_not_awaited()
@@ -245,7 +245,7 @@ class HandleMessageTests(unittest.IsolatedAsyncioTestCase):
         for tipped in (True, False):
             message = _message(f"<@{BOT}> 說明一下規則")
             codex = _Codex()
-            await handle_message(message, bot_user_id=BOT, codex=codex, access=_Access(), bot=SimpleNamespace())
+            await handle_message(message, bot_user_id=BOT, cleanups=AI_CLEANUPS, codex=codex, access=_Access(), bot=SimpleNamespace())
             codex.chat.assert_awaited_once()
             text = _text(message.channel.send.await_args.kwargs["view"])
             self.assertEqual(text, "-# ℹ️ 第一次來？跟我說「說明」看看我能做什麼\n最終答案" if tipped else "最終答案")
@@ -377,7 +377,7 @@ class HandleMessageTests(unittest.IsolatedAsyncioTestCase):
         codex = _Codex()
         codex.chat.side_effect = sqlite3.OperationalError("locked")
         with self.assertLogs(level="ERROR") as logs:
-            await handle_message(message, bot_user_id=BOT, codex=codex, access=_Access(), bot=SimpleNamespace())
+            await handle_message(message, bot_user_id=BOT, cleanups=AI_CLEANUPS, codex=codex, access=_Access(), bot=SimpleNamespace())
         self.assertIn("failed unexpectedly", "\n".join(logs.output))
         self.assertIn(
             codex_error_text("unavailable", "霍蘿"), _text(message.progress.edit.await_args.kwargs["view"])
@@ -552,37 +552,34 @@ class AiCogTest(unittest.IsolatedAsyncioTestCase):
         allowed, other = SimpleNamespace(id=7), SimpleNamespace(id=8)
         before = SimpleNamespace(roles=[allowed, other])
         after = SimpleNamespace(roles=[other], id=USER, guild=SimpleNamespace(id=GUILD))
-        await AiCog(bot).on_member_update(before, after)
+        await AiCog(bot, requests=group(REQUEST), cleanups=AI_CLEANUPS).on_member_update(before, after)
         bot.codex.cancel.assert_awaited_once_with(GUILD, USER)
         bot.codex.cancel.reset_mock()
         after.roles = [allowed]
         before.roles = [allowed, other]
-        await AiCog(bot).on_member_update(before, after)
+        await AiCog(bot, requests=group(REQUEST), cleanups=AI_CLEANUPS).on_member_update(before, after)
         bot.codex.cancel.assert_not_called()
 
-    async def test_unload_waits_for_requests_still_cleaning_up(self) -> None:
+    async def test_message_is_a_tracked_request_until_handled(self) -> None:
         bot = MagicMock()
         bot.unavailable_reason.return_value = None
-        bot.access_service.close = AsyncMock()
-        bot.codex.close = AsyncMock()
-        cog = AiCog(bot)
-        finished = []
+        requests = group(REQUEST)
+        cog = AiCog(bot, requests=requests, cleanups=AI_CLEANUPS)
+        release = asyncio.Event()
+        received = {}
 
-        async def card_lands() -> None:
-            await asyncio.sleep(0.1)
-            finished.append("card")
+        async def handle(*args: object, **kwargs: object) -> None:
+            received.update(kwargs)
+            await release.wait()
 
-        async def cleaning_up(*args: object, **kwargs: object) -> None:
-            await asyncio.sleep(0.05)
-            track(CARD_CLEANUPS, asyncio.create_task(card_lands()))
-            finished.append("request")
-
-        with patch("src.ai.discord.handle_message", cleaning_up):
+        with patch("src.ai.discord.handle_message", handle):
             request = asyncio.create_task(cog.on_message(SimpleNamespace(guild=SimpleNamespace(id=GUILD))))
             await asyncio.sleep(0)
-            await cog.cog_unload()
-        self.assertEqual(finished, ["request", "card"])
-        await request
+            self.assertEqual(requests.pending(), {request})
+            self.assertIs(received["cleanups"], AI_CLEANUPS)
+            release.set()
+            await request
+        self.assertEqual(requests.pending(), set())
 
 
 if __name__ == "__main__":

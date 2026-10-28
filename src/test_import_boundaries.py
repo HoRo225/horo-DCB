@@ -85,7 +85,8 @@ class ImportBoundaryTests(unittest.TestCase):
     def test_shared_layers_load_no_features(self) -> None:
         features = ("games", "voice", "steam", "ai", "admin")
         for shared in ("core.adapters.sqlite.db", "core.adapters.sqlite.settings", "core.adapters.sqlite.operations",
-                       "core.domain.clock","core.app.supervisor", "core.adapters.discord.brand",
+                       "core.domain.clock", "core.app.supervisor", "core.app.maintenance", "core.app.ports",
+                       "core.adapters.discord.shutdown", "core.adapters.discord.brand",
                        "core.adapters.discord.channels", "core.adapters.discord.watchdog", "core.app.config", "cards"):
             modules = loaded_modules(f"src.{shared}")
             with self.subTest(shared):

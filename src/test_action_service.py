@@ -5,6 +5,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import discord
 
+from src.testing import GAME_TASKS
+
 from src.action_service import ActionService, _static_action_problem
 from src.ai.access import AiSettings
 from src.codex.contracts import GAME_ACTIONS, Action, IntentDecision
@@ -13,7 +15,7 @@ from src.core.adapters.discord.brand import ICONS
 from src.games.operations import GameOperations
 from src.games.store import GameStore
 from src.core.adapters.sqlite.db import transaction
-from src.testing import memory_db, text
+from src.testing import group, memory_db, text
 
 QUERY = Action("help", {})
 ADMIN_ONLY = "此操作僅限伺服器管理員使用。"
@@ -72,8 +74,9 @@ class ActionServiceTest(unittest.IsolatedAsyncioTestCase):
         self.bot.get_guild = lambda guild_id: self.guild if guild_id == 5 else None
         self.bot.get_channel = lambda channel_id: self.channel if channel_id == 10 else None
         self.bot.games.set_channel(10)
-        self.bot.game_operations = GameOperations(self.bot)
-        self.service = ActionService(self.bot, self.db)
+        self.bot.game_operations = GameOperations(self.bot, GAME_TASKS)
+        self.tasks = group()
+        self.service = ActionService(self.bot, self.db, self.tasks)
 
     async def execute(self, *actions, **kwargs):
         return await self.service.execute_plan(self.source, IntentDecision("plan", tuple(actions)), **kwargs)
@@ -163,7 +166,7 @@ class ActionServiceTest(unittest.IsolatedAsyncioTestCase):
             with self.assertRaises(asyncio.CancelledError):
                 await parent
             release.set()
-            await asyncio.gather(*self.service._tasks)
+            await asyncio.gather(*self.tasks.pending())
         request = self.service.records.get_request(1000)
         self.assertEqual(request.status, "interrupted")
         self.assertTrue(self.service.records.get(f"{request.request_id}:0:public").result["ok"])
@@ -189,7 +192,7 @@ class ActionServiceTest(unittest.IsolatedAsyncioTestCase):
                 await parent
             self.actor.roles = [SimpleNamespace(id=7)]
             release.set()
-            results, = await asyncio.gather(*self.service._tasks)
+            results, = await asyncio.gather(*self.tasks.pending())
         self.assertEqual(entered, ["help"])
         self.assertEqual([row["ok"] for row in results], [True, False])
         self.assertEqual(self.service.records.get_request(1000).status, "interrupted")
@@ -216,7 +219,7 @@ class ActionServiceTest(unittest.IsolatedAsyncioTestCase):
             await parent
         self.actor.roles = [SimpleNamespace(id=7)]
         release.set()
-        results, = await asyncio.gather(*self.service._tasks)
+        results, = await asyncio.gather(*self.tasks.pending())
         self.assertTrue(results[0]["ok"])
         self.assertEqual(results[1]["code"], "not_executed")
         self.assertEqual(self.service.records.get_request(1000).status, "interrupted")
@@ -367,7 +370,7 @@ class ActionServiceTest(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(asyncio.CancelledError):
             await parent
         release.set()
-        results, = await asyncio.gather(*self.service._tasks)
+        results, = await asyncio.gather(*self.tasks.pending())
         self.assertEqual(results, [{"ok": False, "code": "forbidden", "text": ADMIN_ONLY}])
         self.assertIsNone(self.service.records.get_request(1000))
         self.channel.send.assert_not_awaited()

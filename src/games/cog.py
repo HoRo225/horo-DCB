@@ -9,12 +9,11 @@ import discord
 from discord.ext import commands
 
 from src.core.adapters.discord.channels import avatar_url
-from src.games import rana
 from src.games.hub import refresh_hub
 from src.games.table_runtime import dispatch_table, restore_tables
 from src.games.tables import IDLE_SECONDS, LIVE_TABLES, SeatView
 from src.games.views import GamePickSelect, RulesButton
-from src.core.app.supervisor import cancel_all, daily, shutdown_deadline, track, wait_until
+from src.core.app.supervisor import TaskGroup
 
 if TYPE_CHECKING:
     from src.bot import HoroBot
@@ -24,10 +23,9 @@ SWEEP_SECONDS = 60
 
 
 class GamesCog(commands.Cog):
-    def __init__(self, bot: HoroBot) -> None:
+    def __init__(self, bot: HoroBot, tasks: TaskGroup) -> None:
         self.bot = bot
-        self._tasks: set[asyncio.Task[None]] = set()
-        self._redrawing: set[asyncio.Task[None]] = set()
+        self._tasks = tasks
         self._bump: asyncio.Task[None] | None = None
         self._last_message = 0.0
 
@@ -35,29 +33,14 @@ class GamesCog(commands.Cog):
         bot = self.bot
         bot.add_dynamic_items(GamePickSelect, RulesButton)
         for table in restore_tables(bot, bot.games):
-            track(self._redrawing, asyncio.create_task(self._redraw(table)), log=True)
-        track(self._redrawing, asyncio.create_task(refresh_hub(bot, bot.games)), log=True)
-        track(self._tasks, asyncio.create_task(self._prune()), log=True)
-        track(self._tasks, asyncio.create_task(self._sweep()), log=True)
-
-    async def cog_unload(self) -> None:
-        cancel_all((*self._tasks, *self._redrawing, *rana.TASKS))
-        pending = {*self._tasks, *self._redrawing, *rana.TASKS, *self.bot.game_operations.pending_tasks()}
-        pending.discard(asyncio.current_task())
-        await wait_until(pending, shutdown_deadline.get() or asyncio.get_running_loop().time() + 5)
+            self._tasks.spawn(self._redraw(table))
+        self._tasks.spawn(refresh_hub(bot, bot.games))
+        self._tasks.spawn(self._sweep())
 
     async def _redraw(self, table: SeatView) -> None:
         await self.bot.wait_until_ready()
         table.avatar = avatar_url(self.bot.get_guild(self.bot.guild_id), table.player_id)
         await table.redraw()
-
-    async def _prune(self) -> None:
-        async def prune() -> None:
-            effects, operations, requests = self.bot.operations.prune(int(time.time()))
-            logging.info("Pruned %d effects, %d operations and %d requests older than 30 days.",
-                         effects, operations, requests)
-
-        await daily(0, prune)
 
     async def _sweep(self) -> None:
         while True:
@@ -81,7 +64,7 @@ class GamesCog(commands.Cog):
             return
         self._last_message = time.monotonic()
         if self._bump is None:
-            self._bump = track(self._tasks, asyncio.create_task(self._bump_hub()), log=True)
+            self._bump = self._tasks.spawn(self._bump_hub())
 
     async def _bump_hub(self) -> None:
         while (wait := self._last_message + HUB_QUIET_SECONDS - time.monotonic()) > 0:

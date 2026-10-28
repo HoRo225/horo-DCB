@@ -14,7 +14,6 @@ from src.codex.instructions import INTENT_INSTRUCTIONS
 from src.codex.model_settings import ModelChoice, ModelInfo, ModelSettings
 from src.codex.protocol import CodexError
 from src.codex.service import COMMON_DISABLED_FEATURES, CodexService, feature_config
-from src.core.app.supervisor import shutdown_deadline
 
 KEY = "guild:1:channel:2:user:3"
 SETTINGS = ModelSettings(ModelChoice("primary"), ModelChoice("fallback"))
@@ -152,15 +151,11 @@ class ModelResolutionTests(unittest.IsolatedAsyncioTestCase):
                 await service._resolve(job, ModelSettings(ModelChoice("gone"), None), None)
         self.assertEqual(caught.exception.code, "model_configuration_invalid")
 
-    async def test_close_inherits_the_global_shutdown_deadline(self) -> None:
+    async def test_close_cancels_admitted_work_by_the_given_deadline(self) -> None:
         service = self.service()
         service._admission.cancel = AsyncMock()
         deadline = asyncio.get_running_loop().time() + 1
-        token = shutdown_deadline.set(deadline)
-        try:
-            await service.close()
-        finally:
-            shutdown_deadline.reset(token)
+        await service.close(deadline=deadline)
         service._admission.cancel.assert_awaited_once_with(deadline=deadline)
 
 

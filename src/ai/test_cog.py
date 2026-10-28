@@ -10,6 +10,8 @@ from src.ai.cog import AiCog
 from src.codex.protocol import conversation_key
 from src.core.adapters.sqlite.db import open_db
 from src.testing import put_setting
+from src.testing import AI_CLEANUPS, group
+from src.core.app.supervisor import REQUEST
 from src.ai.access import AI_ENABLED
 
 
@@ -32,7 +34,7 @@ class NewTopicTest(unittest.IsolatedAsyncioTestCase):
         self.interaction.permissions.administrator = True
 
     async def reset(self):
-        await AiCog.new_topic.callback(AiCog(self.bot), self.interaction)
+        await AiCog.new_topic.callback(AiCog(self.bot, requests=group(REQUEST), cleanups=AI_CLEANUPS), self.interaction)
 
     async def test_regular_channel_resets_only_the_actor_conversation(self):
         await self.reset()
@@ -90,7 +92,7 @@ class ChannelDeleteTest(unittest.IsolatedAsyncioTestCase):
     async def delete(self, channel_id):
         channel = MagicMock(spec=discord.TextChannel, id=channel_id, type=discord.ChannelType.text)
         channel.guild.id = 1
-        await AiCog(self.bot).on_guild_channel_delete(channel)
+        await AiCog(self.bot, requests=group(REQUEST), cleanups=AI_CLEANUPS).on_guild_channel_delete(channel)
 
     async def test_deleted_allowlist_channel_is_removed_even_when_ai_is_off(self):
         await self.delete(10)

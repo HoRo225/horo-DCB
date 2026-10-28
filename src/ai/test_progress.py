@@ -7,15 +7,16 @@ from unittest.mock import AsyncMock
 
 import discord
 from src.ai.formatting import codex_error_text, split_reasoning_summary
-from src.ai.output import CARD_CLEANUPS, AiProgress, build_ai_progress_view, send_ai_answer
+from src.ai.output import AiProgress, build_ai_progress_view, send_ai_answer
 from src.codex.protocol import truncate_progress_summary
 from src.codex.rpc import Notification, ThreadEvents
 from src.codex.turns import collect_turn
 from src.core.adapters.discord.brand import BRAND_COLOUR
+from src.testing import AI_CLEANUPS
 
 
 def _progress_content(stage: str, summary: str = "", name: str = "賢狼") -> str:
-    progress = AiProgress(can_send=AsyncMock(), deadline=0, name=name)
+    progress = AiProgress(cleanups=AI_CLEANUPS, can_send=AsyncMock(), deadline=0, name=name)
     progress.update(stage, summary)
     view = build_ai_progress_view(*progress._latest, 0, name=name)
     return view.children[0].children[0].content
@@ -75,6 +76,7 @@ class ProgressTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_progress_card_timeout_falls_back_without_raising(self) -> None:
         progress = AiProgress(
+            cleanups=AI_CLEANUPS,
             can_send=AsyncMock(return_value=True),
             deadline=asyncio.get_running_loop().time() + 10,
             name="賢狼",
@@ -92,6 +94,7 @@ class ProgressTests(unittest.IsolatedAsyncioTestCase):
                 return card
 
             progress = AiProgress(
+                cleanups=AI_CLEANUPS,
                 can_send=AsyncMock(return_value=True),
                 deadline=asyncio.get_running_loop().time() + (10 if cancel else 0.05),
                 name="賢狼",
@@ -105,13 +108,13 @@ class ProgressTests(unittest.IsolatedAsyncioTestCase):
             await progress.finish()
             await progress.finish()
             card.delete.assert_not_awaited()
-            self.assertEqual(len(CARD_CLEANUPS), 1)
-            await asyncio.gather(*CARD_CLEANUPS)
+            self.assertEqual(len(AI_CLEANUPS.pending()), 1)
+            await asyncio.gather(*AI_CLEANUPS.pending())
             card.delete.assert_awaited_once()
-            self.assertFalse(CARD_CLEANUPS)
+            self.assertFalse(AI_CLEANUPS.pending())
 
     def test_stages_without_heading_do_not_trigger_edits(self) -> None:
-        progress = AiProgress(can_send=AsyncMock(), deadline=0, name="賢狼")
+        progress = AiProgress(cleanups=AI_CLEANUPS, can_send=AsyncMock(), deadline=0, name="賢狼")
         for stage in ("preparing", "generating", "queued"):
             progress.update(stage, "")
         self.assertFalse(progress._changed.is_set())
@@ -119,7 +122,7 @@ class ProgressTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(progress._changed.is_set())
 
     def test_new_body_under_the_same_title_triggers_no_edit(self) -> None:
-        progress = AiProgress(can_send=AsyncMock(), deadline=0, name="賢狼")
+        progress = AiProgress(cleanups=AI_CLEANUPS, can_send=AsyncMock(), deadline=0, name="賢狼")
         progress.update("generating", "**比較做法**\n\n第一段")
         self.assertTrue(progress._changed.is_set())
         progress._changed.clear()
@@ -131,6 +134,7 @@ class ProgressTests(unittest.IsolatedAsyncioTestCase):
     async def test_finish_twice_deletes_the_card_once(self) -> None:
         card = SimpleNamespace(delete=AsyncMock(), edit=AsyncMock())
         progress = AiProgress(
+            cleanups=AI_CLEANUPS,
             can_send=AsyncMock(return_value=True),
             deadline=asyncio.get_running_loop().time() + 10,
             name="賢狼",

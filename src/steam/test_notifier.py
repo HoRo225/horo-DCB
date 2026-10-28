@@ -11,7 +11,8 @@ from src.core.adapters.discord.brand import BRAND_COLOUR, ICONS
 from src.admin.pages.steam import steam_state
 from src.core.adapters.sqlite.db import open_db, transaction
 from src.testing import put_setting
-from src.testing import text
+from src.testing import group, text
+from src.core.app.supervisor import SCHEDULED
 from src.steam.models import SteamConfigurationError, SteamFetchResult, SteamOffer
 from src.steam.notifier import SteamFreeGamesNotifier
 from src.steam.provider import SteamOfferProvider
@@ -37,7 +38,7 @@ class SteamFreeGamesNotifierTest(unittest.IsolatedAsyncioTestCase):
         db = open_db(":memory:")
         self.addCleanup(db.close)
         put_setting(db, STEAM_ENABLED, True)
-        self.notifier = SteamFreeGamesNotifier(db, G)
+        self.notifier = SteamFreeGamesNotifier(db, G, group(SCHEDULED))
         self.notifier.provider = MagicMock(fetch_current_offers=AsyncMock(), close=AsyncMock())
         await self.notifier.bind_channel(self.guild, self.channel)
 
@@ -312,7 +313,7 @@ class SteamFreeGamesNotifierTest(unittest.IsolatedAsyncioTestCase):
                                            _bot=SimpleNamespace(get_guild=lambda _: self.guild)))
         self.assertEqual(state.label, "需要處理")
         self.assertIn("資料庫寫入失敗", state.summary)
-        await self.notifier.close()
+        await self.notifier.close(deadline=asyncio.get_running_loop().time() + 5)
 
     async def test_owner_toggle_remembers_client_and_restarts_after_fast_disable_enable(self) -> None:
         self.notifier.set_enabled(False)
@@ -330,7 +331,7 @@ class SteamFreeGamesNotifierTest(unittest.IsolatedAsyncioTestCase):
         await asyncio.sleep(0)
         self.assertIsNot(initial, self.notifier._task)
         self.assertTrue(self.status().running)
-        await self.notifier.close()
+        await self.notifier.close(deadline=asyncio.get_running_loop().time() + 5)
 
     async def test_toggle_off_stops_polling_and_bad_or_closing_toggles_are_refused(self) -> None:
         client = SimpleNamespace(wait_until_ready=AsyncMock(), get_guild=lambda _: self.guild)

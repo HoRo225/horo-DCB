@@ -103,7 +103,7 @@ class AiAccessServiceTests(unittest.IsolatedAsyncioTestCase):
             cancel=AsyncMock(),
             cancel_revoked=AsyncMock(side_effect=cancel_revoked),
         )
-        self.service = AiAccessService(self.access, self.client)
+        self.service = AiAccessService(self.access, self.client, testing.group())
 
     async def test_adding_channel_detaches_nothing(self) -> None:
         outcome = await self.service.change(1, frozenset({10, 11, 12}), roles=False)
@@ -121,7 +121,7 @@ class AiAccessServiceTests(unittest.IsolatedAsyncioTestCase):
     async def test_removing_channel_cancels_only_its_requests(self) -> None:
         client = CodexService("ws://127.0.0.1:9", "token", ConversationStore(testing.memory_db(self)))
         client.archive_scope = AsyncMock()
-        service = AiAccessService(self.access, client)
+        service = AiAccessService(self.access, client, testing.group())
         deadline = asyncio.get_running_loop().time() + 60
         started: list[str] = []
 

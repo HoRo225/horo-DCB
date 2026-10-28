@@ -42,6 +42,7 @@ from src.codex.protocol import (
 from src.ai.query_views import help_view
 from src.core.adapters.discord.brand import ICONS
 from src.core.adapters.discord.channels import member_role_ids
+from src.core.app.supervisor import TaskGroup
 
 IMAGE_TIMEOUT_SECONDS = 30.0
 RESTARTED_NOTICE = "已開始新的對話（先前的無法接續）"
@@ -112,6 +113,7 @@ async def handle_message(
     bot_user_id: int,
     codex: CodexService,
     access: AiSettings,
+    cleanups: TaskGroup,
     actions: Any = None,
     bot: Any = None,
 ) -> None:
@@ -182,6 +184,7 @@ async def handle_message(
         actions=actions,
         received_context=received_context,
         bot=bot,
+        cleanups=cleanups,
     ).run()
 
 
@@ -201,6 +204,7 @@ class AiRequest:
         actions: Any = None,
         received_context: dict | None = None,
         bot: Any = None,
+        cleanups: TaskGroup,
     ) -> None:
         self.message = message
         self.bot = bot
@@ -225,7 +229,7 @@ class AiRequest:
         self.context = received_context if received_context is not None else actions.snapshot(message) if actions is not None else {}
         self.job: Any = None
         self.progress = AiProgress(
-            can_send=self.can_send, deadline=self.accepted_deadline, name=bot_name
+            can_send=self.can_send, deadline=self.accepted_deadline, name=bot_name, cleanups=cleanups,
         )
 
     @contextlib.contextmanager

@@ -8,8 +8,8 @@ from src import testing
 from src.ai.cog import AiCog
 from src.ai.private_results import PrivateResultButton
 from src.bot import HoroBot
+from src.core.app.supervisor import REQUEST
 from src.games.views import GamePickSelect, RulesButton, lobby_view
-from src.steam.cog import SteamCog
 from src.steam.models import SteamOffer
 from src.steam.views import SteamClaim, build_offer_view
 
@@ -93,44 +93,6 @@ class HoroBotTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual([c.args[0] for c in remove_cog.await_args_list], COGS)
         self.assertEqual(self.bot.tree.get_commands(guild=discord.Object(G)), [])
 
-    async def test_every_cog_task_set_is_cancelled_and_drained_at_close(self) -> None:
-        from src.core.app.supervisor import track
-
-        await self.start()
-        probes = {
-            (name, field): track(value, asyncio.create_task(asyncio.Event().wait()))
-            for name, cog in self.bot.cogs.items()
-            for field, value in vars(cog).items()
-            if isinstance(value, set) and all(isinstance(task, asyncio.Task) for task in value)
-        }
-        self.assertLessEqual({("AiCog", "_requests"), ("GamesCog", "_redrawing")}, probes.keys())
-        self.bot._shutdown_failstop = MagicMock(side_effect=testing.Fatal)
-        await self.bot.close()
-        for key, probe in probes.items():
-            with self.subTest(key):
-                self.assertTrue(probe in self.bot._shutdown_seen)
-                self.assertTrue(probe.cancelled())
-
-    async def test_stuck_cog_unload_only_cut_off_by_its_own_limit(self) -> None:
-        await self.start()
-        order: list[str] = []
-        loop = asyncio.get_running_loop()
-        start = loop.time()
-        with (
-            patch("src.core.app.supervisor.SHUTDOWN_STAGE_SECONDS", 0.5),
-            patch.object(self.bot.admin_panels, "close", step(order, "panel", stuck=True)),
-            patch.object(self.bot.access_service, "close", step(order, "access")),
-            patch.object(self.bot.codex, "close", step(order, "codex")),
-            patch.object(self.bot.steam_free_games, "close", step(order, "steam")),
-            patch("discord.Client.close", step(order, "discord")),
-            self.assertLogs(level="ERROR") as logs,
-        ):
-            await self.bot.close()
-        self.assertLess(loop.time() - start, 3)
-        self.assertEqual(set(order), {"panel", "access", "codex", "steam", "discord"})
-        shutdown_logs = [r.getMessage() for r in logs.records if "shutdown" in r.getMessage()]
-        self.assertEqual(shutdown_logs, ["Panel shutdown timed out."])
-
     async def test_setup_hook_loads_emojis_before_cogs(self) -> None:
         order: list[str] = []
         with (
@@ -139,11 +101,14 @@ class HoroBotTests(unittest.IsolatedAsyncioTestCase):
             patch.object(self.bot, "add_cogs", step(order, "cogs")),
             patch.object(self.bot.tree, "sync", step(order, "sync")),
             patch("src.bot.install_stack_dump_signal"),
-            patch("src.bot.run_watchdog", AsyncMock()),
+            patch("src.bot.run_watchdog", AsyncMock()) as watchdog,
+            patch.object(self.bot.maintenance, "start") as maintenance,
         ):
             await self.bot.setup_hook()
-            await self.bot._watchdog
+            await asyncio.sleep(0)
         self.assertEqual(order, ["brand", "emojis", "cogs", "sync"])
+        watchdog.assert_awaited_once_with(self.bot)
+        maintenance.assert_called_once_with()
 
     def test_no_help_command(self) -> None:
         self.assertIsNone(self.bot.help_command)
@@ -157,28 +122,9 @@ class HoroBotTests(unittest.IsolatedAsyncioTestCase):
             patch("src.ai.cog.ai_discord.handle_message", AsyncMock()) as handle_message,
         ):
             await self.bot.on_message(message)
-            await AiCog(self.bot).on_message(message)
+            await AiCog(self.bot, requests=testing.group(REQUEST), cleanups=testing.AI_CLEANUPS).on_message(message)
         process_commands.assert_not_awaited()
         handle_message.assert_awaited_once()
-
-    async def test_stuck_stage_only_cut_off_by_its_own_limit(self) -> None:
-        order: list[str] = []
-        await self.bot.add_cog(AiCog(self.bot), guild=discord.Object(G))
-        await self.bot.add_cog(SteamCog(self.bot), guild=discord.Object(G))
-        self.bot.codex.close = step(order, "codex", stuck=True)
-        loop = asyncio.get_running_loop()
-        start = loop.time()
-        with (
-            patch("src.core.app.supervisor.SHUTDOWN_STAGE_SECONDS", 0.5),
-            patch.object(self.bot.steam_free_games, "close", step(order, "steam")),
-            patch("discord.Client.close", step(order, "discord")),
-            self.assertLogs(level="ERROR") as logs,
-        ):
-            await self.bot.close()
-        self.assertLess(loop.time() - start, 3)
-        self.assertEqual(set(order), {"codex", "steam", "discord"})
-        self.assertEqual([r.getMessage() for r in logs.records], ["Codex shutdown timed out."])
-
 
 class HoroShutdownTests(unittest.IsolatedAsyncioTestCase):
     def setUp(self) -> None:
@@ -189,11 +135,8 @@ class HoroShutdownTests(unittest.IsolatedAsyncioTestCase):
         codex.cancel = AsyncMock()
         self.db = testing.memory_db(self)
         self.bot = HoroBot(codex, guild_id=G, db=self.db)
-        self.bot._shutdown_failstop = MagicMock(side_effect=testing.Fatal)
 
     async def test_accepted_mutation_finishes_before_transport_shutdown(self) -> None:
-        from src.core.app.supervisor import track
-
         self.db.execute("CREATE TABLE shutdown_check (value INTEGER)")
         order = []
         gate = asyncio.Event()
@@ -201,16 +144,16 @@ class HoroShutdownTests(unittest.IsolatedAsyncioTestCase):
         async def accepted() -> None:
             await gate.wait()
             self.db.execute("INSERT INTO shutdown_check VALUES (1)")
-            self.assertFalse(self.bot._db_safe_to_close)
+            self.assertFalse(self.bot.db_safe_to_close)
             order.append("commit")
 
-        owner = track(self.bot.admin_panels.mutations, asyncio.create_task(accepted()))
+        owner = self.bot.admin_panels.mutate(accepted())
         asyncio.get_running_loop().call_later(0.03, gate.set)
         with patch("discord.Client.close", step(order, "discord")):
             await self.bot.close()
         self.assertEqual(order, ["commit", "discord"])
         self.assertTrue(owner.done())
-        self.assertTrue(self.bot._db_safe_to_close)
+        self.assertTrue(self.bot.db_safe_to_close)
         self.assertEqual(self.db.execute("SELECT value FROM shutdown_check").fetchone(), (1,))
         self.bot.codex.close.assert_awaited_once()
 
@@ -232,110 +175,14 @@ class HoroShutdownTests(unittest.IsolatedAsyncioTestCase):
             game = asyncio.create_task(self.bot.game_operations.execute(None, "deal"))
             async with asyncio.timeout(2):
                 await entered.wait()
-            self.assertIn(game, self.bot.game_operations.pending_tasks())
+            self.assertIn(game, self.bot.supervisor.pending())
             asyncio.get_running_loop().call_soon(gate.set)
             await self.bot.close()
             await game
         self.assertEqual(order[-1], "discord")
         self.assertEqual(self.db.execute("SELECT owner FROM shutdown_check").fetchall(), [("game",)])
-        self.assertEqual(self.bot.game_operations.pending_tasks(), set())
-        self.assertTrue(self.bot._db_safe_to_close)
-
-    async def test_reentrant_close_and_caller_cancellation_share_one_owner(self) -> None:
-        gate = asyncio.Event()
-        owner = self.bot.admin_panels.own_mutation(asyncio.create_task(gate.wait()))
-        with patch("discord.Client.close", AsyncMock()) as transport:
-            first = asyncio.create_task(self.bot.close())
-            await asyncio.sleep(0)
-            shared = self.bot._close_task
-            second = asyncio.create_task(self.bot.close())
-            first.cancel()
-            await asyncio.sleep(0)
-            self.assertFalse(shared.done())
-            gate.set()
-            with self.assertRaises(asyncio.CancelledError):
-                await first
-            await second
-        self.assertIs(self.bot._close_task, shared)
-        self.assertTrue(owner.done())
-        transport.assert_awaited_once()
-        self.assertTrue(self.bot._db_safe_to_close)
-
-    async def test_late_card_keeps_cleanup_owner_and_discord_open(self) -> None:
-        from src.ai.output import CARD_CLEANUPS, _delete_when_landed
-        from src.core.app.supervisor import track
-
-        order = []
-        message = MagicMock(delete=AsyncMock(side_effect=lambda: order.append("delete")))
-
-        async def send():
-            await asyncio.sleep(0.4)
-            return message
-
-        sending = asyncio.create_task(send())
-        cleanup = track(CARD_CLEANUPS, asyncio.create_task(_delete_when_landed(sending)))
-        with (patch("src.core.app.supervisor.SHUTDOWN_SECONDS", 1),
-              patch("src.core.app.supervisor.SHUTDOWN_STAGE_SECONDS", 0.7),
-              patch("discord.Client.close", step(order, "discord"))):
-            await self.bot.close()
-        self.assertEqual(order, ["delete", "discord"])
-        self.assertTrue(sending.done())
-        self.assertFalse(cleanup.cancelled())
-        self.assertTrue(self.bot._db_safe_to_close)
-
-    async def test_stubborn_writer_forces_exit_at_total_deadline_without_closing_database(self) -> None:
-        gate = asyncio.Event()
-
-        async def stubborn() -> None:
-            while not gate.is_set():
-                try:
-                    await gate.wait()
-                except asyncio.CancelledError:
-                    pass
-
-        owner = self.bot.admin_panels.own_mutation(asyncio.create_task(stubborn()))
-        loop = asyncio.get_running_loop()
-        started = loop.time()
-        try:
-            with (patch("src.core.app.supervisor.SHUTDOWN_SECONDS", 0.12),
-                  patch("src.core.app.supervisor.SHUTDOWN_STAGE_SECONDS", 0.03),
-                  patch("discord.Client.close", AsyncMock()), patch("logging.error"),
-                  self.assertRaises(testing.Fatal)):
-                await self.bot.close()
-            self.assertLess(loop.time() - started, 0.5)
-            self.assertFalse(self.bot._db_safe_to_close)
-            self.assertFalse(owner.done())
-            self.assertEqual(self.db.execute("SELECT 1").fetchone(), (1,))
-        finally:
-            gate.set()
-            await owner
-
-    async def test_simultaneous_stages_share_total_deadline(self) -> None:
-        from src.core.app.supervisor import shutdown_deadline
-
-        await self.bot.add_cogs()
-        deadlines = []
-        all_started = asyncio.Event()
-
-        async def hang(**_kwargs):
-            deadlines.append(shutdown_deadline.get())
-            if len(deadlines) == 4:
-                all_started.set()
-            await all_started.wait()
-
-        with (patch("src.core.app.supervisor.SHUTDOWN_SECONDS", 1),
-              patch("src.core.app.supervisor.SHUTDOWN_STAGE_SECONDS", 0.5),
-              patch.object(self.bot.admin_panels, "close", hang),
-              patch.object(self.bot.access_service, "close", hang),
-              patch.object(self.bot.codex, "close", hang),
-              patch.object(self.bot.steam_free_games, "close", hang),
-              patch("discord.Client.close", AsyncMock()), self.assertLogs(level="ERROR")):
-            await self.bot.close()
-        self.assertEqual(len(deadlines), 4)
-        self.assertEqual(len(set(deadlines)), 1)
-        self.assertIsNotNone(deadlines[0])
-        self.assertTrue(self.bot._db_safe_to_close)
-
+        self.assertEqual(self.bot.supervisor.pending(), set())
+        self.assertTrue(self.bot.db_safe_to_close)
 
 class MainResourceTests(unittest.TestCase):
     def test_main_closes_database_and_lock_after_safe_shutdown(self) -> None:
@@ -344,7 +191,7 @@ class MainResourceTests(unittest.TestCase):
 
         db, lock = MagicMock(), MagicMock()
         config = SimpleNamespace(guild_id=G, codex_token="fixture", discord_token="fixture")
-        bot = MagicMock(_db_safe_to_close=True)
+        bot = MagicMock(db_safe_to_close=True)
         with (patch("src.bot.AppConfig.from_env", return_value=config),
               patch("logging.basicConfig"),
               patch("src.bot.hold_lock", return_value=lock), patch("src.bot.open_db", return_value=db),
@@ -359,7 +206,7 @@ class MainResourceTests(unittest.TestCase):
 
         db, lock = MagicMock(), MagicMock()
         config = SimpleNamespace(guild_id=G, codex_token="fixture", discord_token="fixture")
-        bot = MagicMock(_db_safe_to_close=False)
+        bot = MagicMock(db_safe_to_close=False)
         with (patch("src.bot.AppConfig.from_env", return_value=config),
               patch("logging.basicConfig"),
               patch("src.bot.hold_lock", return_value=lock), patch("src.bot.open_db", return_value=db),

@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import copy
-import asyncio
 import logging
 import time
 from types import SimpleNamespace
@@ -18,27 +17,21 @@ from src.games.table_runtime import delete_message
 from src.games.tables import LIVE_TABLES, BlackjackTableView, SeatView, SlotTableView
 from src.core.adapters.sqlite.operations import OperationStore
 from src.core.adapters.sqlite.db import transaction
+from src.core.app.supervisor import TaskGroup
 
 SEAT_GONE = "這張賭桌已失效，這局沒有結算；請從遊戲大廳重新開桌。"
 
 
 class GameOperations:
-    def __init__(self, bot) -> None:
+    def __init__(self, bot, tasks: TaskGroup) -> None:
         self.bot = bot
         self.store = bot.games
         self.records = OperationStore(self.store.db)
-        self._active_tasks: set[asyncio.Task] = set()
-
-    def pending_tasks(self) -> set[asyncio.Task]:
-        return set(self._active_tasks)
+        self._tasks = tasks
 
     async def publish_hub(self, guild: discord.Guild, *, operation_id: str | None = None, still_current=None) -> str | None:
-        task = asyncio.current_task()
-        self._active_tasks.add(task)
-        try:
+        with self._tasks.adopt():
             return await publish_hub(guild, self.store, operation_id=operation_id, still_current=still_current)
-        finally:
-            self._active_tasks.discard(task)
 
     async def close_idle(self, table: SeatView) -> None:
         async with table._lock:
@@ -145,13 +138,9 @@ class GameOperations:
         self, source, action: str, *, game: str | None = None, expected_token: str | None = None,
         operation_id: str | None = None, table: SeatView | None = None, ui: bool = False, still_current=None,
     ) -> dict:
-        task = asyncio.current_task()
-        self._active_tasks.add(task)
-        try:
+        with self._tasks.adopt():
             return await self._execute(source, action, game=game, expected_token=expected_token,
                                        operation_id=operation_id, table=table, ui=ui, still_current=still_current)
-        finally:
-            self._active_tasks.discard(task)
 
     async def _execute(self, source, action, *, game, expected_token, operation_id, table, ui, still_current):
         actor = source.user if hasattr(source, "user") else source.author
@@ -297,7 +286,7 @@ class GameOperations:
             data["結果"] = tables.OUTCOMES[result["outcome"]]
         else:
             data["倍數"] = result["multiplier"]
-        table.line_task = rana.spawn(self._line(context, table, table.state_token, data))
+        table.line_task = self._tasks.spawn(self._line(context, table, table.state_token, data))
 
     async def _line(self, context, table: SeatView, token: str, data: dict) -> None:
         if not rana.ready(context.client):

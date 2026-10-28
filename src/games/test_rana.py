@@ -1,12 +1,10 @@
-import asyncio
 import json
 import unittest
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, patch
 
 from src.ai.background import DATA_RULE, PERSONA
 from src.games import rana
-from src.games.cog import GamesCog
 
 
 class RanaTest(unittest.IsolatedAsyncioTestCase):
@@ -39,14 +37,6 @@ class RanaTest(unittest.IsolatedAsyncioTestCase):
                                   codex=SimpleNamespace(quota_full=lambda: full))
             with self.subTest(enabled=enabled, full=full):
                 self.assertIs(rana.ready(bot), expected)
-
-    async def test_unload_cancels_background_questions(self) -> None:
-        task = rana.spawn(asyncio.sleep(60))
-        bot = MagicMock()
-        bot.game_operations.pending_tasks.return_value = set()
-        await GamesCog(bot).cog_unload()
-        self.assertTrue(task.cancelled())
-        self.assertEqual(rana.TASKS, set())
 
 
 if __name__ == "__main__":

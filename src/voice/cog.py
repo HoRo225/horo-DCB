@@ -1,12 +1,10 @@
 from __future__ import annotations
 
-import asyncio
 import logging
 from typing import TYPE_CHECKING
 
 import discord
 from discord.ext import commands
-from src.core.app.supervisor import stage, shutdown_deadline, SHUTDOWN_STAGE_SECONDS
 
 if TYPE_CHECKING:
     from src.bot import HoroBot
@@ -15,10 +13,6 @@ if TYPE_CHECKING:
 class VoiceCog(commands.Cog):
     def __init__(self, bot: HoroBot) -> None:
         self.bot = bot
-
-    async def cog_unload(self) -> None:
-        deadline = shutdown_deadline.get() or (asyncio.get_running_loop().time() + SHUTDOWN_STAGE_SECONDS)
-        await stage("voice", self.bot.temp_voice.close(deadline=deadline))
 
     @commands.Cog.listener()
     async def on_ready(self) -> None:

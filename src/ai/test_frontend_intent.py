@@ -18,6 +18,7 @@ from src.core.adapters.sqlite.operations import OperationStore
 from src.core.adapters.sqlite.db import open_db
 from src.testing import put_setting
 from src.testing import text
+from src.testing import AI_CLEANUPS
 from src.ai.access import AI_CHANNEL_IDS, AI_ENABLED, AI_ROLE_IDS, AI_TEXT_DISPLAY
 
 GUILD, CHANNEL_A, CHANNEL_B, USER, ROLE, BOT = 700, 701, 702, 710, 720, 799
@@ -147,13 +148,13 @@ class FrontendIntentTest(unittest.IsolatedAsyncioTestCase):
         self.access, self.codex, self.actions = AiSettings(self.db, GUILD), FakeCodex(), FakeActions(self.db)
 
     async def handle(self, message):
-        await handle_message(message, bot_user_id=BOT, codex=self.codex, access=self.access, actions=self.actions)
+        await handle_message(message, bot_user_id=BOT, cleanups=AI_CLEANUPS, codex=self.codex, access=self.access, actions=self.actions)
 
     def request(self, message):
         return AiRequest(message, key=conversation_key(GUILD, message.channel.id, USER, is_thread=False),
                          content=message.content.replace(f"<@{BOT}>", "").strip(), mentions_bot=True,
                          referenced_message=None, bot_name="HoRo", codex=self.codex, access=self.access,
-                         text_display_enabled=False, actions=self.actions)
+                         text_display_enabled=False, actions=self.actions, cleanups=AI_CLEANUPS)
 
     async def test_plan_and_clarification_never_fetch_or_send_quoted_media_to_intent(self):
         for index, decision in enumerate((PLAN, IntentDecision("clarification", question="請指定金額。"))):
@@ -260,13 +261,13 @@ class FrontendIntentTest(unittest.IsolatedAsyncioTestCase):
         bot = SimpleNamespace(games=SimpleNamespace(channel_id=99))
         self.codex.intent.return_value = IntentDecision("plan", (Action("help", {}),))
         message = FakeMessage(content="<@799> 你能幫我做哪些事")
-        await handle_message(message, bot_user_id=BOT, codex=self.codex, access=self.access, actions=self.actions, bot=bot)
+        await handle_message(message, bot_user_id=BOT, cleanups=AI_CLEANUPS, codex=self.codex, access=self.access, actions=self.actions, bot=bot)
         self.actions.execute_plan.assert_not_awaited()
         self.codex.chat.assert_not_awaited()
         self.assertIsNone(self.actions.records.get_request(message.id))
         self.assertIn("<#99>", text(message.channel.send.await_args.kwargs["view"]))
         self.codex.intent.return_value = IntentDecision("plan", (Action("steam_query", {}), Action("help", {})))
-        await handle_message(FakeMessage(801), bot_user_id=BOT, codex=self.codex, access=self.access, actions=self.actions, bot=bot)
+        await handle_message(FakeMessage(801), bot_user_id=BOT, cleanups=AI_CLEANUPS, codex=self.codex, access=self.access, actions=self.actions, bot=bot)
         self.actions.execute_plan.assert_awaited_once()
 
     async def test_results_without_a_receipt_reply_in_receipt_style_without_private_buttons(self):
