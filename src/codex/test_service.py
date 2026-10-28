@@ -75,6 +75,17 @@ class ServiceTests(unittest.IsolatedAsyncioTestCase):
         self.server.script = answer(("commentary", "先想想"), (None, "舊模型回覆"))
         self.assertEqual((await self.chat()).text, "舊模型回覆")
 
+    async def test_commentary_alone_is_not_a_reply(self) -> None:
+        self.server.script = answer(("commentary", "我查一下"))
+        with self.assertRaises(CodexError) as caught:
+            await self.chat()
+        self.assertEqual(caught.exception.code, "unavailable")
+
+    async def test_chat_releases_its_thread_after_the_turn(self) -> None:
+        await self.chat()
+        thread_id = self.store.get(KEY).thread_id
+        await self.server.wait_for(lambda: self.server.params("thread/unsubscribe") == [{"threadId": thread_id}])
+
     async def test_later_chats_resume_with_current_persona(self) -> None:
         await self.chat()
         await self.chat("再一次")
@@ -91,7 +102,7 @@ class ServiceTests(unittest.IsolatedAsyncioTestCase):
         await self.ready()
         before = len(self.server.calls)
         self.assertEqual((await self.chat("還在嗎")).text, "收到")
-        self.assertEqual(self.server.methods()[before:], ["model/list", "thread/resume", "turn/start"])
+        self.assertEqual(self.server.methods()[before:before + 3], ["model/list", "thread/resume", "turn/start"])
 
     async def test_disconnect_fails_the_turn_in_flight(self) -> None:
         self.server.script = silent

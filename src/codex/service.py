@@ -435,6 +435,8 @@ class CodexService:
             outcome = error.code
             raise error from None
         finally:
+            if mode.persistent and outcome != "cancelled" and (conversation := self._store.get(key)) is not None:
+                await self._unsubscribe(conversation.thread_id)
             if outcome not in ("success", "cancelled"):
                 self.last_error = outcome
             logging.info("Codex request id=%s mode=%s result=%s ms=%.1f",

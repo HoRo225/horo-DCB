@@ -99,8 +99,9 @@ def _record_message(result: TurnResult, item: dict[str, Any]) -> None:
     if not isinstance(text, str) or not text:
         return
     result.output_seen = True
-    final = item.get("phase") == "final_answer"
-    if final or not result.final_answer:
+    phase = item.get("phase")
+    final = phase == "final_answer"
+    if final or (phase != "commentary" and not result.final_answer):
         result.text = text
         result.final_answer = final
 
