@@ -42,13 +42,6 @@ def footer_note(note: tuple[str, str] | None) -> tuple[discord.ui.Item, ...]:
     return (discord.ui.TextDisplay(note_text((tone, discord.utils.escape_markdown(text)))),)
 
 
-def live_guild(view: AdminPanelView) -> discord.Guild | None:
-    guild = view._bot.get_guild(view.guild_id)
-    if guild is None or guild.id != view.guild_id or guild.unavailable:
-        return None
-    return guild
-
-
 def defaults(
     make: Callable[[discord.abc.Snowflake], discord.SelectDefaultValue], ids: Iterable[int | None]
 ) -> list[discord.SelectDefaultValue]:
@@ -84,10 +77,10 @@ async def bind_channel(
     ok: str,
 ) -> None:
     async def work(operation: int) -> Callable[[], None]:
-        guild = live_guild(view)
+        guild = view.live.guild()
         if guild is None:
             note = no_guild_note()
-        elif problem := await bind(guild, lambda: view.is_current(operation) and live_guild(view) is guild):
+        elif problem := await bind(guild, lambda: view.is_current(operation) and view.live.guild() is guild):
             note = ("warn", problem)
         else:
             note = ("ok", ok)

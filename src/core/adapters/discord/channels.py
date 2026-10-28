@@ -50,24 +50,6 @@ def member_role_ids(member: object) -> frozenset[int]:
     )
 
 
-async def fetch_current_member(
-    client: discord.Client, guild_id: int, user_id: int,
-) -> tuple[discord.Guild, discord.Member]:
-    for _ in range(2):
-        guild = client.get_guild(guild_id)
-        if guild is None:
-            raise ValueError("目前無法確認最新的伺服器狀態，請稍後再試。")
-        member = await guild.fetch_member(user_id)
-        if client.get_guild(guild_id) is guild:
-            return guild, member
-    raise ValueError("伺服器狀態正在更新，請稍後再試。")
-
-
 def interaction_operation_id(interaction: discord.Interaction) -> str | None:
     return f"interaction:{interaction.id}" if is_positive_int(interaction.id) else None
 
-
-def avatar_url(guild: discord.Guild | None, user_id: int) -> str:
-    if guild is not None and (member := guild.get_member(user_id)) is not None:
-        return member.display_avatar.url
-    return f"https://cdn.discordapp.com/embed/avatars/{(user_id >> 22) % 6}.png"

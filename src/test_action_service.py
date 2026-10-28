@@ -12,6 +12,7 @@ from src.ai.access import AiSettings
 from src.codex.contracts import GAME_ACTIONS, Action, IntentDecision
 from src.codex.protocol import CodexError
 from src.core.adapters.discord.brand import ICONS
+from src.core.adapters.discord.live import LiveGuild
 from src.games.operations import GameOperations
 from src.games.store import GameStore
 from src.core.adapters.sqlite.db import transaction
@@ -53,7 +54,7 @@ class ActionServiceTest(unittest.IsolatedAsyncioTestCase):
         self.db = memory_db(self)
         self.actor = SimpleNamespace(id=1, roles=[SimpleNamespace(id=7)], guild_permissions=discord.Permissions.none(),
                                      display_name="玩家", bot=False, display_avatar=SimpleNamespace(url="https://example.com/a.png"))
-        self.guild = MagicMock(spec=discord.Guild, id=5)
+        self.guild = MagicMock(spec=discord.Guild, id=5, unavailable=False)
         self.guild.members, self.guild.roles = [self.actor], []
         self.guild.get_member.return_value = self.actor
         self.guild.fetch_member = AsyncMock(return_value=self.actor)
@@ -69,14 +70,14 @@ class ActionServiceTest(unittest.IsolatedAsyncioTestCase):
         access.set_allowlist(5, frozenset({10}), roles=False)
         access.set_allowlist(5, frozenset({7}), roles=True)
         self.bot = SimpleNamespace(games=GameStore(self.db), ai_settings=access,
-                                   unavailable_reason=lambda guild_id: None if guild_id == 5 else "伺服器不符",
                                    get_partial_messageable=lambda channel_id: SimpleNamespace(get_partial_message=lambda message_id: self.receipt))
         self.bot.get_guild = lambda guild_id: self.guild if guild_id == 5 else None
         self.bot.get_channel = lambda channel_id: self.channel if channel_id == 10 else None
         self.bot.games.set_channel(10)
-        self.bot.game_operations = GameOperations(self.bot, GAME_TASKS)
+        self.live = LiveGuild(self.bot, 5, lambda: False)
+        self.bot.game_operations = GameOperations(self.bot, GAME_TASKS, self.live)
         self.tasks = group()
-        self.service = ActionService(self.bot, self.db, self.tasks)
+        self.service = ActionService(self.bot, self.db, self.tasks, self.live)
 
     async def execute(self, *actions, **kwargs):
         return await self.service.execute_plan(self.source, IntentDecision("plan", tuple(actions)), **kwargs)
@@ -387,7 +388,7 @@ class ActionServiceTest(unittest.IsolatedAsyncioTestCase):
         self.actor.guild_permissions.administrator = True
         current_actor = SimpleNamespace(id=1, roles=[SimpleNamespace(id=7)], guild_permissions=discord.Permissions.none(),
                                         display_name="玩家", bot=False)
-        current_guild = MagicMock(spec=discord.Guild, id=5)
+        current_guild = MagicMock(spec=discord.Guild, id=5, unavailable=False)
         current_guild.members, current_guild.roles, current_guild.channels = [current_actor], [], [self.channel]
         current_guild.get_member.return_value = current_actor
         current_guild.fetch_member = AsyncMock(return_value=current_actor)
@@ -512,7 +513,7 @@ class ActionServiceTest(unittest.IsolatedAsyncioTestCase):
         self.bot.get_partial_messageable = lambda channel_id: SimpleNamespace(send=sends, get_partial_message=lambda message_id: self.receipt)
         from src.effects import EffectService
         self.bot.guild_id = 5
-        self.bot.effects = EffectService(self.bot, self.db)
+        self.bot.effects = EffectService(self.bot, self.db, self.live)
         self.bot.actions = self.service
         self.source.id = 1001
         self.source.content = effect_id
@@ -563,7 +564,7 @@ class ActionServiceTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_admin_status_counts_pending_items_from_the_effect_service(self):
         from src.effects import EffectService
-        self.bot.effects = EffectService(self.bot, self.db)
+        self.bot.effects = EffectService(self.bot, self.db, self.live)
         self.bot.steam_free_games = SimpleNamespace(status=lambda: SimpleNamespace(running=True))
         self.bot.temp_voice = SimpleNamespace(status=lambda: None, enabled=True)
         with transaction(self.db):

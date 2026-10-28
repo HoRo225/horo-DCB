@@ -82,6 +82,5 @@ def interaction() -> MagicMock:
     fake.followup.send = AsyncMock()
     fake.edit_original_response = AsyncMock()
     fake.delete_original_response = AsyncMock()
-    fake.client.unavailable_reason.return_value = None
     return fake
 

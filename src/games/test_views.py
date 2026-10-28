@@ -11,6 +11,7 @@ from src.testing import GAME_TASKS, group
 from src.core.app.supervisor import SCHEDULED
 from discord.components import _component_factory
 
+from src.core.adapters.discord.live import LiveGuild
 from src.core.adapters.discord.brand import BRAND_COLOUR, ERROR_COLOUR, GOLD_COLOUR, ICONS, NEUTRAL_COLOUR, PENDING_CHECK
 from src.games import hub, tables, views
 from src.games.cog import GamesCog
@@ -23,6 +24,10 @@ from src.games.views import GamePickSelect, RulesButton
 from src.core.adapters.sqlite.db import open_db
 from src.core.adapters.sqlite.operations import OperationStore
 from src.testing import deck, quiet_rana, seat, text as screen
+
+
+def live(client: object = None, closing=lambda: False) -> LiveGuild:
+    return LiveGuild(client or SimpleNamespace(get_guild=lambda _guild_id: None), 5, closing)
 
 
 def new_store(test: unittest.TestCase) -> GameStore:
@@ -38,7 +43,7 @@ INTERACTION_IDS = itertools.count(1000)
 def interaction(store=None) -> MagicMock:
     fake = MagicMock()
     fake.id, fake.user.id, fake.guild_id, fake.channel_id, fake.message.id = next(INTERACTION_IDS), 1, 5, 10, 20
-    fake.guild = MagicMock(spec=discord.Guild, id=5)
+    fake.guild = MagicMock(spec=discord.Guild, id=5, unavailable=False)
     fake.guild.fetch_member = AsyncMock(return_value=fake.user)
     fake.guild.get_member.return_value = fake.user
     fake.channel.id = 10
@@ -53,7 +58,7 @@ def interaction(store=None) -> MagicMock:
     fake.user.display_name = "玩家"
     if store is not None:
         fake.client.games = store
-        fake.client.game_operations = GameOperations(fake.client, GAME_TASKS)
+        fake.client.game_operations = GameOperations(fake.client, GAME_TASKS, live(fake.client))
     return fake
 
 
@@ -534,7 +539,7 @@ class RestoreTablesTest(unittest.IsolatedAsyncioTestCase):
         clicked.client = client
         client.get_guild.return_value = clicked.guild
         clicked.client.games = store
-        clicked.client.game_operations = GameOperations(clicked.client, GAME_TASKS)
+        clicked.client.game_operations = GameOperations(clicked.client, GAME_TASKS, live(clicked.client))
         clicked.channel.send.return_value = MagicMock(id=21)
         with patch("src.games.access.play_problem", return_value=None):
             await open_table(clicked, "slots")
@@ -554,7 +559,7 @@ class RestoreTablesTest(unittest.IsolatedAsyncioTestCase):
         message = client.get_partial_messageable.return_value.get_partial_message
         edit = message.return_value.edit = AsyncMock()
         scheduled = group(SCHEDULED)
-        cog = GamesCog(client, scheduled)
+        cog = GamesCog(client, scheduled, live(client))
         with patch.object(GamesCog, "_sweep", AsyncMock()):
             await cog.cog_load()
             client.add_dynamic_items.assert_called_once_with(GamePickSelect, RulesButton)
@@ -571,27 +576,26 @@ class RestoreTablesTest(unittest.IsolatedAsyncioTestCase):
 class PlayProblemTest(unittest.TestCase):
     def test_channel_and_role_gates(self) -> None:
         store = new_store(self)
-        clicked = MagicMock(guild_id=1, channel_id=10)
-        clicked.client = MagicMock(games=store)
-        clicked.client.unavailable_reason.return_value = "Bot 正在重新啟動，請稍後再試。"
-        self.assertEqual(play_problem(clicked), "Bot 正在重新啟動，請稍後再試。")
-        clicked.client.unavailable_reason.assert_called_once_with(1)
-        clicked.client.unavailable_reason.return_value = None
-        clicked.user.roles = [MagicMock(id=5)]
-        self.assertEqual(play_problem(clicked), "遊戲大廳尚未開放，請管理員先在 /控制台 設定遊戲頻道。")
+        closing = [True]
+        gate = live(closing=lambda: closing[0])
+        member = MagicMock(roles=[MagicMock(id=5)])
+        self.assertEqual(play_problem(gate, store, 5, 10, member), "Bot 正在重新啟動，請稍後再試。")
+        closing[0] = False
+        self.assertEqual(play_problem(gate, store, 1, 10, member), "此 Bot 只服務 .env 的 DISCORD_GUILD_ID 伺服器。")
+        self.assertEqual(play_problem(gate, store, 5, 10, member), "遊戲大廳尚未開放，請管理員先在 /控制台 設定遊戲頻道。")
         store.set_channel(20)
-        self.assertEqual(play_problem(clicked), "請到 <#20> 使用遊戲大廳。")
+        self.assertEqual(play_problem(gate, store, 5, 10, member), "請到 <#20> 使用遊戲大廳。")
         store.set_channel(10)
-        self.assertIsNone(play_problem(clicked))
+        self.assertIsNone(play_problem(gate, store, 5, 10, member))
         store.set_roles([7])
-        self.assertEqual(play_problem(clicked), "你沒有使用這個功能的身分組。")
+        self.assertEqual(play_problem(gate, store, 5, 10, member), "你沒有使用這個功能的身分組。")
 
 
 class PublishHubTest(unittest.IsolatedAsyncioTestCase):
     async def test_admin_revocation_during_banner_render_prevents_any_send(self) -> None:
         store = new_store(self)
         channel, guild = self.channel(store)
-        operations = GameOperations(SimpleNamespace(games=store), GAME_TASKS)
+        operations = GameOperations(SimpleNamespace(games=store), GAME_TASKS, live())
         drawing, release = asyncio.Event(), asyncio.Event()
         allowed = True
 
@@ -616,7 +620,7 @@ class PublishHubTest(unittest.IsolatedAsyncioTestCase):
     async def test_same_publication_is_serialized_and_never_sends_twice(self) -> None:
         store = new_store(self)
         channel, guild = self.channel(store)
-        operations = GameOperations(SimpleNamespace(games=store), GAME_TASKS)
+        operations = GameOperations(SimpleNamespace(games=store), GAME_TASKS, live())
         drawing, release = asyncio.Event(), asyncio.Event()
 
         async def banner():
@@ -816,7 +820,7 @@ class GamePickTest(unittest.IsolatedAsyncioTestCase):
 class IdleTableTest(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self) -> None:
         self.store = new_store(self)
-        self.operations = GameOperations(SimpleNamespace(games=self.store), GAME_TASKS)
+        self.operations = GameOperations(SimpleNamespace(games=self.store), GAME_TASKS, live())
         for patcher in (
             patch("src.games.access.play_problem", return_value=None),
             patch.dict("src.games.tables.LIVE_TABLES", clear=True),
@@ -877,7 +881,7 @@ class IdleTableTest(unittest.IsolatedAsyncioTestCase):
     async def test_sweep_closes_only_idle_tables_not_busy_or_recent(self) -> None:
         idle, busy, recent = self.seat(1, 20), self.seat(2, 30), self.seat(3, 40)
         idle.touched = busy.touched = time.monotonic() - tables.IDLE_SECONDS - 1
-        cog = GamesCog(MagicMock(game_operations=self.operations), group(SCHEDULED))
+        cog = GamesCog(MagicMock(game_operations=self.operations), group(SCHEDULED), live())
         with patch("src.games.cog.asyncio.sleep", AsyncMock(side_effect=[None, asyncio.CancelledError])):
             async with busy._lock:
                 with self.assertRaises(asyncio.CancelledError):
@@ -901,12 +905,13 @@ class LobbyBumpTest(unittest.IsolatedAsyncioTestCase):
         self.store.set_channel(10)
         self.store.set_hub(10, 40)
         self.bot = MagicMock(games=self.store, guild_id=5)
-        self.bot.unavailable_reason.return_value = None
+        self.bot.get_guild.return_value.configure_mock(id=5, unavailable=False)
+        self.closing = False
         self.bot.user.id = 99
         self.channel = self.bot.get_guild.return_value.get_channel.return_value
         self.channel.last_message_id = 60
         self.publish = self.bot.game_operations.publish_hub = AsyncMock(return_value=None)
-        self.cog = GamesCog(self.bot, group(SCHEDULED))
+        self.cog = GamesCog(self.bot, group(SCHEDULED), live(self.bot, lambda: self.closing))
         self.now, self.waits, self.during = 1000.0, [], None
         clock = patch("src.games.cog.time", SimpleNamespace(monotonic=lambda: self.now))
         clock.start()
@@ -956,15 +961,15 @@ class LobbyBumpTest(unittest.IsolatedAsyncioTestCase):
                         self.message(51, author=99, components=self.lobby(banner=False)),
                         self.message(61, channel=11), dm):
             await self.cog.on_message(message)
-        self.bot.unavailable_reason.return_value = "Bot 正在重新啟動，請稍後再試。"
+        self.closing = True
         await self.cog.on_message(self.message(62))
         self.assertIsNone(self.cog._bump)
-        self.bot.unavailable_reason.return_value = None
+        self.closing = False
         await self.cog.on_message(self.message(64, author=99, components=self.lobby()[:1]))
         self.assertIsNotNone(self.cog._bump)
 
     async def test_lobby_event_before_set_hub_does_not_start_a_wait(self) -> None:
-        operations = self.bot.game_operations = GameOperations(self.bot, GAME_TASKS)
+        operations = self.bot.game_operations = GameOperations(self.bot, GAME_TASKS, live(self.bot))
         self.channel.id = 10
         self.channel.get_partial_message.return_value.delete = AsyncMock()
 

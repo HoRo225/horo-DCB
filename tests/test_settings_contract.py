@@ -2,7 +2,9 @@ import ast
 import importlib
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 
+from src.core.adapters.discord.live import LiveGuild
 from src.core.adapters.sqlite.db import open_db, transaction
 from src.core.adapters.sqlite.operations import OperationStore
 from src.core.adapters.sqlite.settings import SettingsStore
@@ -63,10 +65,11 @@ class SettingsContractTests(unittest.TestCase):
         db = open_db(":memory:")
         self.addCleanup(db.close)
         settings = SettingsStore(db, OperationStore(db))
+        live = LiveGuild(SimpleNamespace(get_guild=lambda _guild_id: None), 1, lambda: False)
         components = {
             AI_ENABLED: AiSettings(db, 1),
-            VOICE_ENABLED: TempVoiceManager(db, TaskGroup("voice", WORK)),
-            STEAM_ENABLED: SteamFreeGamesNotifier(db, 1, TaskGroup("steam", SCHEDULED)),
+            VOICE_ENABLED: TempVoiceManager(db, TaskGroup("voice", WORK), live),
+            STEAM_ENABLED: SteamFreeGamesNotifier(db, live, TaskGroup("steam", SCHEDULED)),
         }
         for switch, component in components.items():
             with self.subTest(switch.key):

@@ -14,7 +14,6 @@ from src.admin.pages.common import (
     defaults,
     feature_button,
     footer_note,
-    live_guild,
     role_select,
     spacer,
 )
@@ -142,7 +141,7 @@ def codex_stale_allowlist_counts(view: AdminPanelView) -> tuple[int | None, int 
     access = view.ai_settings
     if not access.enabled:
         return None, None
-    guild = live_guild(view)
+    guild = view.live.guild()
     if guild is None:
         return None, None
 
@@ -171,7 +170,7 @@ def codex_channel_permission_detail(view: AdminPanelView) -> str | None:
     access = view.ai_settings
     if not access.enabled or not access.channel_ids:
         return None
-    guild = live_guild(view)
+    guild = view.live.guild()
     if guild is None:
         return None
     bot_member = guild.me
@@ -465,9 +464,9 @@ async def handle_codex_allowlist(
         ):
             return lambda: render_ai_access(view, rejected)
         selected = frozenset(getattr(item, "id", None) for item in items)
-        guild = live_guild(view)
+        guild = view.live.guild()
         def current() -> bool:
-            if not view.is_current(operation) or guild is None or live_guild(view) is not guild:
+            if not view.is_current(operation) or guild is None or view.live.guild() is not guild:
                 return False
             return all(
                 (guild.get_role(item_id) is not None) if roles else is_text_channel(guild.get_channel(item_id))

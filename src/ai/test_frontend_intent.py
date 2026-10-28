@@ -14,6 +14,7 @@ from src.codex.admission import AcceptedJob
 from src.codex.contracts import Action, IntentDecision
 from src.ai.discord import AiRequest, handle_message
 from src.codex.protocol import CodexError, CodexChatReply, conversation_key
+from src.core.adapters.discord.live import LiveGuild
 from src.core.adapters.sqlite.operations import OperationStore
 from src.core.adapters.sqlite.db import open_db
 from src.testing import put_setting
@@ -27,7 +28,7 @@ PLAN = IntentDecision("plan", (Action("steam_query", {}),))
 
 class FakeGuild:
     def __init__(self, guild_id=GUILD):
-        self.id, self.me = guild_id, SimpleNamespace(display_name="HoRo")
+        self.id, self.me, self.unavailable = guild_id, SimpleNamespace(display_name="HoRo"), False
         self.members, self.channels = {}, {}
         self.fetch_member = AsyncMock(side_effect=lambda user_id: self.members[user_id])
 
@@ -146,12 +147,13 @@ class FrontendIntentTest(unittest.IsolatedAsyncioTestCase):
         put_setting(self.db, AI_CHANNEL_IDS, [CHANNEL_A, CHANNEL_B])
         put_setting(self.db, AI_ROLE_IDS, [ROLE])
         self.access, self.codex, self.actions = AiSettings(self.db, GUILD), FakeCodex(), FakeActions(self.db)
+        self.live = LiveGuild(self.actions.bot, GUILD, lambda: False)
 
     async def handle(self, message):
-        await handle_message(message, bot_user_id=BOT, cleanups=AI_CLEANUPS, codex=self.codex, access=self.access, actions=self.actions)
+        await handle_message(message, live=self.live, bot_user_id=BOT, cleanups=AI_CLEANUPS, codex=self.codex, access=self.access, actions=self.actions)
 
     def request(self, message):
-        return AiRequest(message, key=conversation_key(GUILD, message.channel.id, USER, is_thread=False),
+        return AiRequest(message, live=self.live, key=conversation_key(GUILD, message.channel.id, USER, is_thread=False),
                          content=message.content.replace(f"<@{BOT}>", "").strip(), mentions_bot=True,
                          referenced_message=None, bot_name="HoRo", codex=self.codex, access=self.access,
                          text_display_enabled=False, actions=self.actions, cleanups=AI_CLEANUPS)
@@ -261,13 +263,13 @@ class FrontendIntentTest(unittest.IsolatedAsyncioTestCase):
         bot = SimpleNamespace(games=SimpleNamespace(channel_id=99))
         self.codex.intent.return_value = IntentDecision("plan", (Action("help", {}),))
         message = FakeMessage(content="<@799> 你能幫我做哪些事")
-        await handle_message(message, bot_user_id=BOT, cleanups=AI_CLEANUPS, codex=self.codex, access=self.access, actions=self.actions, bot=bot)
+        await handle_message(message, live=self.live, bot_user_id=BOT, cleanups=AI_CLEANUPS, codex=self.codex, access=self.access, actions=self.actions, bot=bot)
         self.actions.execute_plan.assert_not_awaited()
         self.codex.chat.assert_not_awaited()
         self.assertIsNone(self.actions.records.get_request(message.id))
         self.assertIn("<#99>", text(message.channel.send.await_args.kwargs["view"]))
         self.codex.intent.return_value = IntentDecision("plan", (Action("steam_query", {}), Action("help", {})))
-        await handle_message(FakeMessage(801), bot_user_id=BOT, cleanups=AI_CLEANUPS, codex=self.codex, access=self.access, actions=self.actions, bot=bot)
+        await handle_message(FakeMessage(801), live=self.live, bot_user_id=BOT, cleanups=AI_CLEANUPS, codex=self.codex, access=self.access, actions=self.actions, bot=bot)
         self.actions.execute_plan.assert_awaited_once()
 
     async def test_results_without_a_receipt_reply_in_receipt_style_without_private_buttons(self):

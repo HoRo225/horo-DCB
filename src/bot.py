@@ -20,6 +20,7 @@ from src.codex.service import CodexService
 from src.core.adapters.discord.brand import load_app_emojis, report_interaction_error, sync_discord_brand
 from src.core.app.config import CODEX_URL, AppConfig
 from src.core.adapters.discord.channels import member_role_ids
+from src.core.adapters.discord.live import LiveGuild
 from src.games.cog import GamesCog
 from src.games.operations import GameOperations
 from src.games.store import GameStore
@@ -59,6 +60,7 @@ class HoroBot(commands.Bot):
         self.guild_id = guild_id
         self._db = db
         self.supervisor = supervisor = Supervisor()
+        self.live = live = LiveGuild(self, guild_id, lambda: supervisor.closing)
         self.operations = OperationStore(db)
         self.maintenance = Maintenance(self.operations, supervisor.group("maintenance", SCHEDULED))
         self.maintenance.recover()
@@ -67,15 +69,15 @@ class HoroBot(commands.Bot):
         self.access_service = AiAccessService(
             self.ai_settings, codex, supervisor.group("access", WORK), role_ids_for_user=self._member_roles,
         )
-        self.temp_voice = TempVoiceManager(db, supervisor.group("voice", WORK), get_guild=self.get_guild)
-        self.steam_free_games = SteamFreeGamesNotifier(db, guild_id, supervisor.group("steam", SCHEDULED))
+        self.temp_voice = TempVoiceManager(db, supervisor.group("voice", WORK), live)
+        self.steam_free_games = SteamFreeGamesNotifier(db, live, supervisor.group("steam", SCHEDULED))
         self.games = GameStore(db)
-        self.game_operations = GameOperations(self, supervisor.group("games", WORK))
+        self.game_operations = GameOperations(self, supervisor.group("games", WORK), live)
         self.admin_panels = PanelSessionRegistry(
             supervisor.group("admin", PRESENTATION), supervisor.group("admin", WORK),
         )
-        self.effects = EffectService(self, db)
-        self.actions = ActionService(self, db, supervisor.group("actions", WORK))
+        self.effects = EffectService(self, db, live)
+        self.actions = ActionService(self, db, supervisor.group("actions", WORK), live)
         self._watchdog = supervisor.group("watchdog", SCHEDULED)
         self.shutdown = Shutdown(
             supervisor,
@@ -100,12 +102,12 @@ class HoroBot(commands.Bot):
     async def add_cogs(self) -> None:
         guild = discord.Object(id=self.guild_id)
         self.add_dynamic_items(PrivateResultButton)
-        supervisor = self.supervisor
+        supervisor, live = self.supervisor, self.live
         for cog in (
-            GamesCog(self, supervisor.group("games.cog", SCHEDULED)),
-            VoiceCog(self),
-            AdminCog(self),
-            AiCog(self, requests=supervisor.group("ai", REQUEST), cleanups=supervisor.group("ai", PRESENTATION)),
+            GamesCog(self, supervisor.group("games.cog", SCHEDULED), live),
+            VoiceCog(self, live),
+            AdminCog(self, live),
+            AiCog(self, live, requests=supervisor.group("ai", REQUEST), cleanups=supervisor.group("ai", PRESENTATION)),
             SteamCog(self),
         ):
             await self.add_cog(cog, guild=guild)
@@ -116,16 +118,8 @@ class HoroBot(commands.Bot):
             await self.remove_cog(name, guild=guild)
 
     def _member_roles(self, user_id: int) -> frozenset[int] | None:
-        guild = self.get_guild(self.guild_id)
-        member = guild.get_member(user_id) if guild is not None else None
+        member = self.live.member(user_id)
         return member_role_ids(member) if member is not None else None
-
-    def unavailable_reason(self, guild_id: int | None) -> str | None:
-        if self.supervisor.closing:
-            return "Bot 正在重新啟動，請稍後再試。"
-        if guild_id != self.guild_id:
-            return "此 Bot 只服務 .env 的 DISCORD_GUILD_ID 伺服器。"
-        return None
 
     async def setup_hook(self) -> None:
         sync_discord_brand(self)

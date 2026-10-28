@@ -8,17 +8,19 @@ from discord.ext import commands
 
 from src.admin.panel import AdminPanelView
 from src.core.adapters.discord.brand import send_notice
+from src.core.adapters.discord.live import LiveGuild
 
 if TYPE_CHECKING:
     from src.bot import HoroBot
 
 
 class AdminCog(commands.Cog):
-    def __init__(self, bot: HoroBot) -> None:
+    def __init__(self, bot: HoroBot, live: LiveGuild) -> None:
         self.bot = bot
+        self._live = live
 
     async def _allowed(self, interaction: discord.Interaction) -> bool:
-        if reason := self.bot.unavailable_reason(interaction.guild_id):
+        if reason := self._live.unavailable_reason(interaction.guild_id):
             await send_notice(interaction, reason)
             return False
         if interaction.guild is not None and interaction.permissions.administrator:
@@ -35,5 +37,5 @@ class AdminCog(commands.Cog):
         bot = self.bot
         key = (interaction.guild.id, interaction.user.id)
         session = bot.admin_panels.begin(key)
-        view = AdminPanelView(bot, session, interaction)
+        view = AdminPanelView(bot, self._live, session, interaction)
         await bot.admin_panels.run_child(session, view.open_panel(interaction))

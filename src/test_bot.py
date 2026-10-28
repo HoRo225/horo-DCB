@@ -122,7 +122,7 @@ class HoroBotTests(unittest.IsolatedAsyncioTestCase):
             patch("src.ai.cog.ai_discord.handle_message", AsyncMock()) as handle_message,
         ):
             await self.bot.on_message(message)
-            await AiCog(self.bot, requests=testing.group(REQUEST), cleanups=testing.AI_CLEANUPS).on_message(message)
+            await AiCog(self.bot, self.bot.live, requests=testing.group(REQUEST), cleanups=testing.AI_CLEANUPS).on_message(message)
         process_commands.assert_not_awaited()
         handle_message.assert_awaited_once()
 

@@ -11,7 +11,6 @@ from src.admin.pages.common import (
     bind_channel,
     channel_select,
     footer_note,
-    live_guild,
     no_guild_note,
     role_select,
 )
@@ -37,7 +36,7 @@ def games_state(view: AdminPanelView) -> ChannelState:
             "請在下方選擇遊戲頻道；選擇後會自動發布遊戲大廳。",
         )
     channel = f"遊戲頻道 <#{channel_id}>"
-    guild = live_guild(view)
+    guild = view.live.guild()
     if guild is not None and (problem := game_channel_problem(guild, view.games)):
         return ChannelState("需要處理", channel, problem, problem)
     return ChannelState("狀態正常", channel, channel)
@@ -109,7 +108,7 @@ async def handle_game_role_select(
     view: AdminPanelView, interaction: discord.Interaction, roles: tuple[discord.Role, ...]
 ) -> None:
     async def work(operation: int) -> Callable[[], None]:
-        guild = live_guild(view)
+        guild = view.live.guild()
         if guild is None or any(role.guild.id != view.guild_id or role.is_default() or guild.get_role(role.id) is None for role in roles):
             note = ("warn", "只能選擇目前伺服器的一般身分組。")
         else:
@@ -125,11 +124,11 @@ async def handle_game_role_select(
 
 
 async def _publish(view: AdminPanelView, interaction: discord.Interaction, operation: int) -> Callable[[], None]:
-    guild = live_guild(view)
+    guild = view.live.guild()
     if guild is None:
         return lambda: render_games(view, no_guild_note())
     problem = await view.game_operations.publish_hub(guild, operation_id=interaction_operation_id(interaction),
-                                                   still_current=lambda: view.is_current(operation) and live_guild(view) is guild)
+                                                   still_current=lambda: view.is_current(operation) and view.live.guild() is guild)
     note = ("warn", problem) if problem else ("ok", "已重發遊戲大廳。")
     return lambda: render_games(view, note)
 

@@ -42,6 +42,7 @@ from src.codex.protocol import (
 from src.ai.query_views import help_view
 from src.core.adapters.discord.brand import ICONS
 from src.core.adapters.discord.channels import member_role_ids
+from src.core.adapters.discord.live import LiveGuild, can_send as member_can_send
 from src.core.app.supervisor import TaskGroup
 
 IMAGE_TIMEOUT_SECONDS = 30.0
@@ -110,6 +111,7 @@ async def _keep_typing(channel: Any) -> None:
 async def handle_message(
     message: discord.Message,
     *,
+    live: LiveGuild,
     bot_user_id: int,
     codex: CodexService,
     access: AiSettings,
@@ -173,6 +175,7 @@ async def handle_message(
 
     await AiRequest(
         message,
+        live=live,
         key=key,
         content=cleaned_content,
         mentions_bot=mentions_bot,
@@ -193,6 +196,7 @@ class AiRequest:
         self,
         message: discord.Message,
         *,
+        live: LiveGuild,
         key: str,
         content: str,
         mentions_bot: bool,
@@ -207,6 +211,7 @@ class AiRequest:
         cleanups: TaskGroup,
     ) -> None:
         self.message = message
+        self.live = live
         self.bot = bot
         self.key = key
         self.content = content
@@ -248,25 +253,10 @@ class AiRequest:
             or asyncio.get_running_loop().time() >= deadline
         ):
             return False
-        guild = self.actions.bot.get_guild(self.message.guild.id) if self.actions is not None else self.message.guild
-        if guild is None:
+        author = await self.live.find_member(self.message.author.id)
+        channel = self.live.channel(self.message.channel.id)
+        if author is None or channel is None or not member_can_send(channel, author):
             return False
-        author = guild.get_member(self.message.author.id)
-        if author is None:
-            try:
-                author = await asyncio.wait_for(guild.fetch_member(self.message.author.id), 2)
-            except discord.HTTPException, aiohttp.ClientError, TimeoutError, AttributeError:
-                return False
-        channel = guild.get_channel_or_thread(self.message.channel.id) if self.actions is not None else self.message.channel
-        if channel is None:
-            return False
-        if hasattr(channel, "permissions_for"):
-            try:
-                permissions = channel.permissions_for(author)
-            except discord.ClientException:
-                return False
-            if not permissions.view_channel or not (permissions.send_messages_in_threads if isinstance(channel, discord.Thread) else permissions.send_messages):
-                return False
         return (
             self._current()
             and asyncio.get_running_loop().time() < deadline

@@ -41,7 +41,7 @@ class GamePickSelect(discord.ui.DynamicItem[discord.ui.Select], template=r"horo:
 
     @reported
     async def callback(self, interaction: discord.Interaction) -> None:
-        if problem := access.play_problem(interaction):
+        if problem := interaction.client.game_operations.pick_problem(interaction):
             await send_notice(interaction, problem, items=access.hub_link(interaction.client))
             return
         await interaction.response.edit_message(view=lobby_view(banner=bool(interaction.message.attachments)))

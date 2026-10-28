@@ -100,7 +100,7 @@ class LayoutBudgetTest(unittest.IsolatedAsyncioTestCase):
             interaction.guild.get_channel.return_value = None
             interaction.guild.get_role.return_value = None
             bot.get_guild = MagicMock(return_value=interaction.guild)
-            view = AdminPanelView(bot, bot.admin_panels.begin((G, OWNER)), interaction)
+            view = AdminPanelView(bot, bot.live, bot.admin_panels.begin((G, OWNER)), interaction)
             view.state(AiReadings).codex_status = CodexRuntimeStatus(
                 reason="auth_required", plan="plus", runtime_version="1.0", thread_count=3, last_error="auth_required",
             )

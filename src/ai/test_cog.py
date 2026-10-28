@@ -8,6 +8,7 @@ from src import testing
 from src.ai.access import AiSettings
 from src.ai.cog import AiCog
 from src.codex.protocol import conversation_key
+from src.core.adapters.discord.live import LiveGuild
 from src.core.adapters.sqlite.db import open_db
 from src.testing import put_setting
 from src.testing import AI_CLEANUPS, group
@@ -20,11 +21,10 @@ class NewTopicTest(unittest.IsolatedAsyncioTestCase):
         self.member = SimpleNamespace(id=3, roles=[])
         self.permissions = SimpleNamespace(view_channel=True, send_messages=True, send_messages_in_threads=True, administrator=False)
         self.channel = SimpleNamespace(id=2, permissions_for=lambda member: self.permissions)
-        self.guild = MagicMock()
+        self.guild = MagicMock(id=1, unavailable=False)
         self.guild.get_member.return_value = self.member
         self.guild.get_channel_or_thread.side_effect = lambda channel_id: self.channel
         self.bot = MagicMock()
-        self.bot.unavailable_reason.return_value = None
         self.bot.get_guild.return_value = self.guild
         self.bot.ai_settings.denial_reason.return_value = None
         self.bot.codex.reset_conversation = AsyncMock(return_value=SimpleNamespace(archive_unconfirmed_count=0))
@@ -34,7 +34,8 @@ class NewTopicTest(unittest.IsolatedAsyncioTestCase):
         self.interaction.permissions.administrator = True
 
     async def reset(self):
-        await AiCog.new_topic.callback(AiCog(self.bot, requests=group(REQUEST), cleanups=AI_CLEANUPS), self.interaction)
+        cog = AiCog(self.bot, LiveGuild(self.bot, 1, lambda: False), requests=group(REQUEST), cleanups=AI_CLEANUPS)
+        await AiCog.new_topic.callback(cog, self.interaction)
 
     async def test_regular_channel_resets_only_the_actor_conversation(self):
         await self.reset()
@@ -92,7 +93,8 @@ class ChannelDeleteTest(unittest.IsolatedAsyncioTestCase):
     async def delete(self, channel_id):
         channel = MagicMock(spec=discord.TextChannel, id=channel_id, type=discord.ChannelType.text)
         channel.guild.id = 1
-        await AiCog(self.bot, requests=group(REQUEST), cleanups=AI_CLEANUPS).on_guild_channel_delete(channel)
+        live = LiveGuild(self.bot, 1, lambda: False)
+        await AiCog(self.bot, live, requests=group(REQUEST), cleanups=AI_CLEANUPS).on_guild_channel_delete(channel)
 
     async def test_deleted_allowlist_channel_is_removed_even_when_ai_is_off(self):
         await self.delete(10)

@@ -15,6 +15,7 @@ from src.core.adapters.discord.channels import (
     is_voice_channel,
     missing_channel_permissions,
 )
+from src.core.adapters.discord.live import LiveGuild
 from src.core.adapters.sqlite.db import transaction
 from src.core.adapters.sqlite.operations import OperationStore
 from src.core.adapters.sqlite.settings import SettingsStore
@@ -54,7 +55,7 @@ def build_temp_voice_name(display_name: str) -> str:
 
 
 class TempVoiceManager:
-    def __init__(self, db: sqlite3.Connection, tasks: TaskGroup, *, get_guild=None) -> None:
+    def __init__(self, db: sqlite3.Connection, tasks: TaskGroup, live: LiveGuild) -> None:
         self._db = db
         self._lock = asyncio.Lock()
         self._closing = False
@@ -62,17 +63,13 @@ class TempVoiceManager:
         self._tasks = tasks
         self.operations = OperationStore(db)
         self._settings = SettingsStore(db, self.operations)
-        self._get_guild = get_guild
+        self._live = live
 
     def _current_guild(self, guild):
-        if self._get_guild is None:
-            return guild
-        current = self._get_guild(guild.id)
-        return current if current is not None and current.id == guild.id and not current.unavailable else None
+        current = self._live.guild()
+        return current if current is not None and current.id == guild.id else None
 
     def _current_channel(self, channel):
-        if self._get_guild is None:
-            return channel
         guild = self._current_guild(channel.guild)
         current = guild.get_channel(channel.id) if guild else None
         return current if is_voice_channel(current) and current.guild is guild else None
@@ -83,10 +80,9 @@ class TempVoiceManager:
         guild = self._current_guild(member.guild)
         if guild is None:
             return None
-        if self._get_guild is not None:
-            member, entry = guild.get_member(member.id), guild.get_channel(entry.id)
-            if member is not None and (member.guild is not guild or not is_voice_channel(entry) or entry.guild is not guild):
-                return None
+        member, entry = guild.get_member(member.id), guild.get_channel(entry.id)
+        if member is not None and (member.guild is not guild or not is_voice_channel(entry) or entry.guild is not guild):
+            return None
         if member is None or not is_voice_channel(entry):
             return None
         voice = member.voice
@@ -536,10 +532,9 @@ class TempVoiceManager:
             guild = self._current_guild(guild)
             if guild is None:
                 return "目前無法確認最新的伺服器狀態，未修改入口。"
-            if self._get_guild is not None:
-                channel = guild.get_channel(channel.id)
-                if not is_voice_channel(channel):
-                    return "目前找不到指定的語音頻道，未修改入口。"
+            channel = guild.get_channel(channel.id)
+            if not is_voice_channel(channel):
+                return "目前找不到指定的語音頻道，未修改入口。"
             if self._is_room(channel.id):
                 return "不能把臨時語音頻道設為入口。"
             try:

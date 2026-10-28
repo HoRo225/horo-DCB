@@ -11,6 +11,7 @@ import discord
 from src.effects import CONFIRMABLE, RETRYABLE, EffectService
 from src.admin.panel import AdminPanelView
 from src.admin.pages.effects import KINDS, ConfirmDelivery, EffectPick, render_effects
+from src.core.adapters.discord.live import LiveGuild
 from src.core.adapters.sqlite.operations import OperationStore
 from src.core.adapters.sqlite.db import open_db, transaction
 from src.testing import put_setting, get_setting
@@ -51,16 +52,17 @@ class EffectsTest(unittest.IsolatedAsyncioTestCase):
                                     send=AsyncMock(), fetch_message=AsyncMock())
         self.channel.permissions_for.return_value = discord.Permissions(view_channel=True, send_messages=True, read_message_history=True)
         self.guild.channels[CHANNEL] = self.channel
-        self.bot = SimpleNamespace(guild_id=GUILD, user=SimpleNamespace(id=BOT), unavailable_reason=lambda _: None)
+        self.bot = SimpleNamespace(guild_id=GUILD, user=SimpleNamespace(id=BOT))
         self.bot.ai_settings = SimpleNamespace(enabled=False)
         self.bot.codex = SimpleNamespace(request_counts=MagicMock(return_value=(0, 0)))
         self.bot.get_guild = lambda guild_id: self.guild if guild_id == GUILD else None
         self.bot.get_partial_messageable = lambda channel_id: self.guild.get_channel(channel_id)
-        self.bot.steam_free_games = SteamFreeGamesNotifier(self.db, GUILD, group(SCHEDULED))
+        self.live = LiveGuild(self.bot, GUILD, lambda: False)
+        self.bot.steam_free_games = SteamFreeGamesNotifier(self.db, self.live, group(SCHEDULED))
         self.bot.steam_free_games._client = self.bot
-        self.bot.temp_voice = TempVoiceManager(self.db, group())
+        self.bot.temp_voice = TempVoiceManager(self.db, group(), self.live)
         self.bot.games = SimpleNamespace(channel_id=CHANNEL)
-        self.service = EffectService(self.bot, self.db)
+        self.service = EffectService(self.bot, self.db, self.live)
         self.records = OperationStore(self.db)
 
     def effect(self, effect_id="notice", *, kind="action.receipt", status="unknown", payload=None):
@@ -441,7 +443,7 @@ class PendingIndexTest(unittest.TestCase):
         queries = []
         db.set_trace_callback(queries.append)
         try:
-            pending = EffectService(None, db).pending()
+            pending = EffectService(None, db, None).pending()
         finally:
             db.set_trace_callback(None)
         self.assertEqual([effect.effect_id for effect in pending], ["a", "b", "c"])

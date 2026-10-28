@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING
 import discord
 from discord.ext import commands
 
-from src.core.adapters.discord.channels import avatar_url
+from src.core.adapters.discord.live import LiveGuild
 from src.games.hub import refresh_hub
 from src.games.table_runtime import dispatch_table, restore_tables
 from src.games.tables import IDLE_SECONDS, LIVE_TABLES, SeatView
@@ -23,8 +23,9 @@ SWEEP_SECONDS = 60
 
 
 class GamesCog(commands.Cog):
-    def __init__(self, bot: HoroBot, tasks: TaskGroup) -> None:
+    def __init__(self, bot: HoroBot, tasks: TaskGroup, live: LiveGuild) -> None:
         self.bot = bot
+        self._live = live
         self._tasks = tasks
         self._bump: asyncio.Task[None] | None = None
         self._last_message = 0.0
@@ -39,7 +40,7 @@ class GamesCog(commands.Cog):
 
     async def _redraw(self, table: SeatView) -> None:
         await self.bot.wait_until_ready()
-        table.avatar = avatar_url(self.bot.get_guild(self.bot.guild_id), table.player_id)
+        table.avatar = self._live.avatar_url(table.player_id)
         await table.redraw()
 
     async def _sweep(self) -> None:
@@ -56,7 +57,7 @@ class GamesCog(commands.Cog):
     @commands.Cog.listener()
     async def on_message(self, message: discord.Message) -> None:
         bot, store = self.bot, self.bot.games
-        if message.guild is None or bot.unavailable_reason(message.guild.id) or message.channel.id != store.channel_id:
+        if message.guild is None or self._live.unavailable_reason(message.guild.id) or message.channel.id != store.channel_id:
             return
         if ((hub := store.hub_message) and message.id == hub[1]) or (message.author.id == bot.user.id and any(
                 getattr(item, "custom_id", None) == "horo:game:pick"
@@ -70,7 +71,7 @@ class GamesCog(commands.Cog):
         while (wait := self._last_message + HUB_QUIET_SECONDS - time.monotonic()) > 0:
             await asyncio.sleep(wait)
         self._bump = None
-        store, guild = self.bot.games, self.bot.get_guild(self.bot.guild_id)
+        store, guild = self.bot.games, self._live.guild()
         channel = guild.get_channel(store.channel_id) if guild else None
         if channel is None or not (hub := store.hub_message) or channel.last_message_id == hub[1]:
             return

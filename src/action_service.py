@@ -16,8 +16,8 @@ from src.codex.protocol import CodexError
 from src.ai.private_results import TTL_SECONDS, PrivateResults
 from src.ai.query_views import help_view, info_card
 from src.core.adapters.discord.brand import BRAND_COLOUR, ICONS, WARN_COLOUR, card_title, rana_says, tone_colour
-from src.core.adapters.discord.channels import fetch_current_member, member_role_ids, text_channel_problem, is_voice_channel, is_text_channel
-from src.games.access import play_problem
+from src.core.adapters.discord.channels import member_role_ids, text_channel_problem, is_voice_channel, is_text_channel
+from src.core.adapters.discord.live import UNCONFIRMED, CANNOT_SEND, LiveGuild, can_send
 from src.games.hub import bind_channel
 from src.core.adapters.sqlite.operations import OperationStore
 from src.core.domain.json import json_value
@@ -46,8 +46,9 @@ def _static_action_problem(action, explicit, content="") -> str | None:
 
 
 class ActionService:
-    def __init__(self, bot, db, tasks: TaskGroup) -> None:
+    def __init__(self, bot, db, tasks: TaskGroup, live: LiveGuild) -> None:
         self.bot, self.db = bot, db
+        self._live = live
         self.records = OperationStore(db)
         self.games = bot.game_operations
         self.private_results = PrivateResults(self._authorize_private, self._render_private, QUERY_LABELS)
@@ -68,8 +69,8 @@ class ActionService:
 
     def _live_source(self, source, actor=None):
         original = getattr(source, "original_source", source)
-        guild = self.bot.get_guild(original.guild.id)
-        if guild is None:
+        guild = self._live.guild()
+        if guild is None or original.guild.id != guild.id:
             raise ValueError("current guild cache is unavailable")
         channel = guild.get_channel_or_thread(original.channel.id)
         if channel is None:
@@ -93,13 +94,11 @@ class ActionService:
         try:
             source = self._live_source(source, member)
         except ValueError:
-            return "目前無法確認最新的伺服器或頻道狀態，請稍後再試。"
-        if reason := self.bot.unavailable_reason(source.guild.id):
+            return UNCONFIRMED
+        if reason := self._live.unavailable_reason(source.guild.id):
             return reason
-        permissions = source.channel.permissions_for(member)
-        can_send = permissions.send_messages_in_threads if isinstance(source.channel, discord.Thread) else permissions.send_messages
-        if not permissions.view_channel or not can_send:
-            return "你目前無法在這個頻道執行操作。"
+        if not can_send(source.channel, member):
+            return CANNOT_SEND
         if admin and not member.guild_permissions.administrator:
             return "此操作僅限伺服器管理員使用。"
         if ai and self.bot.ai_settings.denial_reason(source.guild.id, self._allowed_channel(source), member_role_ids(member)):
@@ -115,8 +114,7 @@ class ActionService:
 
     async def _fresh(self, source):
         original = getattr(source, "original_source", source)
-        _, member = await fetch_current_member(self.bot, original.guild.id, self._actor(original).id)
-        return member
+        return await self._live.fetch_member(self._actor(original).id)
 
     def _explicit_targets(self, source):
         content = getattr(source, "content", "")
@@ -146,7 +144,7 @@ class ActionService:
         admin = bool(member.guild_permissions.administrator)
         explicit = self._explicit_targets(source)
         names = ACTION_NAMES if admin else ACTION_NAMES - ADMIN_ACTIONS
-        if play_problem(SimpleNamespace(client=self.bot, guild_id=guild.id, channel_id=source.channel.id, user=member)):
+        if self.games.play_problem(guild.id, source.channel.id, member):
             names = names - GAME_ACTIONS
         return {"actor_id": actor.id, "guild_id": guild.id, "channel_id": source.channel.id,
                 "allowed_actions": sorted(names), "game": self.games.snapshot(actor.id),
@@ -201,9 +199,9 @@ class ActionService:
         for action in decision.actions:
             if problem := self._problem(source, actor, admin=action.name in ADMIN_ACTIONS):
                 return problem
-            if action.name in GAME_ACTIONS and (problem := play_problem(SimpleNamespace(
-                client=self.bot, guild_id=source.guild.id, channel_id=source.channel.id, user=actor
-            ))):
+            if action.name in GAME_ACTIONS and (problem := self.games.play_problem(
+                source.guild.id, source.channel.id, actor,
+            )):
                 return problem
             if problem := _static_action_problem(action, explicit, source.content):
                 return problem
@@ -305,9 +303,9 @@ class ActionService:
                         result = self._failure("forbidden", problem)
                     elif deadline is not None and asyncio.get_running_loop().time() >= deadline:
                         result = self._failure("deadline", "操作期限已到，這項操作未執行。")
-                    elif action.name in GAME_ACTIONS and (problem := play_problem(SimpleNamespace(
-                        client=self.bot, guild_id=source.guild.id, channel_id=source.channel.id, user=actor
-                    ))):
+                    elif action.name in GAME_ACTIONS and (problem := self.games.play_problem(
+                        source.guild.id, source.channel.id, actor,
+                    )):
                         result = self._failure("forbidden", problem)
                     elif problem := self._step_target_problem(live_source, action):
                         result = self._failure("target", problem)
@@ -466,10 +464,7 @@ class ActionService:
             source = self._live_source(source)
         except ValueError:
             return
-        if self.bot.unavailable_reason(source.guild.id):
-            return
-        actor = source.guild.get_member(self._actor(source).id)
-        if actor is None or self._problem(source, actor, ai=False):
+        if self._live.send_problem(source.channel.id, self._actor(source).id):
             return
         effect_id = f"request:{request_id}:receipt"
         existing = self.records.get_effect(effect_id)

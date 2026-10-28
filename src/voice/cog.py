@@ -6,20 +6,22 @@ from typing import TYPE_CHECKING
 import discord
 from discord.ext import commands
 
+from src.core.adapters.discord.live import LiveGuild
+
 if TYPE_CHECKING:
     from src.bot import HoroBot
 
 
 class VoiceCog(commands.Cog):
-    def __init__(self, bot: HoroBot) -> None:
+    def __init__(self, bot: HoroBot, live: LiveGuild) -> None:
         self.bot = bot
+        self._live = live
 
     @commands.Cog.listener()
     async def on_ready(self) -> None:
-        bot = self.bot
-        guild = bot.get_guild(bot.guild_id)
-        if guild is not None and bot.unavailable_reason(guild.id) is None:
-            await bot.temp_voice.reconcile(guild)
+        guild = self._live.guild()
+        if guild is not None and self._live.unavailable_reason(guild.id) is None:
+            await self.bot.temp_voice.reconcile(guild)
 
     @commands.Cog.listener()
     async def on_voice_state_update(
@@ -28,7 +30,7 @@ class VoiceCog(commands.Cog):
         before: discord.VoiceState,
         after: discord.VoiceState,
     ) -> None:
-        if member.guild.id == self.bot.guild_id and not self.bot.unavailable_reason(member.guild.id):
+        if not self._live.unavailable_reason(member.guild.id):
             try:
                 await self.bot.temp_voice.handle_voice_state_update(member, before, after)
             except Exception:
@@ -36,7 +38,7 @@ class VoiceCog(commands.Cog):
 
     @commands.Cog.listener()
     async def on_guild_channel_delete(self, channel: discord.abc.GuildChannel) -> None:
-        if channel.guild.id == self.bot.guild_id and not self.bot.unavailable_reason(channel.guild.id):
+        if not self._live.unavailable_reason(channel.guild.id):
             try:
                 await self.bot.temp_voice.handle_channel_delete(channel)
             except Exception:

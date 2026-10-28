@@ -17,6 +17,7 @@ from src.admin.pages.overview import render_overview
 from src.admin.pages.steam import render_steam
 from src.admin.pages.voice import render_voice
 from src.admin.sessions import PanelSession
+from src.core.adapters.discord.live import LiveGuild
 from src.core.adapters.discord.brand import (
     BRAND_COLOUR,
     ICONS,
@@ -76,12 +77,13 @@ NAV_PAGES = {
 
 class AdminPanelView(ErrorNotice, discord.ui.LayoutView):
     def __init__(
-        self, bot: HoroBot, session: PanelSession, interaction: discord.Interaction
+        self, bot: HoroBot, live: LiveGuild, session: PanelSession, interaction: discord.Interaction
     ) -> None:
         super().__init__(timeout=IDLE_TIMEOUT_SECONDS)
         self.page = "overview"
         self.user_id = interaction.user.id
         self._bot = bot
+        self.live = live
         self.guild = interaction.guild
         self.guild_id = self.guild.id
         self.codex_client = bot.codex
@@ -451,9 +453,8 @@ class AdminPanelView(ErrorNotice, discord.ui.LayoutView):
         return operation == self._operation and self.alive and self._authorized()
 
     def _authorized(self) -> bool:
-        guild = self._bot.get_guild(self.guild_id)
-        member = guild.get_member(self.user_id) if guild is not None else None
-        if guild is None or guild.unavailable or member is None or not member.guild_permissions.administrator:
+        guild = self.live.guild()
+        if guild is None or not self.live.admin(self.user_id):
             return False
         self.guild = guild
         return True

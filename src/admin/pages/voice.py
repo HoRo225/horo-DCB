@@ -13,7 +13,6 @@ from src.admin.pages.common import (
     channel_select,
     feature_button,
     footer_note,
-    live_guild,
     no_guild_note,
 )
 from src.core.adapters.discord.brand import ICONS
@@ -40,7 +39,7 @@ class _VoiceState:
 def voice_entry_problem(view, status: TempVoiceStatus) -> str | None:
     if not view.temp_voice.enabled:
         return None
-    guild = live_guild(view)
+    guild = view.live.guild()
     if guild is None:
         return None
 
@@ -118,12 +117,12 @@ def render_voice(view: AdminPanelView, note: tuple[str, str] | None = None) -> N
 async def _after_voice_toggle(
     view: AdminPanelView, interaction: discord.Interaction, operation: int, enabled: bool
 ) -> tuple[str, str] | None:
-    if not enabled or (guild := live_guild(view)) is None:
+    if not enabled or (guild := view.live.guild()) is None:
         return None
     try:
         await view.temp_voice.reconcile(
             guild,
-            still_current=lambda: view.is_current(operation) and live_guild(view) is guild,
+            still_current=lambda: view.is_current(operation) and view.live.guild() is guild,
         )
     except Exception:
         logging.exception("Admin panel temp voice sync after enabling failed.")
@@ -139,10 +138,10 @@ async def handle_voice_entry_select(
         return
 
     async def work(operation: int) -> Callable[[], None]:
-        guild = live_guild(view)
+        guild = view.live.guild()
         if guild is None:
             return lambda: render_voice(view, no_guild_note())
-        problem = await view.temp_voice.bind_entry(guild, channel, still_current=lambda: view.is_current(operation) and live_guild(view) is guild, operation_id=interaction_operation_id(interaction))
+        problem = await view.temp_voice.bind_entry(guild, channel, still_current=lambda: view.is_current(operation) and view.live.guild() is guild, operation_id=interaction_operation_id(interaction))
         if problem is not None:
             return lambda: render_voice(view, ("warn", problem))
         if not view.temp_voice.enabled:
@@ -155,13 +154,13 @@ async def handle_voice_entry_select(
 async def _voice_sync(view: AdminPanelView, operation: int) -> Callable[[], None]:
     if not view.temp_voice.enabled:
         return lambda: render_voice(view, ("info", "臨時語音未開啟，未執行同步。"))
-    guild = live_guild(view)
+    guild = view.live.guild()
     if guild is None:
         return lambda: render_voice(view, no_guild_note())
     try:
         await view.temp_voice.reconcile(
             guild,
-            still_current=lambda: view.is_current(operation) and live_guild(view) is guild,
+            still_current=lambda: view.is_current(operation) and view.live.guild() is guild,
         )
     except Exception:
         logging.exception("Admin panel temp voice resync failed.")

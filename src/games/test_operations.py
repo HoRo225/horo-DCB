@@ -9,6 +9,7 @@ import discord
 
 from src.testing import GAME_TASKS
 
+from src.core.adapters.discord.live import LiveGuild
 from src.games import rana
 from src.games.operations import GameOperations
 from src.games.tables import LIVE_TABLES, BlackjackTableView, SlotTableView
@@ -23,7 +24,7 @@ def interaction():
     clicked = fake_interaction()
     clicked.id, clicked.user.id, clicked.guild_id, clicked.channel_id, clicked.message.id = 1000, 1, 5, 10, 20
     clicked.user.display_name = "玩家"
-    clicked.guild = MagicMock(spec=discord.Guild, id=5)
+    clicked.guild = MagicMock(spec=discord.Guild, id=5, unavailable=False)
     clicked.guild.fetch_member = AsyncMock(return_value=clicked.user)
     clicked.guild.get_member.return_value = clicked.user
     clicked.guild.get_channel_or_thread.return_value = clicked.channel
@@ -36,17 +37,16 @@ class GameOperationsTest(unittest.IsolatedAsyncioTestCase):
         self.store = GameStore(memory_db(self))
         self.store.set_channel(10)
         self.store.set_roles([7])
-        self.bot = SimpleNamespace(games=self.store,
-                                   unavailable_reason=lambda guild_id: None if guild_id == 5 else "伺服器不符")
+        self.bot = SimpleNamespace(games=self.store)
         self.actor = SimpleNamespace(id=1, roles=[SimpleNamespace(id=7)], display_name="玩家",
                                      display_avatar=SimpleNamespace(url="https://example.com/avatar.png"))
         self.source = SimpleNamespace(id=500, author=self.actor, guild_id=5, channel_id=10, guild=None,
                                       channel=SimpleNamespace(id=10, send=AsyncMock()))
         self.source.channel.permissions_for = lambda actor: discord.Permissions(view_channel=True, send_messages=True)
-        self.guild = SimpleNamespace(id=5, fetch_member=AsyncMock(return_value=self.actor), get_member=lambda uid: self.actor,
+        self.guild = SimpleNamespace(id=5, unavailable=False, fetch_member=AsyncMock(return_value=self.actor), get_member=lambda uid: self.actor,
                                      get_channel_or_thread=lambda channel_id: self.source.channel)
         self.bot.get_guild = lambda guild_id: self.guild if guild_id == 5 else None
-        self.operations = self.bot.game_operations = GameOperations(self.bot, GAME_TASKS)
+        self.operations = self.bot.game_operations = GameOperations(self.bot, GAME_TASKS, LiveGuild(self.bot, 5, lambda: False))
         self.records = OperationStore(self.store.db)
         patcher = patch.dict(LIVE_TABLES, clear=True)
         patcher.start()
@@ -331,7 +331,7 @@ class GameOperationsTest(unittest.IsolatedAsyncioTestCase):
     async def test_real_guild_branch_defers_once_and_replay_never_answers_twice(self):
         self.open_table("slots")
         self.table.play = MagicMock(return_value=(3, ["result"], ["won"]))
-        guild = MagicMock(spec=discord.Guild, id=5)
+        guild = MagicMock(spec=discord.Guild, id=5, unavailable=False)
         guild.get_member.return_value = self.actor
         clicked = interaction()
         clicked.user, clicked.client, clicked.guild = self.actor, self.bot, guild

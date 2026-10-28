@@ -8,6 +8,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import discord
 
 from src.core.adapters.discord.brand import BRAND_COLOUR, ICONS
+from src.core.adapters.discord.live import LiveGuild
 from src.admin.pages.steam import steam_state
 from src.core.adapters.sqlite.db import open_db, transaction
 from src.testing import put_setting
@@ -38,7 +39,9 @@ class SteamFreeGamesNotifierTest(unittest.IsolatedAsyncioTestCase):
         db = open_db(":memory:")
         self.addCleanup(db.close)
         put_setting(db, STEAM_ENABLED, True)
-        self.notifier = SteamFreeGamesNotifier(db, G, group(SCHEDULED))
+        self.client = SimpleNamespace(get_guild=lambda _: self.guild)
+        self.live = LiveGuild(self.client, G, lambda: False)
+        self.notifier = SteamFreeGamesNotifier(db, self.live, group(SCHEDULED))
         self.notifier.provider = MagicMock(fetch_current_offers=AsyncMock(), close=AsyncMock())
         await self.notifier.bind_channel(self.guild, self.channel)
 
@@ -62,7 +65,7 @@ class SteamFreeGamesNotifierTest(unittest.IsolatedAsyncioTestCase):
         self.notifier.provider.fetch_current_offers.return_value = SteamFetchResult(
             frozenset(o.app_id for o in offers), offers
         )
-        await self.notifier.check_once(self.guild)
+        await self.notifier.check_once()
 
     def status(self):
         return self.notifier.status()
@@ -122,13 +125,13 @@ class SteamFreeGamesNotifierTest(unittest.IsolatedAsyncioTestCase):
             return SteamFetchResult(frozenset({1}), (offer(1),))
 
         self.notifier.provider.fetch_current_offers.side_effect = fetch
-        await self.notifier.check_once(self.guild)
+        await self.notifier.check_once()
         self.channel.send.assert_not_awaited()
         self.assertEqual(self.status().active_app_count, 0)
 
     async def test_guild_replaced_during_fetch_uses_current_permissions(self) -> None:
         current = [self.guild]
-        self.notifier._client = SimpleNamespace(get_guild=lambda _: current[0])
+        self.client.get_guild = lambda _: current[0]
         replacement = MagicMock(id=G, unavailable=False)
         blocked = self.text(CH, discord.Permissions.none())
         self.channels[CH] = self.channel
@@ -141,14 +144,14 @@ class SteamFreeGamesNotifierTest(unittest.IsolatedAsyncioTestCase):
 
         self.notifier.provider.fetch_current_offers.side_effect = fetch
         with self.assertLogs(level="ERROR"):
-            await self.notifier.check_once(self.guild)
+            await self.notifier.check_once()
         self.channel.send.assert_not_awaited()
         blocked.send.assert_not_awaited()
         self.assertEqual(self.notifier.operations.effects(kind="steam.announce"), [])
 
     async def test_guild_lost_between_sends_keeps_remaining_effect_pending(self) -> None:
         current = [self.guild]
-        self.notifier._client = SimpleNamespace(get_guild=lambda _: current[0])
+        self.client.get_guild = lambda _: current[0]
 
         async def send(**_):
             current[0] = None
@@ -268,13 +271,12 @@ class SteamFreeGamesNotifierTest(unittest.IsolatedAsyncioTestCase):
         with self.assertLogs(level="ERROR"):
             await self.check(offer(1))
         effect = self.notifier.operations.effects(kind="steam.announce")[0]
-        client = SimpleNamespace(get_guild=lambda _: self.guild)
-        self.assertFalse(await self.notifier.retry_effect(effect.effect_id, client))
+        self.assertFalse(await self.notifier.retry_effect(effect.effect_id))
         self.channel.send.side_effect = None
         with transaction(self.notifier.operations.db):
             self.notifier.operations.update_effect(effect.effect_id, "pending", retry=True)
-        self.assertTrue(await self.notifier.retry_effect(effect.effect_id, client))
-        self.assertFalse(await self.notifier.retry_effect(effect.effect_id, client))
+        self.assertTrue(await self.notifier.retry_effect(effect.effect_id))
+        self.assertFalse(await self.notifier.retry_effect(effect.effect_id))
         self.assertEqual(self.channel.send.await_count, 2)
 
     async def test_pending_confirmation_and_suppression_are_one_transaction(self) -> None:
@@ -296,7 +298,7 @@ class SteamFreeGamesNotifierTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_concurrent_checks_share_delivery_lock_and_suppress_duplicates(self) -> None:
         self.notifier.provider.fetch_current_offers.return_value = SteamFetchResult(frozenset({1}), (offer(1),))
-        await asyncio.gather(self.notifier.check_once(self.guild), self.notifier.check_once(self.guild))
+        await asyncio.gather(self.notifier.check_once(), self.notifier.check_once())
         self.channel.send.assert_awaited_once()
         self.assertEqual(self.status().active_app_count, 1)
 
@@ -309,8 +311,7 @@ class SteamFreeGamesNotifierTest(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(self.status().running)
         self.assertIn("資料庫寫入失敗", self.status().last_error)
         self.guild.unavailable = False
-        state = steam_state(SimpleNamespace(steam_free_games=self.notifier, guild=self.guild, guild_id=G,
-                                           _bot=SimpleNamespace(get_guild=lambda _: self.guild)))
+        state = steam_state(SimpleNamespace(steam_free_games=self.notifier, guild=self.guild, guild_id=G, live=self.live))
         self.assertEqual(state.label, "需要處理")
         self.assertIn("資料庫寫入失敗", state.summary)
         await self.notifier.close(deadline=asyncio.get_running_loop().time() + 5)
@@ -420,7 +421,6 @@ class SteamFreeGamesNotifierTest(unittest.IsolatedAsyncioTestCase):
 
     async def claim_setup(self) -> SimpleNamespace:
         bot = SimpleNamespace(get_guild={G: self.guild}.get, steam_free_games=self.notifier)
-        self.notifier._client = bot
         self.channel.send.return_value = SimpleNamespace(id=555)
         self.role(1)
         await self.notifier.set_notification_roles(self.guild, [self.roles[1]])

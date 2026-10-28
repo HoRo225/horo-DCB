@@ -1,11 +1,13 @@
 import itertools
 import asyncio
 import unittest
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 import discord
 
 from src.core.adapters.discord.brand import WARN_COLOUR
+from src.core.adapters.discord.live import LiveGuild
 from src.core.adapters.sqlite.db import open_db, transaction
 from src.testing import put_setting
 from src.testing import group, text
@@ -31,7 +33,8 @@ class TempVoiceManagerTest(unittest.IsolatedAsyncioTestCase):
         self.addCleanup(db.close)
         self.tasks = group()
         put_setting(db, VOICE_ENABLED, True)
-        self.manager = TempVoiceManager(db, self.tasks, get_guild=lambda guild_id: self.guild if guild_id == G else None)
+        self.client = SimpleNamespace(get_guild=lambda guild_id: self.guild if guild_id == G else None)
+        self.manager = TempVoiceManager(db, self.tasks, LiveGuild(self.client, G, lambda: False))
         self.assertIsNone(await self.manager.bind_entry(self.guild, self.entry))
 
     def voice(self, channel_id: int | None = None, **attrs: object) -> MagicMock:
@@ -443,7 +446,7 @@ class TempVoiceManagerTest(unittest.IsolatedAsyncioTestCase):
         await self.join_entry(self.member(2))
         first, second = self.created()
         current = [self.guild]
-        self.manager._get_guild = lambda _: current[0]
+        self.client.get_guild = lambda _: current[0]
         replacement = MagicMock(id=G, unavailable=False)
         replacement.get_channel = {ENTRY: self.entry, second.id: second}.get
 
@@ -476,7 +479,7 @@ class TempVoiceManagerTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_current_guild_replacement_prevents_stale_member_move_and_occupied_room_delete(self) -> None:
         current = [self.guild]
-        self.manager._get_guild = lambda _: current[0]
+        self.client.get_guild = lambda _: current[0]
         alice = self.member(1)
         observed = {}
 
@@ -502,7 +505,7 @@ class TempVoiceManagerTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_connect_revoked_in_new_guild_after_creation_does_not_move_creator(self) -> None:
         current = [self.guild]
-        self.manager._get_guild = lambda _: current[0]
+        self.client.get_guild = lambda _: current[0]
         alice = self.member(1)
         observed = {}
 
@@ -529,7 +532,7 @@ class TempVoiceManagerTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.rooms(), 0)
 
     async def test_rebinding_or_recategorizing_entry_during_creation_prevents_move(self) -> None:
-        self.manager._get_guild = lambda _: self.guild
+        self.client.get_guild = lambda _: self.guild
         for change in ("binding", "category"):
             with self.subTest(change=change):
                 put_setting(self.manager.operations.db, VOICE_ENTRY_CHANNEL_ID, ENTRY)
@@ -551,7 +554,7 @@ class TempVoiceManagerTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_missing_current_guild_retains_known_room_and_never_uses_old_objects(self) -> None:
         current = [self.guild]
-        self.manager._get_guild = lambda _: current[0]
+        self.client.get_guild = lambda _: current[0]
         alice = self.member(1)
 
         def create(name, **kwargs):
@@ -568,7 +571,7 @@ class TempVoiceManagerTest(unittest.IsolatedAsyncioTestCase):
         self.guild.create_voice_channel.assert_awaited_once()
 
     async def test_member_leaving_entry_before_create_returns_is_not_moved_back(self) -> None:
-        self.manager._get_guild = lambda _: self.guild
+        self.client.get_guild = lambda _: self.guild
         alice = self.member(1)
 
         def create(name, **kwargs):
@@ -605,27 +608,33 @@ class TempVoiceManagerTest(unittest.IsolatedAsyncioTestCase):
 
 
 class VoiceCogTest(unittest.IsolatedAsyncioTestCase):
+    def cog(self) -> VoiceCog:
+        self.closing = False
+        self.guild = MagicMock(id=G, unavailable=False)
+        bot = MagicMock()
+        bot.get_guild.side_effect = lambda guild_id: self.guild if guild_id == G else None
+        self.bot = bot
+        return VoiceCog(bot, LiveGuild(bot, G, lambda: self.closing))
+
     async def test_ready_reconciles_unless_closing(self) -> None:
-        bot = MagicMock(guild_id=G)
-        bot.temp_voice.reconcile = AsyncMock()
-        bot.unavailable_reason.return_value = None
-        await VoiceCog(bot).on_ready()
-        bot.temp_voice.reconcile.assert_awaited_once_with(bot.get_guild.return_value)
-        bot.unavailable_reason.return_value = "Bot 正在重新啟動，請稍後再試。"
-        await VoiceCog(bot).on_ready()
-        bot.temp_voice.reconcile.assert_awaited_once()
+        cog = self.cog()
+        self.bot.temp_voice.reconcile = AsyncMock()
+        await cog.on_ready()
+        self.bot.temp_voice.reconcile.assert_awaited_once_with(self.guild)
+        self.closing = True
+        await cog.on_ready()
+        self.bot.temp_voice.reconcile.assert_awaited_once()
 
     async def test_channel_delete_only_in_own_guild(self) -> None:
-        bot = MagicMock(guild_id=G)
-        bot.unavailable_reason.return_value = None
-        bot.temp_voice.handle_channel_delete = AsyncMock()
+        cog = self.cog()
+        self.bot.temp_voice.handle_channel_delete = AsyncMock()
         channel = MagicMock()
         channel.guild.id = G + 1
-        await VoiceCog(bot).on_guild_channel_delete(channel)
-        bot.temp_voice.handle_channel_delete.assert_not_awaited()
+        await cog.on_guild_channel_delete(channel)
+        self.bot.temp_voice.handle_channel_delete.assert_not_awaited()
         channel.guild.id = G
-        await VoiceCog(bot).on_guild_channel_delete(channel)
-        bot.temp_voice.handle_channel_delete.assert_awaited_once_with(channel)
+        await cog.on_guild_channel_delete(channel)
+        self.bot.temp_voice.handle_channel_delete.assert_awaited_once_with(channel)
 
 
 

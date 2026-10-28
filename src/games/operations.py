@@ -8,7 +8,7 @@ from uuid import uuid4
 
 import discord
 
-from src.core.adapters.discord import channels
+from src.core.adapters.discord.live import LiveGuild, can_send
 from src.core.adapters.discord.brand import PENDING_CHECK, note_text
 from src.games import access, rana, tables
 from src.games.blackjack import Round
@@ -23,8 +23,9 @@ SEAT_GONE = "這張賭桌已失效，這局沒有結算；請從遊戲大廳重�
 
 
 class GameOperations:
-    def __init__(self, bot, tasks: TaskGroup) -> None:
+    def __init__(self, bot, tasks: TaskGroup, live: LiveGuild) -> None:
         self.bot = bot
+        self._live = live
         self.store = bot.games
         self.records = OperationStore(self.store.db)
         self._tasks = tasks
@@ -64,6 +65,12 @@ class GameOperations:
                     logging.warning("Idle game table %s could not be updated.", table.message.id)
             LIVE_TABLES.pop(table.message.id, None)
 
+    def play_problem(self, guild_id: int | None, channel_id: int | None, member: object | None) -> str | None:
+        return access.play_problem(self._live, self.store, guild_id, channel_id, member)
+
+    def pick_problem(self, interaction: discord.Interaction) -> str | None:
+        return self.play_problem(interaction.guild_id, interaction.channel_id, self._live.member(interaction.user.id))
+
     def table(self, user_id: int) -> SeatView | None:
         posted = self.store.table_of(user_id)
         return LIVE_TABLES.get(posted[1]) if posted else None
@@ -95,35 +102,33 @@ class GameOperations:
         return value
 
     async def _context(self, source, table: SeatView | None, *, refresh: bool = True):
-        bot = self.bot
+        live = self._live
         actor = source.user if hasattr(source, "user") else source.author
         guild_id = getattr(source, "guild_id", None) or source.guild.id
         channel_id = getattr(source, "channel_id", None) or source.channel.id
         if refresh:
             try:
-                guild, actor = await channels.fetch_current_member(bot, guild_id, actor.id)
+                actor = await live.fetch_member(actor.id)
             except ValueError as exc:
                 return None, str(exc)
             except discord.HTTPException:
                 return None, "無法確認你目前的遊戲權限，請稍後再試。"
         else:
-            guild = bot.get_guild(guild_id)
-            if guild is None:
+            if live.guild() is None:
                 return None, "目前無法確認最新的伺服器狀態，請稍後再試。"
-            actor = guild.get_member(actor.id)
+            actor = live.member(actor.id)
             if actor is None:
                 return None, "目前無法確認你的伺服器身分，請稍後再試。"
-        channel = guild.get_channel_or_thread(channel_id)
+        channel = live.channel(channel_id)
         if channel is None:
             return None, "目前無法確認最新的遊戲頻道，請稍後再試。"
-        permissions = channel.permissions_for(actor)
-        if not permissions.view_channel or not permissions.send_messages:
+        if not can_send(channel, actor):
             return None, "你目前無法在這個頻道操作賭桌。"
-        context = SimpleNamespace(client=bot, user=actor, guild=guild, channel=channel,
+        context = SimpleNamespace(client=self.bot, user=actor, channel=channel,
                                   guild_id=guild_id, channel_id=channel_id)
         if table is not None and actor.id != table.player_id:
             return context, "只有開桌的玩家可以操作這張賭桌。"
-        return context, access.play_problem(context)
+        return context, self.play_problem(guild_id, channel_id, actor)
 
     @staticmethod
     def _failure(code: str, text: str) -> dict:

@@ -15,7 +15,6 @@ from src.admin.pages.common import (
     channel_select,
     feature_button,
     footer_note,
-    live_guild,
     no_guild_note,
     role_select,
     spacer,
@@ -57,7 +56,7 @@ class _SteamState:
 def steam_notification_problem(view: AdminPanelView, status: SteamStatus) -> str | None:
     if not view.steam_free_games.enabled:
         return None
-    guild = live_guild(view)
+    guild = view.live.guild()
     if guild is None:
         return None
     if status.channel_id is None:
@@ -229,7 +228,7 @@ async def handle_steam_role_select(
     roles: tuple[discord.Role, ...],
 ) -> None:
     async def work(operation: int) -> Callable[[], None]:
-        guild = live_guild(view)
+        guild = view.live.guild()
         had_roles = bool(view.steam_free_games.status().role_ids)
         if not view.steam_free_games.enabled:
             note = ("info", "Steam 自動通知未開啟，未修改身分組設定。")
@@ -240,7 +239,7 @@ async def handle_steam_role_select(
                 await view.steam_free_games.set_notification_roles(
                     guild,
                     roles,
-                    still_current=lambda: view.is_current(operation) and live_guild(view) is guild,
+                    still_current=lambda: view.is_current(operation) and view.live.guild() is guild,
                     operation_id=interaction_operation_id(interaction),
                 )
             except SteamConfigurationError as exc:

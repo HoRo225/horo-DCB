@@ -8,6 +8,7 @@ import sqlite3
 import aiohttp
 import discord
 
+from src.core.adapters.discord.live import LiveGuild
 from src.core.adapters.sqlite.operations import OperationStore
 from src.core.adapters.sqlite.db import transaction
 
@@ -21,8 +22,9 @@ RETRYABLE = frozenset({
 
 
 class EffectService:
-    def __init__(self, bot, db) -> None:
+    def __init__(self, bot, db, live: LiveGuild) -> None:
         self.bot, self.db = bot, db
+        self._live = live
         self.operations = OperationStore(db)
         self._lock = asyncio.Lock()
         self._closed = False
@@ -34,15 +36,12 @@ class EffectService:
         return self.operations.effects(status=("pending", "unknown", "failed"))
 
     def _current_guild(self, actor_id, still_current):
+        live = self._live
         if (self._closed or type(actor_id) is not int or actor_id <= 0
-            or self.bot.unavailable_reason(self.bot.guild_id)
+            or live.unavailable_reason(live.guild_id)
             or (still_current is not None and not still_current())):
             return None
-        guild = self.bot.get_guild(self.bot.guild_id)
-        if guild is None or guild.id != self.bot.guild_id:
-            return None
-        actor = guild.get_member(actor_id)
-        return guild if actor is not None and actor.guild_permissions.administrator else None
+        return live.guild() if live.admin(actor_id) else None
 
     async def resolve(self, effect_id: str, resolution: str, *, message_id: int | None = None,
                       still_current=None, actor_id: int | None = None) -> str | None:

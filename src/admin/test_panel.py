@@ -137,7 +137,7 @@ class AdminPanelTest(unittest.IsolatedAsyncioTestCase):
         self.codex.cancel = AsyncMock()
         self.codex.request_counts.return_value = (0, 0)
         self.bot = HoroBot(self.codex, guild_id=G, db=db)
-        await self.bot.add_cog(AdminCog(self.bot), guild=discord.Object(id=G))
+        await self.bot.add_cog(AdminCog(self.bot, self.bot.live), guild=discord.Object(id=G))
         self.bot.steam_free_games.provider = AsyncMock()
         self.guild = MagicMock()
         self.guild.id = G
@@ -147,7 +147,6 @@ class AdminPanelTest(unittest.IsolatedAsyncioTestCase):
         self.guild.get_member.return_value.bot = False
         self.guild.get_member.return_value.display_name = "成員"
         self.bot.get_guild = MagicMock(return_value=self.guild)
-        self.bot.temp_voice._get_guild = self.bot.get_guild
         self.channels: dict[int, object] = {}
         self.guild.get_channel.side_effect = self.channels.get
         self.guild.get_role.return_value = None

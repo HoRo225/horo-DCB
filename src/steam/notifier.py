@@ -12,6 +12,7 @@ import aiohttp
 import discord
 
 from src.core.adapters.discord.channels import post_problem, text_channel_problem
+from src.core.adapters.discord.live import LiveGuild
 from src.core.adapters.sqlite.db import transaction
 from src.core.adapters.sqlite.operations import OperationStore
 from src.core.adapters.sqlite.settings import SettingsStore
@@ -29,9 +30,9 @@ STEAM_ROLE_IDS: Setting[list[int]] = Setting("steam.role_ids", [])
 
 
 class SteamFreeGamesNotifier:
-    def __init__(self, db: sqlite3.Connection, guild_id: int, tasks: TaskGroup) -> None:
+    def __init__(self, db: sqlite3.Connection, live: LiveGuild, tasks: TaskGroup) -> None:
         self._db = db
-        self.guild_id = guild_id
+        self._live = live
         self._lock = asyncio.Lock()
         self.provider = SteamOfferProvider()
         self._tasks = tasks
@@ -137,9 +138,8 @@ class SteamFreeGamesNotifier:
                 return
 
             if selected:
-                if self._client is not None:
-                    guild = self._client.get_guild(self.guild_id)
-                if guild is None or guild.id != self.guild_id:
+                guild = self._live.guild()
+                if guild is None:
                     raise SteamConfigurationError("目前無法確認最新的伺服器狀態。")
                 resolved = [guild.get_role(role_id) for role_id in sorted(role_ids)]
                 if any(role is None or role.guild is not guild or role.is_default() for role in resolved):
@@ -174,9 +174,8 @@ class SteamFreeGamesNotifier:
                 return "Bot 正在關閉，無法修改 Steam 通知設定。"
             if still_current is not None and not still_current():
                 return None
-            if self._client is not None:
-                guild = self._client.get_guild(self.guild_id)
-            if guild is None or guild.id != self.guild_id:
+            guild = self._live.guild()
+            if guild is None:
                 return "目前無法確認最新的伺服器狀態，未綁定頻道。"
             channel = guild.get_channel(channel.id)
             if channel is None:
@@ -218,10 +217,9 @@ class SteamFreeGamesNotifier:
         await client.wait_until_ready()
 
         while not self._closing and self.enabled:
-            guild = client.get_guild(self.guild_id)
-            if guild is not None:
+            if self._live.guild() is not None:
                 try:
-                    await self.check_once(guild)
+                    await self.check_once()
                 except sqlite3.Error:
                     self.last_error = "資料庫寫入失敗；自動通知已停止。"
                     logging.exception(
@@ -242,11 +240,6 @@ class SteamFreeGamesNotifier:
     @staticmethod
     def _channel_problem(guild: discord.Guild, channel: object | None) -> str | None:
         return post_problem(guild, channel, "通知頻道")
-
-    def _current_guild(self, guild: discord.Guild) -> discord.Guild | None:
-        if self._client is not None:
-            guild = self._client.get_guild(self.guild_id)
-        return guild if guild is not None and guild.id == self.guild_id and not guild.unavailable else None
 
     def _resolve_notification_roles(
         self,
@@ -292,13 +285,13 @@ class SteamFreeGamesNotifier:
         return message
 
     async def _send_effect(
-        self, guild: discord.Guild, effect: DiscordEffect, *, allow_unknown: bool = False, still_current=None,
+        self, effect: DiscordEffect, *, allow_unknown: bool = False, still_current=None,
     ) -> bool:
         effect = self.operations.get_effect(effect.effect_id)
         if (effect is None or effect.status not in ({"pending", "unknown", "failed"} if allow_unknown else {"pending"})
             or self._closing or not self.enabled or (still_current is not None and not still_current())):
             return False
-        guild = self._current_guild(guild)
+        guild = self._live.guild()
         if guild is None:
             self.last_error = "目前無法確認最新的伺服器狀態，通知仍保留待處理。"
             return False
@@ -334,20 +327,17 @@ class SteamFreeGamesNotifier:
             self._db.execute("INSERT OR IGNORE INTO steam_posted (app_id) VALUES (?)", (offer.app_id,))
         return True
 
-    async def retry_effect(
-        self, effect_id: str, client: discord.Client | None = None, *, allow_unknown: bool = False, still_current=None,
-    ) -> bool:
-        source = client or self._client
+    async def retry_effect(self, effect_id: str, *, allow_unknown: bool = False, still_current=None) -> bool:
         async with self._lock:
             if still_current is not None and not still_current():
                 return False
-            guild = source.get_guild(self.guild_id) if source is not None else None
+            guild = self._live.guild()
             if guild is None:
                 return False
             effect = self.operations.get_effect(effect_id)
             if effect is None or effect.kind != "steam.announce":
                 return False
-            return await self._send_effect(guild, effect, allow_unknown=allow_unknown, still_current=still_current)
+            return await self._send_effect(effect, allow_unknown=allow_unknown, still_current=still_current)
 
     def confirm_effect(self, effect_id: str, *, message_id: int | None = None, skipped: bool = False) -> None:
         with transaction(self._db):
@@ -366,7 +356,7 @@ class SteamFreeGamesNotifier:
             if effect.status != "skipped" or effect.error != "offer-ended"
         }
 
-    async def check_once(self, guild: discord.Guild) -> None:
+    async def check_once(self) -> None:
         if self._closing:
             return
         effects = self.operations.effects(status=("pending", "unknown", "failed"), kind="steam.announce")
@@ -384,7 +374,7 @@ class SteamFreeGamesNotifier:
         async with self._lock:
             if self._closing or not self.enabled:
                 return
-            guild = self._current_guild(guild)
+            guild = self._live.guild()
             if guild is None:
                 self.last_error = "目前無法確認最新的伺服器狀態，通知仍保留待處理。"
                 return
@@ -422,4 +412,4 @@ class SteamFreeGamesNotifier:
                         f"steam:{app_id}:{uuid.uuid4()}", "steam.announce", channel_id, payload, nonce=uuid.uuid4().hex[:24],
                     )
             for effect in self.operations.effects(status="pending", kind="steam.announce"):
-                await self._send_effect(guild, effect)
+                await self._send_effect(effect)

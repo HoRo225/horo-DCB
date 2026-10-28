@@ -16,6 +16,7 @@ from src.ai.formatting import codex_error_text
 from src.codex.instructions import CHAT_INSTRUCTIONS
 from src.codex.model_settings import DEFAULT_MODEL_SETTINGS
 from src.codex.protocol import MAX_PROMPT_CHARACTERS, CodexError, CodexChatReply
+from src.core.adapters.discord.live import LiveGuild
 from src.core.app.supervisor import REQUEST
 from src.testing import AI_CLEANUPS, group, text as _text
 
@@ -78,16 +79,19 @@ class _Codex:
 def _message(content: str = f"<@{BOT}> 你好", *, mention: bool = True, reference=None):
     author = SimpleNamespace(id=USER, bot=False, roles=[])
     progress = SimpleNamespace(edit=AsyncMock(), delete=AsyncMock())
-    guild = SimpleNamespace(
-        id=GUILD,
-        me=SimpleNamespace(display_name="霍蘿"),
-        get_member=lambda user_id: author,
-    )
     channel = SimpleNamespace(
         id=CHANNEL,
         typing=contextlib.nullcontext,
         send=AsyncMock(),
         fetch_message=AsyncMock(),
+        permissions_for=lambda member: discord.Permissions(view_channel=True, send_messages=True),
+    )
+    guild = SimpleNamespace(
+        id=GUILD,
+        unavailable=False,
+        me=SimpleNamespace(display_name="霍蘿"),
+        get_member=lambda user_id: author,
+        get_channel_or_thread=lambda channel_id: channel if channel_id == CHANNEL else None,
     )
     return SimpleNamespace(
         author=author,
@@ -107,9 +111,14 @@ def _message(content: str = f"<@{BOT}> 你好", *, mention: bool = True, referen
     )
 
 
+def _live(message) -> LiveGuild:
+    return LiveGuild(SimpleNamespace(get_guild=lambda guild_id: message.guild), GUILD, lambda: False)
+
+
 async def _handle(message, codex, access=None) -> None:
     await handle_message(
         message,
+        live=_live(message),
         bot_user_id=BOT,
         cleanups=AI_CLEANUPS,
         codex=codex,
@@ -225,7 +234,7 @@ class HandleMessageTests(unittest.IsolatedAsyncioTestCase):
         message = _message()
         codex = _Codex()
         codex.chat.return_value = CodexChatReply("最終答案", restarted=True)
-        await handle_message(message, bot_user_id=BOT, cleanups=AI_CLEANUPS, codex=codex, access=_Access(), bot=SimpleNamespace())
+        await handle_message(message, live=_live(message), bot_user_id=BOT, cleanups=AI_CLEANUPS, codex=codex, access=_Access(), bot=SimpleNamespace())
         self.assertEqual(
             _text(message.channel.send.await_args.kwargs["view"]),
             "-# ℹ️ 已開始新的對話（先前的無法接續） · 第一次來？跟我說「說明」看看我能做什麼\n最終答案",
@@ -236,7 +245,7 @@ class HandleMessageTests(unittest.IsolatedAsyncioTestCase):
         for words in ("說明", "你會什麼？", "你會什麼?"):
             message = _message(f"<@{BOT}>  {words} ")
             codex = _Codex()
-            await handle_message(message, bot_user_id=BOT, cleanups=AI_CLEANUPS, codex=codex, access=_Access(), bot=bot)
+            await handle_message(message, live=_live(message), bot_user_id=BOT, cleanups=AI_CLEANUPS, codex=codex, access=_Access(), bot=bot)
             self.assertIn("<#99>", _text(message.channel.send.await_args.kwargs["view"]))
             codex.try_start_request.assert_not_called()
             codex.chat.assert_not_awaited()
@@ -245,7 +254,7 @@ class HandleMessageTests(unittest.IsolatedAsyncioTestCase):
         for tipped in (True, False):
             message = _message(f"<@{BOT}> 說明一下規則")
             codex = _Codex()
-            await handle_message(message, bot_user_id=BOT, cleanups=AI_CLEANUPS, codex=codex, access=_Access(), bot=SimpleNamespace())
+            await handle_message(message, live=_live(message), bot_user_id=BOT, cleanups=AI_CLEANUPS, codex=codex, access=_Access(), bot=SimpleNamespace())
             codex.chat.assert_awaited_once()
             text = _text(message.channel.send.await_args.kwargs["view"])
             self.assertEqual(text, "-# ℹ️ 第一次來？跟我說「說明」看看我能做什麼\n最終答案" if tipped else "最終答案")
@@ -377,7 +386,7 @@ class HandleMessageTests(unittest.IsolatedAsyncioTestCase):
         codex = _Codex()
         codex.chat.side_effect = sqlite3.OperationalError("locked")
         with self.assertLogs(level="ERROR") as logs:
-            await handle_message(message, bot_user_id=BOT, cleanups=AI_CLEANUPS, codex=codex, access=_Access(), bot=SimpleNamespace())
+            await handle_message(message, live=_live(message), bot_user_id=BOT, cleanups=AI_CLEANUPS, codex=codex, access=_Access(), bot=SimpleNamespace())
         self.assertIn("failed unexpectedly", "\n".join(logs.output))
         self.assertIn(
             codex_error_text("unavailable", "霍蘿"), _text(message.progress.edit.await_args.kwargs["view"])
@@ -545,26 +554,25 @@ class AskOnceTests(unittest.IsolatedAsyncioTestCase):
 class AiCogTest(unittest.IsolatedAsyncioTestCase):
     async def test_losing_allowlisted_role_cancels_member_requests(self) -> None:
         bot = MagicMock()
-        bot.unavailable_reason.return_value = None
+        live = LiveGuild(bot, GUILD, lambda: False)
         bot.ai_settings.enabled = True
         bot.ai_settings.role_ids = frozenset({7})
         bot.codex.cancel = AsyncMock()
         allowed, other = SimpleNamespace(id=7), SimpleNamespace(id=8)
         before = SimpleNamespace(roles=[allowed, other])
         after = SimpleNamespace(roles=[other], id=USER, guild=SimpleNamespace(id=GUILD))
-        await AiCog(bot, requests=group(REQUEST), cleanups=AI_CLEANUPS).on_member_update(before, after)
+        await AiCog(bot, live, requests=group(REQUEST), cleanups=AI_CLEANUPS).on_member_update(before, after)
         bot.codex.cancel.assert_awaited_once_with(GUILD, USER)
         bot.codex.cancel.reset_mock()
         after.roles = [allowed]
         before.roles = [allowed, other]
-        await AiCog(bot, requests=group(REQUEST), cleanups=AI_CLEANUPS).on_member_update(before, after)
+        await AiCog(bot, live, requests=group(REQUEST), cleanups=AI_CLEANUPS).on_member_update(before, after)
         bot.codex.cancel.assert_not_called()
 
     async def test_message_is_a_tracked_request_until_handled(self) -> None:
         bot = MagicMock()
-        bot.unavailable_reason.return_value = None
         requests = group(REQUEST)
-        cog = AiCog(bot, requests=requests, cleanups=AI_CLEANUPS)
+        cog = AiCog(bot, LiveGuild(bot, GUILD, lambda: False), requests=requests, cleanups=AI_CLEANUPS)
         release = asyncio.Event()
         received = {}
 
