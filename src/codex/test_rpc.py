@@ -51,12 +51,15 @@ class RpcTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.server.rejected_upgrades, [])
 
     async def test_wrong_token_never_becomes_ready(self) -> None:
-        client = self.connect("wrong")
-        self.assertFalse(await client.wait_ready(0.3))
+        with self.assertLogs(level="ERROR") as logs:
+            client = self.connect("wrong")
+            self.assertFalse(await client.wait_ready(0.3))
+            self.assertNotEqual(client.phase, Phase.READY)
+            with self.assertRaises(ConnectionLost):
+                await client.request("account/read", {})
+            await client.close()
         self.assertIn(401, self.server.rejected_upgrades)
-        self.assertNotEqual(client.phase, Phase.READY)
-        with self.assertRaises(ConnectionLost):
-            await client.request("account/read", {})
+        self.assertIn("HTTP 401", logs.output[0])
 
     async def test_errors_carry_code_message_and_thread_state(self) -> None:
         await self.ready()

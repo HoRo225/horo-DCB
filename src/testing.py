@@ -66,19 +66,3 @@ def interaction() -> MagicMock:
     fake.client.unavailable_reason.return_value = None
     return fake
 
-
-class Stream:
-    def __init__(self, events: list[object]) -> None:
-        self._events = iter(events)
-
-    def __aiter__(self):
-        return self
-
-    async def __anext__(self):
-        try:
-            return next(self._events)
-        except StopIteration:
-            raise StopAsyncIteration from None
-
-    async def aclose(self) -> None:
-        pass

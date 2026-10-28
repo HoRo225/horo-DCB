@@ -246,22 +246,13 @@ class FrontendIntentTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.actions.snapshot_calls, 1)
         self.assertEqual(self.actions.seen_game[0]["state_token"], "received-token")
 
-    async def test_only_missing_observer_allows_explicit_chat_capability_fallback(self):
+    async def test_intent_failure_never_falls_back_to_chat(self):
         self.codex.intent.side_effect = CodexError("unavailable")
-        self.codex.get_runtime_status = AsyncMock()
-        for index, reason in enumerate(("sdk_callback_observer_unavailable", "unsafe_intent")):
-            with self.subTest(reason=reason):
-                self.codex.chat.reset_mock()
-                self.codex.get_runtime_status.return_value = SimpleNamespace(ready=True, intent_reason=reason)
-                message = FakeMessage(800 + index)
-                with patch("src.ai.discord._read_media", AsyncMock(return_value=([[]], 0, 0, 0))):
-                    await self.handle(message)
-                self.actions.execute_plan.assert_not_awaited()
-                if index == 0:
-                    self.codex.chat.assert_awaited_once()
-                    self.assertIn("這次只能文字回答，沒有執行任何操作", str(message.channel.send.await_args))
-                else:
-                    self.codex.chat.assert_not_awaited()
+        message = FakeMessage(800)
+        with patch("src.ai.discord._read_media", AsyncMock(return_value=([[]], 0, 0, 0))):
+            await self.handle(message)
+        self.actions.execute_plan.assert_not_awaited()
+        self.codex.chat.assert_not_awaited()
 
     async def test_a_lone_help_action_replies_the_public_help_card(self):
         bot = SimpleNamespace(games=SimpleNamespace(channel_id=99))

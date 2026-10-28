@@ -5,9 +5,11 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
+from src import testing
 from src.ai.access import AiSettings
 from src.ai.access_service import AiAccessService
-from src.ai.client import CodexBridgeClient
+from src.codex.conversations import ConversationStore
+from src.codex.service import CodexService
 from src.codex.protocol import CodexError
 from src.state import open_db, set_setting
 
@@ -99,7 +101,7 @@ class AiAccessServiceTests(unittest.IsolatedAsyncioTestCase):
         self.client.archive_scope.assert_not_awaited()
 
     async def test_removing_channel_cancels_only_its_requests(self) -> None:
-        client = CodexBridgeClient("http://codex.invalid", "token")
+        client = CodexService("ws://127.0.0.1:9", "token", ConversationStore(testing.memory_db(self)))
         client.archive_scope = AsyncMock()
         service = AiAccessService(self.access, client)
         deadline = asyncio.get_running_loop().time() + 60

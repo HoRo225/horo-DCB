@@ -176,6 +176,7 @@ class MigrationTest(unittest.TestCase):
         self.assertEqual(tables, {
             "settings", "voice_rooms", "steam_posted",
             "requests", "operations", "discord_effects", "game_tables",
+            "codex_threads", "codex_pending_archives",
         })
 
     def test_unversioned_db_is_stamped_and_keeps_surviving_data(self) -> None:
@@ -240,7 +241,8 @@ INSERT INTO operations (operation_id, kind, inputs, status, result) VALUES
     ('og', 'game_action', '{}', 'running', '{}');
 """)
         raw.close()
-        db = open_db(self.path)
+        with patch("src.state.MIGRATIONS", MIGRATIONS[:12]):
+            db = open_db(self.path)
         self.addCleanup(db.close)
         self.assertEqual(db.execute("PRAGMA user_version").fetchone(), (12,))
         self.assertIsNone(db.execute("SELECT 1 FROM sqlite_master WHERE name = 'lfg_cards'").fetchone())

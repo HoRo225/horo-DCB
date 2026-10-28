@@ -53,13 +53,7 @@ class ImportBoundaryTests(unittest.TestCase):
 
     def test_background_prompts_do_not_load_message_pipeline(self) -> None:
         modules = loaded_modules("src.ai.background")
-        self.assertTrue({"src.ai.discord", "src.ai.images", "src.ai.output", "openai_codex", "pydantic"}.isdisjoint(modules))
-
-    def test_bridge_does_not_load_bot_layers(self) -> None:
-        modules = loaded_modules("src.codex.bridge")
-        self.assertFalse(any(module == "src.ai" or module.startswith("src.ai.") for module in modules))
-        self.assertNotIn("src.state", modules)
-        self.assertNotIn("discord", modules)
+        self.assertTrue({"src.ai.discord", "src.ai.images", "src.ai.output"}.isdisjoint(modules))
 
     def test_codex_does_not_import_ai(self) -> None:
         pattern = re.compile(r"^\s*(?:(?:from|import)\s+(?:src\.ai|\.\.ai)\b|from\s+(?:src|\.\.)\s+import\s+.*\bai\b)", re.M)
@@ -72,18 +66,16 @@ class ImportBoundaryTests(unittest.TestCase):
             with self.subTest(path.name):
                 self.assertIsNone(pattern.search(path.read_text(encoding="utf-8")))
 
-    def test_bot_does_not_load_sdk_layers(self) -> None:
-        modules = loaded_modules("src.bot")
-        sidecar = {
-            "pydantic",
-            "openai_codex",
-            "src.codex.bridge",
-            "src.codex.runtime",
-            "src.codex.sdk",
-            "src.codex.thread_store",
-            "src.codex.turns",
-        }
-        self.assertTrue(sidecar.isdisjoint(modules))
+    def test_nothing_imports_the_codex_sdk_or_pydantic(self) -> None:
+        pattern = re.compile(r"^\s*(?:from|import)\s+(?:openai_codex|pydantic)\b", re.M)
+        for sample in ("import pydantic", "from openai_codex.models import x", "    import openai_codex"):
+            self.assertIsNotNone(pattern.search(sample), sample)
+        self.assertIsNone(pattern.search("import pydantic_extra_types"))
+        root = Path(__file__).parent.parent
+        for path in (*(root / "src").rglob("*.py"), *(root / "tools").rglob("*.py")):
+            with self.subTest(str(path.relative_to(root))):
+                self.assertIsNone(pattern.search(path.read_text(encoding="utf-8")))
+        self.assertTrue({"openai_codex", "pydantic"}.isdisjoint(loaded_modules("src.bot")))
 
     def test_frame_worker_loads_no_ai_layers(self) -> None:
         modules = loaded_modules("src.ai.frames")
@@ -110,7 +102,7 @@ class ImportBoundaryTests(unittest.TestCase):
         for module in ("games.store", "games.blackjack", "games.slots"):
             with self.subTest(module=module):
                 loaded = loaded_modules(f"src.{module}")
-                self.assertTrue({"discord", "openai_codex", "pydantic"}.isdisjoint(loaded))
+                self.assertNotIn("discord", loaded)
                 self.assertFalse(any(name.endswith("views") or name.endswith(".cog") for name in loaded if name.startswith("src.")))
 
     def test_panel_pages_do_not_import_state(self) -> None:

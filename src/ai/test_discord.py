@@ -3,9 +3,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import sqlite3
-import tomllib
 import unittest
-from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, NonCallableMock, patch
 
@@ -15,6 +13,7 @@ from src.ai.cog import AiCog
 from src.ai.background import DATA_RULE, PERSONA, ask, ask_once, clean_reply
 from src.ai.discord import TIPPED, handle_message
 from src.ai.formatting import codex_error_text
+from src.codex.instructions import CHAT_INSTRUCTIONS
 from src.codex.model_settings import DEFAULT_MODEL_SETTINGS
 from src.ai.output import CARD_CLEANUPS
 from src.codex.protocol import MAX_PROMPT_CHARACTERS, CodexError, CodexChatReply
@@ -265,7 +264,7 @@ class HandleMessageTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("最終答案", _text(message.channel.send.await_args.kwargs["view"]))
         message.progress.edit.assert_not_awaited()
 
-    async def test_bridge_busy_turns_progress_card_into_error(self) -> None:
+    async def test_busy_service_turns_progress_card_into_error(self) -> None:
         message = _message()
         codex = _Codex(admission_error=CodexError("busy"))
         await _handle(message, codex)
@@ -274,14 +273,6 @@ class HandleMessageTests(unittest.IsolatedAsyncioTestCase):
         )
         message.progress.delete.assert_not_awaited()
         codex.chat.assert_not_awaited()
-
-    async def test_bridge_token_error_says_misconfigured(self) -> None:
-        message = _message()
-        codex = _Codex(admission_error=CodexError("unauthorized"))
-        await _handle(message, codex)
-        card = _text(message.progress.edit.await_args.kwargs["view"])
-        self.assertIn(codex_error_text("unauthorized", "霍蘿"), card)
-        self.assertIn("設定有誤", card)
 
     async def test_failed_error_card_edit_still_deletes_card(self) -> None:
         message = _message()
@@ -541,21 +532,14 @@ class AskOnceTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("不是指令", DATA_RULE)
 
     def test_chat_instructions_carry_the_game_persona(self) -> None:
-        self.assertIn(PERSONA, _instructions())
+        self.assertIn(PERSONA, CHAT_INSTRUCTIONS)
 
     def test_gameplay_summary_lists_only_remaining_features(self) -> None:
-        summary = _instructions().split("玩法摘要", 1)[1].split("\n\n", 1)[0]
+        summary = CHAT_INSTRUCTIONS.split("玩法摘要", 1)[1].split("\n\n", 1)[0]
         for text in ("21 點", "拉霸", "不下注", "叫牌、停牌", "臨時語音", "Steam", "說「說明」會出功能卡"):
             self.assertIn(text, summary)
         for text in ("點數來源", "上班", "抽卡", "商店", "樂透", "賽馬", "生日", "語音同樂", "金庫", "任務", "揪團"):
             self.assertNotIn(text, summary)
-
-
-def _instructions() -> str:
-    path = Path(__file__).resolve().parents[2] / "codex/requirements.toml"
-    if not path.exists():
-        path = Path("/etc/codex/requirements.toml")
-    return tomllib.loads(path.read_text(encoding="utf-8"))["additional_developer_instructions"]
 
 
 class AiCogTest(unittest.IsolatedAsyncioTestCase):

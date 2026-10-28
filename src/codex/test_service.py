@@ -110,6 +110,21 @@ class ServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotEqual(self.store.get(KEY).thread_id, "gone")
         self.assertEqual(len(self.server.params("thread/start")), 1)
 
+    async def test_thread_not_loaded_on_turn_start_fails_but_keeps_the_conversation(self) -> None:
+        await self.chat()
+        thread_id = self.store.get(KEY).thread_id
+
+        async def resume_without_loading(ws, params):
+            return {"thread": {"id": params["threadId"]}}
+        self.server.handlers["thread/resume"] = resume_without_loading
+        await self.server.drop()
+        await self.server.wait_for(lambda: self.server.methods().count("initialize") == 2)
+        await self.ready()
+        with self.assertRaises(CodexError) as caught:
+            await self.chat()
+        self.assertEqual(caught.exception.code, "unavailable")
+        self.assertEqual(self.store.get(KEY).thread_id, thread_id)
+
     async def test_intent_is_ephemeral_isolated_and_released(self) -> None:
         self.store.bind(KEY, "shared-history", None)
         self.server.script = answer(("final_answer", json.dumps(PLAN.to_payload())))

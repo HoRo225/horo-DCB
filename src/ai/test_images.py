@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import base64
 import io
 import json
 import os
@@ -26,7 +25,6 @@ from src.ai.images import (
     select_message_media,
 )
 from src.codex.protocol import MAX_IMAGE_BYTES
-from src.codex.runtime import _write_images
 
 CDN = "https://cdn.discordapp.com"
 PNG = b"\x89PNG\r\n\x1a\n" + b"\0" * 8
@@ -162,17 +160,6 @@ class ImageBytesTest(unittest.TestCase):
             "另有 1 個媒體無法讀取；另有 2 個媒體逾時未讀取。）",
         )
         self.assertEqual(describe_media([("靜態圖", ("a",))], 0, 0, 0), "")
-
-    def test_write_images_round_trip(self) -> None:
-        images = tuple(
-            f"data:{kind};base64,{base64.b64encode(data).decode()}"
-            for kind, data in (("image/png", PNG), ("image/jpeg", JPEG))
-        )
-        with tempfile.TemporaryDirectory() as directory:
-            paths = _write_images(images, directory)
-            self.assertEqual([os.path.basename(p) for p in paths], ["0.png", "1.jpeg"])
-            with open(paths[0], "rb") as file:
-                self.assertEqual(file.read(), PNG)
 
 
 class ReadMediaTest(unittest.IsolatedAsyncioTestCase):

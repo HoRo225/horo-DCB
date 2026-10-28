@@ -343,7 +343,7 @@ class MainResourceTests(unittest.TestCase):
         from types import SimpleNamespace
 
         db, lock = MagicMock(), MagicMock()
-        config = SimpleNamespace(guild_id=G, codex_bridge_token="fixture", discord_token="fixture")
+        config = SimpleNamespace(guild_id=G, codex_token="fixture", discord_token="fixture")
         bot = MagicMock(_db_safe_to_close=True)
         with (patch("src.bot.AppConfig.from_env", return_value=config),
               patch("logging.basicConfig"),
@@ -358,7 +358,7 @@ class MainResourceTests(unittest.TestCase):
         from types import SimpleNamespace
 
         db, lock = MagicMock(), MagicMock()
-        config = SimpleNamespace(guild_id=G, codex_bridge_token="fixture", discord_token="fixture")
+        config = SimpleNamespace(guild_id=G, codex_token="fixture", discord_token="fixture")
         bot = MagicMock(_db_safe_to_close=False)
         with (patch("src.bot.AppConfig.from_env", return_value=config),
               patch("logging.basicConfig"),
