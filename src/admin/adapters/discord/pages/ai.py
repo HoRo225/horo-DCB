@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING
 import discord
 
 from src.admin.adapters.discord.pages.common import (
+    PendingConfirm,
     status_text,
     defaults,
     feature_button,
@@ -245,6 +246,10 @@ def render_ai(view: AdminPanelView, note: tuple[str, str] | None = None) -> None
                 owner=view.services.ai,
                 render=render_ai,
                 after=_after_ai_toggle,
+                confirm_off=lambda view: (
+                    view.bot_text("確認關閉"),
+                    view.bot_text("關閉後會立即中斷所有進行中的", "請求，成員也無法再使用，直到重新開啟。"),
+                ),
             ),
         )
     )
@@ -375,6 +380,20 @@ async def handle_codex_allowlist(
     await view.run(interaction, work)
 
 
+async def pick_codex_roles(
+    view: AdminPanelView, interaction: discord.Interaction, roles: tuple[discord.Role, ...]
+) -> None:
+    if roles or not view.services.ai.role_ids:
+        await handle_codex_allowlist(view, interaction, roles, roles=True)
+        return
+    await view.ask(interaction, PendingConfirm(
+        view.bot_text("確認清空", "白名單身分組"),
+        view.bot_text("清空後沒有任何人可以使用", "，直到重新選擇身分組。"),
+        "確認清空",
+        lambda i: handle_codex_allowlist(view, i, (), roles=True),
+    ))
+
+
 def render_ai_access(view: AdminPanelView, note: tuple[str, str] | None = None) -> None:
     ai = ai_state(view)
     stale_channel_count, stale_role_count = ai.stale_counts
@@ -423,7 +442,7 @@ def render_ai_access(view: AdminPanelView, note: tuple[str, str] | None = None) 
                     "codex_role",
                     "選擇白名單身分組（清空即暫停）",
                     role_ids,
-                    lambda i, roles: handle_codex_allowlist(view, i, roles, roles=True),
+                    lambda i, roles: pick_codex_roles(view, i, roles),
                     disabled=not view.services.ai.enabled or not channel_ids,
                 )
             ),

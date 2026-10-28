@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING
 
 import discord
 
-from src.admin.adapters.discord.pages.common import footer_note, spacer
+from src.admin.adapters.discord.pages.common import PendingConfirm, Proceed, footer_note, spacer
 from src.ai import (
     DEFAULT_MODEL_SETTINGS,
     ModelChoice,
@@ -33,7 +33,7 @@ EFFORT_LABELS = {
     "ultra": "極致",
 }
 MODEL_PAGE_SIZE = 24
-UNSAVED_NOTE = ("info", "草稿尚未儲存；按「儲存設定」後套用於後續請求。")
+UNSAVED_MARK = "● 尚有未儲存的變更"
 
 
 @dataclass(slots=True)
@@ -47,6 +47,35 @@ class ModelEditor:
 def last_page(catalog: tuple[object, ...]) -> int:
     return max(0, (len(catalog) - 1) // MODEL_PAGE_SIZE)
 
+
+def saved_models(view: AdminPanelView) -> ModelSettings:
+    try:
+        return view.services.ai.models
+    except StoreError, ValueError:
+        return DEFAULT_MODEL_SETTINGS
+
+
+def unsaved(view: AdminPanelView) -> bool:
+    draft = view.state(ModelEditor).draft
+    return draft is not None and draft != saved_models(view)
+
+
+def leave_models(view: AdminPanelView, proceed: Proceed) -> PendingConfirm | None:
+    if not unsaved(view):
+        return None
+
+    async def discard(interaction: discord.Interaction) -> None:
+        view.state(ModelEditor).draft = None
+        await proceed(interaction)
+
+    return PendingConfirm(
+        "捨棄未儲存的變更？",
+        "這次選擇的模型與推理強度不會套用，後續請求仍使用已儲存的設定。",
+        "捨棄",
+        discard,
+        "繼續編輯",
+    )
+
 async def load_models(view: AdminPanelView, operation: int) -> bool:
     editor = view.state(ModelEditor)
     if not view.is_current(operation):
@@ -59,19 +88,9 @@ async def load_models(view: AdminPanelView, operation: int) -> bool:
     if not view.is_current(operation):
         return False
     editor.catalog = catalog
-    try:
-        saved = view.services.ai.models
-    except StoreError, ValueError:
-        saved = DEFAULT_MODEL_SETTINGS
     if editor.draft is None:
-        editor.draft = saved
-    editor.notice = (
-        ("warn", "目前無法取得模型清單；未變更已儲存設定。")
-        if not catalog
-        else UNSAVED_NOTE
-        if editor.draft != saved
-        else None
-    )
+        editor.draft = saved_models(view)
+    editor.notice = ("warn", "目前無法取得模型清單；未變更已儲存設定。") if not catalog else None
     for side in editor.pages:
         editor.pages[side] = min(editor.pages[side], last_page(catalog))
     return True
@@ -175,7 +194,7 @@ async def handle_model_select(
             selected if side == "primary" else editor.draft.primary,
             selected if side == "fallback" else editor.draft.fallback,
         )
-        editor.notice = UNSAVED_NOTE
+        editor.notice = None
         return lambda: render_ai_models(view)
 
     await view.run(interaction, work)
@@ -238,7 +257,8 @@ async def turn_model_page(
 def render_ai_models(view: AdminPanelView) -> None:
     editor = view.state(ModelEditor)
     children = view.header(view.bot_text(after="模型設定"), "ai_models")
-    children.append(discord.ui.TextDisplay("全 Bot 共用；儲存後只影響後續接納的請求。"))
+    marker = f"**{UNSAVED_MARK}**\n" if unsaved(view) else ""
+    children.append(discord.ui.TextDisplay(f"{marker}全 Bot 共用；儲存後只影響後續接納的請求。"))
     pages = last_page(editor.catalog)
     for side, label in (("primary", "主模型"), ("fallback", "備援模型")):
         if side == "fallback":

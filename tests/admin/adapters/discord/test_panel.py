@@ -54,10 +54,6 @@ class OpenTests(PanelCase):
         pending = self.button("待處理項目（1）")
         self.assertEqual((pending.disabled, pending.style), (False, discord.ButtonStyle.primary))
         self.assertEqual(self.title(await self.click(pending)), f"## {ICONS['warn']} 待處理項目")
-        await self.go("Steam 免費遊戲")
-        pending = self.button("待處理項目（1）")
-        self.assertEqual(str(pending.emoji), ICONS["warn"])
-        self.assertEqual(self.title(await self.click(pending)), f"## {ICONS['warn']} 待處理項目")
 
 
 class NavigationTests(PanelCase):
@@ -89,19 +85,20 @@ class NavigationTests(PanelCase):
         clicked.edit_original_response.assert_not_awaited()
         self.assertEqual(self.codex.get_runtime_status.await_count, reads)
 
-    async def test_back_button_returns_to_overview_without_reading_codex(self) -> None:
+    async def test_back_button_reloads_the_overview(self) -> None:
         await self.open_panel()
         await self.go("遊戲大廳")
-        reads = (self.codex.get_runtime_status.await_count, self.codex.get_rate_limits.await_count)
         self.codex.get_rate_limits.return_value = limits(50)
+        with transaction(self.db):
+            self.admin.operations.create_effect("e1", "action.receipt", 700, {})
         clicked = await self.click(self.button("返回總覽"))
         self.assertEqual(self.title(clicked), "## 🏠 管理控制台")
-        self.assertEqual((self.codex.get_runtime_status.await_count, self.codex.get_rate_limits.await_count), reads)
-        self.assertIn("**5 小時**　▰▰▰▰▰▰▰▰▱▱ 剩餘 80%", self.screen(clicked))
+        shown = self.screen(clicked)
+        self.assertIn("**5 小時**　▰▰▰▰▰▱▱▱▱▱ 剩餘 50%", shown)
+        self.assertIn("有 1 項送出結果待核對", shown)
         clicked.response.edit_message.assert_awaited_once()
         with self.assertRaises(StopIteration):
             self.button("返回總覽")
-        self.assertIn("50%", self.screen(await self.click(self.button("重新整理"))))
 
     async def test_page_menu_under_every_page_opens_the_others(self) -> None:
         await self.open_panel()
@@ -113,18 +110,20 @@ class NavigationTests(PanelCase):
             self.menu = item
             return [option.label for option in item.options]
 
-        pages = ["樂奈", "臨時語音", "Steam 免費遊戲", "遊戲大廳", "待處理項目"]
-        self.assertEqual(menu(), pages)
+        pages = ["總覽", "AI・狀態", "AI・權限", "AI・模型", "AI・技術", "臨時語音", "Steam 免費遊戲", "遊戲大廳"]
+        self.assertEqual(menu(), pages[1:])
         self.assertEqual(self.title(await self.choose(self.menu, "games")), "## 🎲 遊戲大廳")
         self.assertEqual(menu(), [page for page in pages if page != "遊戲大廳"])
-        self.guild.me.display_name = "Horo"
-        await self.choose(self.menu, "ai")
-        await self.go("權限")
-        self.assertEqual(menu(), pages[1:])
-        await self.go("返回總覽")
-        self.assertEqual(menu(), ["Horo", *pages[1:]])
+        self.assertEqual(self.title(await self.choose(self.menu, "ai_access")), "## 🔐 樂奈使用權限")
+        self.assertEqual(menu(), [page for page in pages if page != "AI・權限"])
+        self.assertEqual(self.title(await self.choose(self.menu, "ai_tech")), "## 🛠️ 樂奈技術資訊")
+        self.assertEqual(self.title(await self.choose(self.menu, "overview")), "## 🏠 管理控制台")
+        with transaction(self.db):
+            self.admin.operations.create_effect("e1", "action.receipt", 700, {})
+        await self.click(self.button("重新整理"))
+        self.assertEqual(menu(), [*pages[1:], "待處理項目"])
         self.assertEqual(self.title(await self.choose(self.menu, "effects")), f"## {ICONS['warn']} 待處理項目")
-        self.assertEqual(menu(), ["Horo", *pages[1:-1]])
+        self.assertEqual(menu(), pages)
 
     async def test_refresh_redraws_current_page(self) -> None:
         await self.open_panel()

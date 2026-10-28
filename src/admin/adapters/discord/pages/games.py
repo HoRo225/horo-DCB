@@ -65,7 +65,7 @@ def render_games(view: AdminPanelView, note: tuple[str, str] | None = None) -> N
                         i,
                         lambda guild, current: bind_game_channel(view, guild, channel, i, current),
                         render_games,
-                        "已設定遊戲頻道並發布遊戲大廳。",
+                        "已設定遊戲頻道，並已在新頻道重發遊戲大廳。",
                     ),
                 )
             ),

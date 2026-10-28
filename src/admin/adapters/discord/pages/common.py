@@ -27,6 +27,18 @@ def no_guild_note() -> tuple[str, str]:
     return ("warn", "無法取得目前伺服器。")
 
 
+type Proceed = Callable[[discord.Interaction], Awaitable[None]]
+
+
+@dataclass(frozen=True, slots=True)
+class PendingConfirm:
+    title: str
+    consequence: str
+    confirm: str
+    on_confirm: Proceed
+    cancel: str = "取消"
+
+
 @dataclass(frozen=True, slots=True)
 class ChannelState:
     label: str
@@ -129,10 +141,18 @@ def feature_button(
         [AdminPanelView, discord.Interaction, int, bool, object], Awaitable[tuple[str, str] | None]
     ]
     | None = None,
+    confirm_off: Callable[[AdminPanelView], tuple[str, str]] | None = None,
 ) -> discord.ui.Button:
     enabled = getattr(owner, attr)
 
-    async def toggle(interaction: discord.Interaction) -> None:
+    async def click(interaction: discord.Interaction) -> None:
+        if confirm_off is None or not getattr(owner, attr):
+            await toggle(interaction, None)
+            return
+        title, consequence = confirm_off(view)
+        await view.ask(interaction, PendingConfirm(title, consequence, "確認關閉", lambda i: toggle(i, False)))
+
+    async def toggle(interaction: discord.Interaction, target: bool | None) -> None:
         now = time.monotonic()
         if now - view.toggled_at.get(key, float("-inf")) < TOGGLE_REPEAT_SECONDS:
             await view.acknowledge(interaction)
@@ -140,7 +160,7 @@ def feature_button(
         view.toggled_at[key] = now
 
         async def work(operation: int) -> Callable[[], None]:
-            enabled = not getattr(owner, attr)
+            enabled = not getattr(owner, attr) if target is None else target
             if not view.is_current(operation) or not interaction.permissions.administrator:
                 return lambda: render(view, ("warn", "操作已過期或權限已變更。"))
             setter = owner.set_display if attr == "text_display" else owner.set_enabled
@@ -158,7 +178,7 @@ def feature_button(
     return view.button(
         f"toggle_{key}",
         _join("關閉" if enabled else "開啟", label.format(name=view.bot_name)),
-        on_click=toggle,
+        on_click=click,
         style=discord.ButtonStyle.secondary if enabled else discord.ButtonStyle.primary,
         emoji=ICONS["settings"],
     )

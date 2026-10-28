@@ -21,7 +21,7 @@ class GamesPageTests(PanelCase):
         shown = self.screen(await self.choose(self.select("選擇遊戲頻道"), resolved(channel)))
         channel.send.assert_awaited_once()
         self.assertEqual((self.admin.games.channel_id, self.admin.games.hub_message), (800, [800, 801]))
-        self.assertIn("✅ 已設定遊戲頻道並發布遊戲大廳。", shown)
+        self.assertIn("✅ 已設定遊戲頻道，並已在新頻道重發遊戲大廳。", shown)
         self.assertIn("🟢 狀態正常 · **遊戲頻道 <#800>**", shown)
         self.assertIn("**常駐訊息**　已發布", shown)
         self.assertIn(f"https://discord.com/channels/{G}/800/801",

@@ -202,12 +202,6 @@ def render_steam(view: AdminPanelView, note: tuple[str, str] | None = None) -> N
                     style=discord.ButtonStyle.primary,
                     emoji=ICONS["query"],
                 ),
-                view.button(
-                    "steam_effects",
-                    f"待處理項目（{len(view.services.effects.pending())}）",
-                    on_click=lambda i: view.open_page(i, "effects"),
-                    emoji=ICONS["warn"],
-                ),
             ),
         )
     )

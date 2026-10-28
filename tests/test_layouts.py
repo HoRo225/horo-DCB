@@ -1,12 +1,13 @@
 import time
 import unittest
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import discord
 
 from src.admin.adapters.discord.codex_login import CodexLogin
 from src.admin.adapters.discord.pages.ai import AiReadings, render_ai, render_ai_access
 from src.admin.adapters.discord.pages.ai_models import ModelEditor
+from src.admin.adapters.discord.pages.common import PendingConfirm
 from src.admin.adapters.discord.pages.effects import render_effects
 from src.admin.adapters.discord.pages.games import render_games
 from src.admin.adapters.discord.pages.steam import SteamQuery, render_steam
@@ -35,6 +36,8 @@ from tests.support.admin import Admin
 from tests.support.testing import put_setting
 
 G, OWNER, MEMBER = 100, 200, 300
+STEAM_CAP = 34
+MODELS_CAP = 35
 
 
 class LayoutBudgetTest(unittest.IsolatedAsyncioTestCase):
@@ -56,8 +59,9 @@ class LayoutBudgetTest(unittest.IsolatedAsyncioTestCase):
             await self.check_layouts("app emoji icons")
 
     async def check_layouts(self, label: str) -> None:
-        def fits(name: str, view: discord.ui.LayoutView) -> None:
+        def fits(name: str, view: discord.ui.LayoutView) -> int:
             with self.subTest(f"{label}: {name}"):
+                self.assertEqual(sum(1 for _ in view.walk_children()), view.total_children_count)
                 self.assertLessEqual(view.total_children_count, 40)
                 self.assertLessEqual(view.content_length(), 4000)
                 view.to_components()
@@ -77,6 +81,7 @@ class LayoutBudgetTest(unittest.IsolatedAsyncioTestCase):
                     for child in container.children[:-1]:
                         said = child.walk_children() if isinstance(child, discord.ui.Section) else [child]
                         self.assertFalse(any("**樂奈**　" in getattr(i, "content", "") for i in said))
+            return view.total_children_count
 
         card = "<:bj_10H:1234567890123456789>"
         emojis = dict.fromkeys([f"bj_{r}{s}" for r in RANKS for s in SUITS] + ["bj_back"], card)
@@ -120,23 +125,29 @@ class LayoutBudgetTest(unittest.IsolatedAsyncioTestCase):
             view.state(ModelEditor).notice = ("warn", "註" * 60)
             admin.games.set_roles(range(1, 26))
 
+            counts = {}
             for key, page in PAGES.items():
                 page.render(view)
-                fits(key, view)
-                self.assertEqual(view.children[-1].children[-1].children[0].placeholder, "前往其他頁面…")
+                counts[key] = fits(key, view)
+                [menu] = view.children[-1].children[-1].children
+                self.assertEqual(menu.placeholder, "前往其他頁面…")
+                self.assertLessEqual(len(menu.options), 25)
             for render in (render_ai, render_ai_access, render_voice, render_steam, render_games):
                 render(view, ("warn", "註" * 60))
-                fits(f"{render.__name__} with note", view)
+                counts[render.__name__] = fits(f"{render.__name__} with note", view)
                 if render is not render_ai_access:
                     self.assertEqual(len(view.children), 2, render.__name__)
+            self.assertLessEqual(counts["render_steam"], STEAM_CAP)
+            self.assertLessEqual(counts["ai_models"], MODELS_CAP)
             readings, login = view.state(AiReadings), view.state(CodexLogin)
             login.login = DeviceLogin("login-1", "https://auth.openai.com/codex/device", "ABCD-1234")
             render_ai(view, ("warn", "註" * 60))
             fits("render_ai with device code", view)
             readings.codex_status = RuntimeStatus(reason="ready", authenticated=True, plan="plus", last_error="timeout")
-            login.confirm_logout = True
             render_ai(view, ("warn", "註" * 60))
-            fits("render_ai confirming logout", view)
+            fits("render_ai signed in", view)
+            view._render_pending(PendingConfirm("標" * 100, "註" * 300, "確認", AsyncMock()))
+            fits("pending confirmation", view)
             put_setting(db, GAMES_HUB_MESSAGE, [10**18, 10**18])
             render_games(view, ("warn", "註" * 60))
             fits("render_games with hub", view)
@@ -145,6 +156,8 @@ class LayoutBudgetTest(unittest.IsolatedAsyncioTestCase):
             with transaction(db):
                 for n in range(30):
                     admin.operations.create_effect(f"e{n}", "steam.announce", 10**18 + n, {})
+            PAGES["overview"].render(view)
+            fits("overview with pending effects", view)
             render_effects(view)
             fits("effects pending", view)
             render_effects(view, ("warn", "註" * 60))

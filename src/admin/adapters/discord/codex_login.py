@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING
 
 import discord
 
+from src.admin.adapters.discord.pages.common import PendingConfirm
 from src.ai import DeviceLogin, ModelError, RuntimeStatus
 from src.core.adapters.discord.brand import ICONS
 
@@ -22,27 +23,20 @@ type Reload = Callable[[int], Awaitable[bool]]
 class CodexLogin:
     login: DeviceLogin | None = None
     task: asyncio.Task[None] | None = None
-    confirm_logout: bool = False
 
 
 def account_items(
     view: AdminPanelView, status: RuntimeStatus, redraw: Redraw, reload: Reload,
 ) -> tuple[discord.ui.Item, ...]:
     flow = view.state(CodexLogin)
-    if status.authenticated and flow.confirm_logout:
-        return (
-            discord.ui.TextDisplay("### 確認登出 Codex\n登出後 AI 功能會停止，直到再次登入。"),
-            discord.ui.ActionRow(
-                view.button("logout_confirm", "確認登出", on_click=lambda interaction: _logout(view, interaction, redraw, reload),
-                            style=discord.ButtonStyle.danger, emoji=ICONS["leave"]),
-                view.button("logout_cancel", "取消", on_click=lambda interaction: _ask_logout(view, interaction, False, redraw),
-                            emoji=ICONS["cancel"]),
-            ),
-        )
     if status.authenticated:
+        logout = PendingConfirm(
+            "確認登出 Codex", "登出後 AI 功能會停止，直到再次登入。", "確認登出",
+            lambda interaction: _logout(view, interaction, redraw, reload),
+        )
         return (discord.ui.Section(
             "### Codex 帳號\n已登入 ChatGPT 帳號。",
-            accessory=view.button("logout", "登出", on_click=lambda interaction: _ask_logout(view, interaction, True, redraw),
+            accessory=view.button("logout", "登出", on_click=lambda interaction: view.ask(interaction, logout),
                                   emoji=ICONS["leave"]),
         ),)
     if status.reason != "auth_required":
@@ -114,17 +108,8 @@ async def _cancel_login(view: AdminPanelView, interaction: discord.Interaction, 
     await view.run(interaction, work)
 
 
-async def _ask_logout(view: AdminPanelView, interaction: discord.Interaction, confirm: bool, redraw: Redraw) -> None:
-    async def work(operation: int) -> Callable[[], None]:
-        view.state(CodexLogin).confirm_logout = confirm
-        return lambda: redraw(None)
-
-    await view.run(interaction, work)
-
-
 async def _logout(view: AdminPanelView, interaction: discord.Interaction, redraw: Redraw, reload: Reload) -> None:
     async def work(operation: int) -> Callable[[], None] | None:
-        view.state(CodexLogin).confirm_logout = False
         try:
             await view.services.codex.logout()
         except ModelError:

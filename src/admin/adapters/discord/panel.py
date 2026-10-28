@@ -9,8 +9,8 @@ from typing import Any
 import discord
 
 from src.admin.adapters.discord.pages.ai import load_ai, render_ai, render_ai_access, render_ai_tech
-from src.admin.adapters.discord.pages.ai_models import load_models, render_ai_models
-from src.admin.adapters.discord.pages.common import IDLE_TIMEOUT_SECONDS
+from src.admin.adapters.discord.pages.ai_models import leave_models, load_models, render_ai_models
+from src.admin.adapters.discord.pages.common import IDLE_TIMEOUT_SECONDS, PendingConfirm, Proceed
 from src.admin.adapters.discord.pages.games import render_games
 from src.admin.adapters.discord.pages.effects import render_effects
 from src.admin.adapters.discord.pages.overview import render_overview
@@ -37,38 +37,31 @@ QUICK_REPLY_SECONDS = 1.5
 @dataclass(frozen=True)
 class Page:
     key: str
+    label: str
     description: str
     emoji: str
     render: Callable[[AdminPanelView], None]
     load: Callable[[AdminPanelView, int], Awaitable[bool]] | None = None
+    tab: tuple[str, str] | None = None
+    listed: Callable[[AdminPanelView], bool] = lambda view: True
+    leave: Callable[[AdminPanelView, Proceed], PendingConfirm | None] | None = None
 
 
 PAGES = {
     page.key: page
     for page in (
-        Page("overview", "控制台首頁", "overview", render_overview, load_ai),
-        Page("ai", "狀態與額度", "ai", render_ai, load_ai),
-        Page("ai_access", "頻道與身分組白名單", "access", render_ai_access),
-        Page("ai_models", "主模型、備援與推理強度", "models", render_ai_models, load_models),
-        Page("ai_tech", "版本、工作與安全邊界", "tech", render_ai_tech, load_ai),
-        Page("voice", "入口頻道與同步狀態", "voice", render_voice),
-        Page("steam", "通知設定與手動查詢", "steam", render_steam),
-        Page("games", "頻道與身分組", "games", render_games),
-        Page("effects", "核對通知與資源的待處理結果", "warn", render_effects),
+        Page("overview", "總覽", "控制台首頁", "overview", render_overview, load_ai),
+        Page("ai", "AI・狀態", "狀態與額度", "ai", render_ai, load_ai, tab=("狀態", "status")),
+        Page("ai_access", "AI・權限", "頻道與身分組白名單", "access", render_ai_access, tab=("權限", "access")),
+        Page("ai_models", "AI・模型", "主模型、備援與推理強度", "models", render_ai_models, load_models,
+             tab=("模型", "models"), leave=leave_models),
+        Page("ai_tech", "AI・技術", "版本、工作與安全邊界", "tech", render_ai_tech, load_ai, tab=("技術", "tech")),
+        Page("voice", "臨時語音", "入口頻道與同步狀態", "voice", render_voice),
+        Page("steam", "Steam 免費遊戲", "通知設定與手動查詢", "steam", render_steam),
+        Page("games", "遊戲大廳", "頻道與身分組", "games", render_games),
+        Page("effects", "待處理項目", "核對通知與資源的待處理結果", "warn", render_effects,
+             listed=lambda view: bool(view.services.effects.pending())),
     )
-}
-AI_TABS = {
-    "ai": ("狀態", "status"),
-    "ai_access": ("權限", "access"),
-    "ai_models": ("模型", "models"),
-    "ai_tech": ("技術", "tech"),
-}
-NAV_PAGES = {
-    "ai": "{name}",
-    "voice": "臨時語音",
-    "steam": "Steam 免費遊戲",
-    "games": "遊戲大廳",
-    "effects": "待處理項目",
 }
 
 
@@ -92,6 +85,7 @@ class AdminPanelView(ErrorNotice, discord.ui.LayoutView):
         self._control_cache: dict[tuple[object, ...], discord.ui.Item] = {}
         self._desired_children: tuple[discord.ui.Item, ...] | None = None
         self._published_children: tuple[discord.ui.Item, ...] | None = None
+        self._pending: PendingConfirm | None = None
 
     async def open_panel(self, interaction: discord.Interaction) -> None:
         published = False
@@ -177,11 +171,50 @@ class AdminPanelView(ErrorNotice, discord.ui.LayoutView):
         item.label, item.style, item.disabled, item.emoji = label, style, disabled, emoji and tint(emoji, style)
         return item
 
-    async def open_page(self, interaction: discord.Interaction, key: str) -> None:
-        if key == self.page and self._layout_is_published():
+    async def open_page(self, interaction: discord.Interaction, key: str, *, reload: bool = False) -> None:
+        if not reload and key == self.page and self._layout_is_published():
+            await self.acknowledge(interaction)
+            return
+
+        async def proceed(interaction: discord.Interaction) -> None:
+            await self.show(interaction, PAGES[key])
+
+        here = PAGES.get(self.page)
+        if here is not None and here.leave is not None and (pending := here.leave(self, proceed)) is not None:
+            await self.ask(interaction, pending)
+        else:
+            await proceed(interaction)
+
+    async def ask(self, interaction: discord.Interaction, pending: PendingConfirm) -> None:
+        async def work(operation: int) -> Callable[[], None]:
+            return lambda: self._render_pending(pending)
+
+        await self.run(interaction, work)
+
+    def _render_pending(self, pending: PendingConfirm) -> None:
+        self.set_items(
+            discord.ui.Container(
+                discord.ui.TextDisplay(f"### {ICONS['warn']} {pending.title}\n{pending.consequence}"),
+                discord.ui.ActionRow(
+                    self.button("pending_confirm", pending.confirm, on_click=self._confirm_pending,
+                                style=discord.ButtonStyle.danger, emoji=ICONS["warn"]),
+                    self.button("pending_cancel", pending.cancel, on_click=self._cancel_pending,
+                                emoji=ICONS["back"]),
+                ),
+                accent_colour=WARN_COLOUR,
+            )
+        )
+        self._pending = pending
+
+    async def _confirm_pending(self, interaction: discord.Interaction) -> None:
+        pending, self._pending = self._pending, None
+        if pending is None:
             await self.acknowledge(interaction)
         else:
-            await self.show(interaction, PAGES[key])
+            await pending.on_confirm(interaction)
+
+    async def _cancel_pending(self, interaction: discord.Interaction) -> None:
+        await self.show(interaction, PAGES[self.page], load=False)
 
     async def refresh(self, page: str, render: Callable[[], None]) -> None:
         interaction = self._interaction
@@ -204,6 +237,7 @@ class AdminPanelView(ErrorNotice, discord.ui.LayoutView):
         await self.run(interaction, work)
 
     def set_items(self, *items: discord.ui.Item) -> None:
+        self._pending = None
         self.clear_items()
         for item in items:
             self.add_item(item)
@@ -232,7 +266,6 @@ class AdminPanelView(ErrorNotice, discord.ui.LayoutView):
     def _page_menu(self) -> tuple[discord.ui.ActionRow, ...]:
         if self.page not in PAGES:
             return ()
-        here = "ai" if self.page in AI_TABS else self.page
         menu = self.control(
             ("select", "page_menu"),
             lambda: discord.ui.Select(placeholder="前往其他頁面…", min_values=1, max_values=1),
@@ -240,13 +273,10 @@ class AdminPanelView(ErrorNotice, discord.ui.LayoutView):
         )
         menu.options = [
             discord.SelectOption(
-                label=label.format(name=self.bot_name),
-                value=key,
-                emoji=ICONS[PAGES[key].emoji],
-                description=PAGES[key].description,
+                label=page.label, value=page.key, emoji=ICONS[page.emoji], description=page.description
             )
-            for key, label in NAV_PAGES.items()
-            if key != here
+            for page in PAGES.values()
+            if page.key != self.page and page.listed(self)
         ]
         return (discord.ui.ActionRow(menu),)
 
@@ -279,26 +309,27 @@ class AdminPanelView(ErrorNotice, discord.ui.LayoutView):
         else:
             back = self.button(
                 "back",
-                "返回總覽",
-                on_click=lambda interaction: self.show(interaction, PAGES["overview"], load=False),
+                f"返回{PAGES['overview'].label}",
+                on_click=lambda interaction: self.open_page(interaction, "overview"),
                 emoji=ICONS["back"],
             )
             top = card_title(heading, subtitle, accessory=back)
         children: list[discord.ui.Item] = [top]
-        if page in AI_TABS:
+        if info.tab is not None:
             children.append(
                 discord.ui.ActionRow(
                     *(
                         self.button(
-                            f"tab_{key}",
-                            label,
-                            on_click=lambda interaction, key=key: self.open_page(interaction, key),
+                            f"tab_{tab.key}",
+                            tab.tab[0],
+                            on_click=lambda interaction, key=tab.key: self.open_page(interaction, key),
                             style=discord.ButtonStyle.primary
-                            if key == page
+                            if tab.key == page
                             else discord.ButtonStyle.secondary,
-                            emoji=ICONS[icon],
+                            emoji=ICONS[tab.tab[1]],
                         )
-                        for key, (label, icon) in AI_TABS.items()
+                        for tab in PAGES.values()
+                        if tab.tab is not None
                     )
                 )
             )
@@ -313,7 +344,7 @@ class AdminPanelView(ErrorNotice, discord.ui.LayoutView):
                     self.button(
                         "refresh",
                         "重新整理",
-                        on_click=lambda interaction: self.show(interaction, PAGES[self.page]),
+                        on_click=lambda interaction: self.open_page(interaction, self.page, reload=True),
                         emoji=ICONS["refresh"],
                     )
                 ]

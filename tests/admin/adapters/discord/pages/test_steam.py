@@ -1,5 +1,6 @@
 import unittest
 
+from src.core.adapters.sqlite.db import transaction
 from src.steam import SteamOffer
 from src.steam.adapters.sqlite.store import STEAM_CHANNEL_ID
 from tests.support.admin import PanelCase, resolved, text_channel
@@ -23,6 +24,14 @@ class SteamPageTests(PanelCase):
         self.admin.offers.result = None
         shown = self.screen(await self.click(self.button("重新查詢")))
         self.assertIn("### 查詢結果\n目前無法取得 Steam 資料。", shown)
+
+    async def test_page_has_no_pending_items_button(self) -> None:
+        with transaction(self.db):
+            self.admin.operations.create_effect("e1", "action.receipt", 700, {})
+        await self.open_panel()
+        await self.go("Steam 免費遊戲")
+        self.assertEqual(self.labels(), ["返回總覽", "開啟 Steam 自動通知", "重新查詢", "重新整理"])
+        self.assertIn("待處理項目", [option.label for option in self.select("前往其他頁面…").options])
 
     async def test_toggle_and_notification_roles(self) -> None:
         self.channels[700] = text_channel(700, self.guild)

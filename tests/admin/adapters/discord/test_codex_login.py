@@ -1,7 +1,10 @@
 import asyncio
 import unittest
 
+import discord
+
 from src.ai import ModelError
+from src.core.adapters.discord.brand import ICONS
 from tests.support.admin import LOGGED_OUT, READY, PanelCase
 from tests.support.testing import text
 
@@ -57,9 +60,13 @@ class CodexLogoutTests(PanelCase):
         await self.open_panel()
         await self.go("樂奈")
         shown = self.screen(await self.click(self.button("登出")))
-        self.assertIn("### 確認登出 Codex", shown)
+        self.assertIn(f"### {ICONS['warn']} 確認登出 Codex\n登出後 AI 功能會停止，直到再次登入。", shown)
+        self.assertEqual(self.button("確認登出").style, discord.ButtonStyle.danger)
         self.codex.logout.assert_not_awaited()
-        self.assertNotIn("確認登出 Codex", self.screen(await self.click(self.button("取消"))))
+        shown = self.screen(await self.click(self.button("取消")))
+        self.assertNotIn("確認登出 Codex", shown)
+        self.assertIn("已登入 ChatGPT 帳號。", shown)
+        self.codex.logout.assert_not_awaited()
         await self.click(self.button("登出"))
         self.codex.get_runtime_status.return_value = LOGGED_OUT
         clicked = await self.click(self.button("確認登出"))

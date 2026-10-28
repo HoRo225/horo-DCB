@@ -4,6 +4,7 @@ from unittest.mock import patch
 import discord
 
 from src.ai import RuntimeStatus
+from src.core.adapters.discord.brand import ICONS
 from tests.support.admin import G, PanelCase, resolved, text_channel
 
 
@@ -24,7 +25,8 @@ class AiStatusPageTests(PanelCase):
         await self.go("樂奈")
         self.guild.me.display_name = "Horo"
         reads = self.codex.get_runtime_status.await_count
-        clicked = await self.click(self.button("關閉樂奈"))
+        await self.click(self.button("關閉樂奈"))
+        clicked = await self.click(self.button("確認關閉"))
         self.assertFalse(self.admin.ai.enabled)
         self.assertIn("✅ 已關閉 Horo。", self.screen(clicked))
         self.assertEqual(self.codex.get_runtime_status.await_count, reads + 1)
@@ -34,6 +36,21 @@ class AiStatusPageTests(PanelCase):
         self.assertTrue(self.admin.ai.enabled)
         self.assertIn("✅ 已開啟 Horo。", self.screen(clicked))
         self.codex.cancel.assert_awaited_once()
+
+    async def test_turning_ai_off_asks_first_and_cancel_keeps_it_on(self) -> None:
+        await self.open_panel()
+        await self.go("樂奈")
+        shown = self.screen(await self.click(self.button("關閉樂奈")))
+        self.assertIn(f"### {ICONS['warn']} 確認關閉樂奈\n關閉後會立即中斷所有進行中的樂奈請求", shown)
+        self.assertEqual(self.button("確認關閉").style, discord.ButtonStyle.danger)
+        self.assertEqual(self.button("取消").style, discord.ButtonStyle.secondary)
+        self.assertTrue(self.admin.ai.enabled)
+        self.codex.cancel.assert_not_awaited()
+        shown = self.screen(await self.click(self.button("取消")))
+        self.assertIn("### 目前狀態", shown)
+        self.assertNotIn("確認關閉", shown)
+        self.assertTrue(self.admin.ai.enabled)
+        self.codex.cancel.assert_not_awaited()
 
     async def test_last_codex_error_is_explained_with_its_code(self) -> None:
         self.codex.get_runtime_status.return_value = RuntimeStatus(
@@ -118,7 +135,16 @@ class AiAccessPageTests(PanelCase):
         self.channels[600] = text_channel(600, self.guild)
         self.role(700)
         await self.open_access()
-        shown = self.screen(await self.choose(self.select("選擇白名單身分組（清空即暫停）")))
+        roles = self.select("選擇白名單身分組（清空即暫停）")
+        shown = self.screen(await self.choose(roles))
+        self.assertIn(f"### {ICONS['warn']} 確認清空樂奈白名單身分組\n清空後沒有任何人可以使用樂奈", shown)
+        self.assertEqual(self.admin.ai.role_ids, frozenset({700}))
+        shown = self.screen(await self.click(self.button("取消")))
+        self.assertIn("### 白名單身分組 · 1 個", shown)
+        self.assertEqual([value.id for value in roles.default_values], [700])
+        self.assertEqual(self.admin.ai.role_ids, frozenset({700}))
+        await self.choose(roles)
+        shown = self.screen(await self.click(self.button("確認清空")))
         self.assertEqual(self.admin.ai.role_ids, frozenset())
         self.assertIn("已清除白名單身分組，目前沒有人可以使用樂奈。", shown)
 

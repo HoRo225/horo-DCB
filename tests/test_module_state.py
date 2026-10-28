@@ -11,7 +11,7 @@ CONSTANTS = {
     "admin/adapters/discord/pages/ai_models.py": {"EFFORT_LABELS"},
     "admin/adapters/discord/pages/common.py": {"STATUS_DOTS"},
     "admin/adapters/discord/pages/effects.py": {"STATES"},
-    "admin/adapters/discord/panel.py": {"PAGES", "AI_TABS", "NAV_PAGES"},
+    "admin/adapters/discord/panel.py": {"PAGES"},
     "ai/adapters/discord/actions.py": {"MODEL_CHOICE"},
     "ai/adapters/discord/errors.py": {"_ERROR_TEXT"},
     "ai/adapters/discord/messages.py": {"DENIAL_CODES"},
