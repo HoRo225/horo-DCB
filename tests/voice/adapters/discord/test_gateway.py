@@ -173,12 +173,12 @@ class RemoteTests(GatewayTestCase):
         with self.assertRaises(GatewayError):
             await self.gateway.exists(55)
 
-    async def test_notice_is_a_warning_without_pings(self) -> None:
+    async def test_notice_is_a_warning_that_pings_only_the_member(self) -> None:
         await self.gateway.notify(ENTRY, "<@1>，無法建立。")
         kwargs = self.entry.send.await_args.kwargs
         self.assertIn("<@1>，無法建立。", text(kwargs["view"]))
         self.assertEqual(kwargs["view"].children[0].accent_colour, WARN_COLOUR)
-        self.assertEqual(kwargs["allowed_mentions"].to_dict()["parse"], [])
+        self.assertEqual(kwargs["allowed_mentions"].to_dict(), {"parse": ["users"], "replied_user": True})
         self.entry.send.side_effect = http(discord.HTTPException, 500)
         with self.assertRaises(GatewayError):
             await self.gateway.notify(ENTRY, "x")

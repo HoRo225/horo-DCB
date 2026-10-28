@@ -186,6 +186,7 @@ class DiscordVoiceGateway:
         if channel is None:
             raise GatewayError("notice_channel_unavailable")
         try:
-            await channel.send(view=notice_view(text, "warn"), allowed_mentions=discord.AllowedMentions.none())
+            await channel.send(view=notice_view(text, "warn"),
+                               allowed_mentions=discord.AllowedMentions(everyone=False, users=True, roles=False))
         except TRANSPORT_ERRORS as error:
             raise GatewayError(type(error).__name__) from error
