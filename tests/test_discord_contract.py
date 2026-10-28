@@ -16,8 +16,6 @@ def rendered(node: ast.expr) -> str | None:
 def discord_contract() -> set[str]:
     found = set()
     for path in SRC.rglob("*.py"):
-        if path.name.startswith("test_"):
-            continue
         for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
             keywords = node.keywords if isinstance(node, (ast.Call, ast.ClassDef)) else []
             for keyword in keywords:

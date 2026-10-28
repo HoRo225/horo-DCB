@@ -29,19 +29,20 @@ PERSISTED = {
 }
 
 
-def declarations() -> list[tuple[str, str]]:
-    found = []
-    for path in SRC.rglob("*.py"):
-        if path.name.startswith("test_"):
-            continue
-        module = ".".join(path.relative_to(SRC.parent).with_suffix("").parts)
-        for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
-            if (
-                isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "Setting"
-                and node.args and isinstance(node.args[0], ast.Constant)
-            ):
-                found.append((module, node.args[0].value))
-    return found
+def settings_declared(source: str) -> list[str | None]:
+    return [
+        node.args[0].value if node.args and isinstance(node.args[0], ast.Constant) else None
+        for node in ast.walk(ast.parse(source))
+        if isinstance(node, ast.Call) and (getattr(node.func, "id", None) or getattr(node.func, "attr", None)) == "Setting"
+    ]
+
+
+def declarations() -> list[tuple[str, str | None]]:
+    return [
+        (".".join(path.relative_to(SRC.parent).with_suffix("").parts), key)
+        for path in SRC.rglob("*.py")
+        for key in settings_declared(path.read_text(encoding="utf-8"))
+    ]
 
 
 class SettingsContractTests(unittest.TestCase):
@@ -56,6 +57,15 @@ class SettingsContractTests(unittest.TestCase):
                 if isinstance(value, Setting):
                     declared[value.key] = value.default
         self.assertEqual(declared, PERSISTED)
+
+    def test_settings_are_declared_only_in_sqlite_adapters(self) -> None:
+        for module, key in declarations():
+            with self.subTest(key):
+                self.assertIn(".adapters.sqlite.", module)
+
+    def test_detector_sees_every_spelling(self) -> None:
+        self.assertEqual(settings_declared("A = Setting('a', 1)\nB = settings.Setting(key, [])"), ["a", None])
+        self.assertEqual(settings_declared("setting.get(Setting)"), [])
 
     def test_feature_switches_drive_their_components(self) -> None:
         from src.ai import AiSettings

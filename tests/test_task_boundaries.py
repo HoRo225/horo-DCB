@@ -14,6 +14,13 @@ SCOPED_CHILDREN = {
 }
 
 
+def constructs_groups(tree: ast.AST) -> bool:
+    return any(
+        isinstance(node, ast.Call) and (getattr(node.func, "id", None) or getattr(node.func, "attr", None)) == "TaskGroup"
+        for node in ast.walk(tree)
+    )
+
+
 def spawns(tree: ast.AST) -> int:
     count = 0
     for node in ast.walk(tree):
@@ -36,9 +43,17 @@ class TaskBoundaryTests(unittest.TestCase):
         found = {
             path.relative_to(SRC).as_posix()
             for path in SRC.rglob("*.py")
-            if not path.name.startswith("test_") and spawns(ast.parse(path.read_text(encoding="utf-8")))
+            if spawns(ast.parse(path.read_text(encoding="utf-8")))
         }
         self.assertEqual(found, {SUPERVISOR, *SCOPED_CHILDREN})
+
+    def test_every_task_group_comes_from_the_supervisor_so_shutdown_sees_it(self) -> None:
+        found = {
+            path.relative_to(SRC).as_posix()
+            for path in SRC.rglob("*.py")
+            if constructs_groups(ast.parse(path.read_text(encoding="utf-8")))
+        }
+        self.assertEqual(found, {SUPERVISOR})
 
     def test_detector_sees_every_spelling(self) -> None:
         for source in ("asyncio.create_task(x())", "asyncio.ensure_future(x())", "loop.create_task(x())",
@@ -46,6 +61,10 @@ class TaskBoundaryTests(unittest.TestCase):
             with self.subTest(source):
                 self.assertEqual(spawns(ast.parse(source)), 1)
         self.assertEqual(spawns(ast.parse("group.create_task(x())")), 0)
+        for source in ("TaskGroup('games', WORK)", "supervisor.TaskGroup('x', SCHEDULED)"):
+            with self.subTest(source):
+                self.assertTrue(constructs_groups(ast.parse(source)))
+        self.assertFalse(constructs_groups(ast.parse("supervisor.group('games', WORK)")))
 
 
 if __name__ == "__main__":
