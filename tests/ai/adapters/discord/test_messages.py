@@ -13,7 +13,7 @@ from src.ai.adapters.media.frames import Frames
 from src.ai.adapters.media.images import MediaReader
 from src.ai.adapters.sqlite.store import SqliteAiStore
 from src.ai.domain.conversation import MAX_PROMPT_CHARACTERS
-from src.ai.domain.prompts import CHAIN_NOTE, chat_instructions
+from src.ai.domain.prompts import CHAIN_NOTE, CHAT_INSTRUCTIONS
 from src.core.adapters.discord.live import LiveGuild
 from src.core.adapters.sqlite.db import open_db
 from src.core.app.supervisor import PRESENTATION
@@ -199,7 +199,7 @@ class AnswerTests(unittest.IsolatedAsyncioTestCase):
         await harness.send()
         harness.message.reply.assert_awaited_once()
         self.assertEqual(harness.model.chat.await_args.args[1:3], ("你好", ()))
-        self.assertEqual(harness.model.chat.await_args.kwargs["instructions"], chat_instructions("霍蘿"))
+        self.assertEqual(harness.model.chat.await_args.kwargs["instructions"], CHAT_INSTRUCTIONS)
         self.assertEqual(harness.model.accepted, [f"guild:{GUILD}:channel:{CHANNEL}:user:{USER}"])
         sent = harness.message.channel.send.await_args
         self.assertTrue(sent.args[0].endswith("最終答案"))

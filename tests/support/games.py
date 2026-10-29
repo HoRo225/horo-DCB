@@ -32,14 +32,13 @@ class Screen:
     message_id: int | None
     token: str
     state: TableState
-    taunt: str | None
     farewell: str | None
     closed: bool
 
     @classmethod
     def of(cls, table: LiveTable) -> Screen:
         posted = table.posted
-        return cls(posted and posted.message_id, table.token, table.state, table.taunt, table.farewell, table.closed)
+        return cls(posted and posted.message_id, table.token, table.state, table.farewell, table.closed)
 
 
 class Rigged:
@@ -147,19 +146,6 @@ class FakeReply:
         return [call for call in self.calls if call[0] != "defer"]
 
 
-class FakeRemarks:
-    def __init__(self, line: str | None = None) -> None:
-        self.line = line
-        self.calls: list[tuple[int, dict[str, object]]] = []
-        self.gate: asyncio.Event | None = None
-
-    async def round_line(self, channel_id: int, facts: Mapping[str, object]) -> str | None:
-        self.calls.append((channel_id, dict(facts)))
-        if self.gate is not None:
-            await self.gate.wait()
-        return self.line
-
-
 class FakeBoard:
     def __init__(self) -> None:
         self.channels = {CHANNEL}
@@ -211,7 +197,6 @@ class GameHarness:
         self.board = FakeBoard()
         self.players = FakePlayers()
         self.presenter = FakePresenter()
-        self.remarks = FakeRemarks()
         self.rigged = Rigged()
         self.tasks = TaskGroup("test.games", WORK)
         self.lobby = Lobby(self.store, self.board, self.presence, self.tasks)
@@ -221,7 +206,7 @@ class GameHarness:
 
     def restart(self) -> None:
         self.tables = Tables()
-        self.play = Play(self.store, self.tables, self.lobby, self.players, self.presenter, self.remarks, self.tasks,
+        self.play = Play(self.store, self.tables, self.lobby, self.players, self.presenter, self.tasks,
                          dealer=self.rigged.dealer(), patience=0.05)
 
     def enrol(self, *user_ids: int) -> None:

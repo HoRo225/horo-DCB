@@ -192,11 +192,6 @@ class LayoutBudgetTest(unittest.IsolatedAsyncioTestCase):
                 game.apply("hit")
                 fits("blackjack hit", seat_view(table, host))
             self.assertEqual(len(game.player), 11)
-            table.taunt = "嘴" * 60
-            shown = seat_view(table, host)
-            fits("blackjack settled with line", shown)
-            self.assertTrue(any(f"**{discord.utils.escape_markdown(host)}**　{table.taunt}" in i.content for i in shown.walk_children()
-                                if isinstance(i, discord.ui.TextDisplay)))
             table.farewell = "註" * 60
             fits("blackjack closed idle", seat_view(table, host))
 
@@ -204,11 +199,6 @@ class LayoutBudgetTest(unittest.IsolatedAsyncioTestCase):
             fits("slots open", seat_view(spin, host))
             spin.state = Slots(slots.evaluate((0, 0, 0)))
             fits("slots spun", seat_view(spin, host))
-            spin.taunt = "嘴" * 60
-            shown = seat_view(spin, host)
-            fits("slots spun with line", shown)
-            self.assertTrue(any(f"**{discord.utils.escape_markdown(host)}**　{spin.taunt}" in i.content for i in shown.walk_children()
-                                if isinstance(i, discord.ui.TextDisplay)))
             spin.farewell = "註" * 60
             fits("slots closed idle", seat_view(spin, host))
 

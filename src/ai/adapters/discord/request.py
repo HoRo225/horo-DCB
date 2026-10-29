@@ -28,7 +28,7 @@ from src.ai.adapters.media.images import ImageAttachmentError, MediaItem, MediaR
 from src.ai.app.ports import ActionRunner, GamesChannel, ModelError, NewcomerTips, StoreError, TextModel
 from src.ai.app.settings import AiSettings
 from src.ai.domain.conversation import CLEANUP_SECONDS, WORK_TIMEOUT_SECONDS
-from src.ai.domain.prompts import chat_instructions, chat_prompt
+from src.ai.domain.prompts import CHAT_INSTRUCTIONS, chat_prompt
 from src.core.adapters.discord.brand import ICONS
 from src.core.adapters.discord.confirmations import Confirmations
 from src.core.adapters.discord.live import LiveGuild, can_send as member_can_send, message_source
@@ -245,7 +245,7 @@ class AiRequest:
                                     self.key,
                                     prompt,
                                     images,
-                                    instructions=chat_instructions(self.bot_name),
+                                    instructions=CHAT_INSTRUCTIONS,
                                     job=job,
                                     models=models,
                                     on_progress=progress.update,

@@ -55,11 +55,6 @@ class BlackjackTableTests(unittest.TestCase):
                                               "outcome": "win"})
         self.assertEqual(Blackjack().facts(SYMBOL), {"phase": "between_rounds", "legal_actions": ["deal", "leave_table"]})
 
-    def test_remarks_follow_finished_rounds_only(self) -> None:
-        self.assertIsNone(Blackjack().remark())
-        self.assertIsNone(Blackjack(Round(deck("10", "9", "8", "8"))).remark())
-        self.assertEqual(Blackjack(Round(deck("9", "K", "9", "A"))).remark(), {"結果": "輸"})
-
 
 class SlotsTableTests(unittest.TestCase):
     def test_every_spin_is_a_new_result(self) -> None:
@@ -71,13 +66,10 @@ class SlotsTableTests(unittest.TestCase):
         with self.assertRaises(IllegalMove):
             spun.play("stand", dealer())
 
-    def test_facts_and_remarks_carry_the_result(self) -> None:
+    def test_facts_carry_the_result(self) -> None:
         self.assertEqual(Slots().facts(SYMBOL), {"phase": "between_rounds", "legal_actions": ["deal", "again", "leave_table"]})
-        self.assertIsNone(Slots().remark())
-        spun = Slots(evaluate((10, 20, 30)))
-        facts = spun.facts(SYMBOL)
+        facts = Slots(evaluate((10, 20, 30))).facts(SYMBOL)
         self.assertEqual((facts["multiplier"], facts["summary"], len(facts["result"])), (0, ["# ×0", "沒有連線"], 3))
-        self.assertEqual(spun.remark(), {"倍數": 0})
 
 
 class SnapshotTests(unittest.TestCase):

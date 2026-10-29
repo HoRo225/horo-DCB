@@ -10,7 +10,7 @@ from src.games.adapters.discord.presenter import DiscordLobbyBoard, DiscordTable
 from src.games.adapters.discord.views import lobby_view
 from src.games.app.ports import PresentError
 from src.games.app.tables import LiveTable, Posted
-from src.games.domain.table import Slots
+from src.games.domain.table import Blackjack, Slots
 from tests.support import testing
 from tests.support.discord import Client, Guild
 
@@ -78,10 +78,10 @@ class TableMessageTests(unittest.IsolatedAsyncioTestCase):
         guild = Guild(G).add(self.channel)
         client = Client(guild)
         tables = DiscordTables(client, LiveGuild(client, G, lambda: False), SimpleNamespace())
-        self.table.taunt = "再來"
-        self.assertIn("**HoRo**　再來", testing.text(tables.view(self.table)))
+        table = LiveTable(1, Blackjack(), "a" * 32, Posted(CHANNEL, 20))
+        self.assertIn("比 HoRo 更接近", testing.text(tables.view(table)))
         guild.me = SimpleNamespace(display_name="睦")
-        self.assertIn("**睦**　再來", testing.text(tables.view(self.table)))
+        self.assertIn("比睦更接近", testing.text(tables.view(table)))
         self.assertIn("和睦玩一局", testing.text(lobby_view(tables.host())))
 
     async def test_idle_closed_table_is_edited_into_a_card_without_controls(self) -> None:

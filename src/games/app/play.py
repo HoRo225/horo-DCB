@@ -10,7 +10,7 @@ from uuid import uuid4
 from src.core.app.supervisor import TaskGroup
 from src.core.domain.actions import failure
 from src.games.app.lobby import Lobby
-from src.games.app.ports import GameStore, Player, Players, PresentError, Refused, RemarkWriter, Reply, TablePresenter
+from src.games.app.ports import GameStore, Player, Players, PresentError, Refused, Reply, TablePresenter
 from src.games.app.tables import LiveTable, Posted, Tables
 from src.games.domain.catalog import GAMES
 from src.games.domain.rules import IDLE_SECONDS
@@ -49,14 +49,13 @@ class Move:
 class Play:
     def __init__(
         self, store: GameStore, tables: Tables, lobby: Lobby, players: Players, presenter: TablePresenter,
-        remarks: RemarkWriter, tasks: TaskGroup, *, dealer: Dealer = Dealer(), patience: float = BUSY_SECONDS,
+        tasks: TaskGroup, *, dealer: Dealer = Dealer(), patience: float = BUSY_SECONDS,
     ) -> None:
         self._store = store
         self._tables = tables
         self._lobby = lobby
         self._players = players
         self._presenter = presenter
-        self._remarks = remarks
         self._tasks = tasks
         self._dealer = dealer
         self._patience = patience
@@ -178,9 +177,6 @@ class Play:
             result = self._remember(operation_id, inputs, failure("no_table", NO_TABLE))
         else:
             result = self._move(table, move.action, operation_id, inputs)
-            if result["ok"] and move.action != "leave_table" and (facts := table.state.remark()) is not None:
-                data = {"遊戲": table.game.title, "玩家暱稱": player.display_name, **facts}
-                table.remark = self._tasks.spawn(self._line(move.channel_id, table, table.token, data))
         if reply is not None:
             if not result["ok"]:
                 gone = result["code"] == "seat_gone"
@@ -222,27 +218,13 @@ class Play:
             table.closed = True
             return self._remember(operation_id, inputs, failure("seat_gone", SEAT_GONE))
         self._tables.advance(table.player_id, token)
-        table.token, table.farewell, table.taunt = token, None, None
-        if table.remark is not None:
-            table.remark.cancel()
+        table.token, table.farewell = token, None
         if leaving:
             table.closed = True
             self._tables.discard(table.posted.message_id)
         else:
             table.state = state
         return result
-
-    async def _line(self, channel_id: int, table: LiveTable, token: str, data: Mapping[str, object]) -> None:
-        if not (text := await self._remarks.round_line(channel_id, data)):
-            return
-        async with self._tables.lock(table.player_id):
-            if table.closed or table.token != token:
-                return
-            table.taunt = text
-            try:
-                await self._presenter.edit(table)
-            except PresentError:
-                logging.warning("Rana's line on a %s round could not be shown.", table.game.title)
 
     async def _show(self, table: LiveTable, operation_id: str, reply: Reply | None) -> None:
         effect_id = f"{operation_id}:table-edit"

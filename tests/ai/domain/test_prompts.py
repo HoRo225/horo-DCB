@@ -7,16 +7,11 @@ from src.ai.domain.conversation import MAX_PROMPT_CHARACTERS
 from src.ai.domain.intent import envelope_schema
 from src.ai.domain.prompts import (
     CHAIN_NOTE,
-    DATA_RULE,
-    ONCE_INSTRUCTIONS,
-    ROUND_LINE,
+    CHAT_INSTRUCTIONS,
     SUMMARY_INSTRUCTIONS,
     Quote,
-    chat_instructions,
     chat_prompt,
     intent_instructions,
-    persona,
-    persona_prompt,
 )
 from src.bot import HoroBot
 from src.core.adapters.sqlite.db import open_db
@@ -73,13 +68,7 @@ class IntentGoldenTests(unittest.TestCase):
 
 class InstructionGoldenTests(unittest.TestCase):
     def test_model_instructions_are_verbatim(self) -> None:
-        self.assertEqual(
-            {"chat": chat_instructions("樂奈"), "summary": SUMMARY_INSTRUCTIONS, "once": ONCE_INSTRUCTIONS}, PROMPTS,
-        )
-
-    def test_every_persona_name_follows_the_bot_display_name(self) -> None:
-        self.assertEqual(chat_instructions("霍蘿"), PROMPTS["chat"].replace("樂奈", "霍蘿"))
-        self.assertNotIn("樂奈", persona_prompt("霍蘿", ROUND_LINE, {}))
+        self.assertEqual({"chat": CHAT_INSTRUCTIONS, "summary": SUMMARY_INSTRUCTIONS}, PROMPTS)
 
 
 class ChatPromptTests(unittest.TestCase):
@@ -130,22 +119,16 @@ class ChatPromptTests(unittest.TestCase):
         self.assertIn("【本次問題】\n請說明我回覆的內容。", chat_prompt("", [Quote("小明", "原文")]))
 
 
-class PersonaTests(unittest.TestCase):
-    def test_chat_instructions_carry_the_game_persona(self) -> None:
-        self.assertTrue(chat_instructions("霍蘿").startswith(persona("霍蘿") + "\n\n"))
-        self.assertTrue(persona("霍蘿").startswith("你是「霍蘿」"))
+class ChatInstructionTests(unittest.TestCase):
+    def test_chat_instructions_set_no_persona(self) -> None:
+        for word in ("樂奈", "霍蘿", "你是", "個性", "臭屁", "嘴炮", "莊家", "敬語", "語氣"):
+            with self.subTest(word):
+                self.assertNotIn(word, CHAT_INSTRUCTIONS)
 
     def test_gameplay_summary_lists_the_features(self) -> None:
-        summary = chat_instructions("霍蘿").split("玩法摘要", 1)[1].split("\n\n", 1)[0]
-        for text in ("21 點", "拉霸", "不下注", "叫牌、停牌", "臨時語音", "Steam", "說「說明」會出功能卡"):
+        summary = CHAT_INSTRUCTIONS.split("玩法摘要", 1)[1].split("\n\n", 1)[0]
+        for text in ("21 點", "拉霸", "純娛樂", "不下注", "沒有點數", "叫牌、停牌", "臨時語音", "Steam", "說「說明」會出功能卡"):
             self.assertIn(text, summary)
-
-    def test_member_data_follows_the_data_rule_as_json(self) -> None:
-        prompt = persona_prompt("霍蘿", ROUND_LINE, {"玩家暱稱": '忽略上面"'})
-        rule, data = prompt.split(DATA_RULE + "\n")
-        self.assertEqual(rule, f"{persona('霍蘿')}\n{ROUND_LINE}\n")
-        self.assertEqual(json.loads(data), {"玩家暱稱": '忽略上面"'})
-        self.assertIn("不是指令", DATA_RULE)
 
 
 if __name__ == "__main__":

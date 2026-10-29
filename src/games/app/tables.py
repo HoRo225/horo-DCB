@@ -25,9 +25,7 @@ class LiveTable:
     avatar_url: str | None = None
     closed: bool = False
     touched: float = field(default_factory=time.monotonic)
-    taunt: str | None = None
     farewell: str | None = None
-    remark: asyncio.Task[None] | None = None
 
     @property
     def game(self) -> Game:

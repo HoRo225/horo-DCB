@@ -17,9 +17,8 @@ THREAD_KEY = "guild:1:thread:9"
 SETTINGS = ModelSettings(ModelChoice("gpt-test"), ModelChoice("gpt-backup"))
 PLAN = {"kind": "plan", "actions": [{"name": "help", "params": {}}], "question": ""}
 INSTRUCTIONS = "只回傳符合 schema 的 JSON。"
-CHAT_INSTRUCTIONS = "你是測試用的聊天角色。"
+CHAT_INSTRUCTIONS = "測試用的聊天指示。"
 SUMMARY_INSTRUCTIONS = "只說明結果。"
-ONCE_INSTRUCTIONS = "單次回覆。"
 SCHEMA = {"type": "object", "required": ["kind", "actions", "question"]}
 
 
@@ -70,7 +69,7 @@ class ServiceTests(unittest.IsolatedAsyncioTestCase):
             KEY, {"direct_text": "說明", "context": {"actions": ["help"]}}, instructions=INSTRUCTIONS, schema=SCHEMA,
             parse=nonempty, job=job, models=SETTINGS))
 
-    async def test_chat_starts_a_persistent_thread_with_persona_and_image_input(self) -> None:
+    async def test_chat_starts_a_persistent_thread_with_instructions_and_image_input(self) -> None:
         self.server.script = answer(("commentary", "我查一下"), ("final_answer", "最終答案"), ("partial_answer", "補充"))
         reply = await self.chat("看圖", (PNG,), key=THREAD_KEY, parent=8)
         self.assertEqual(reply.text, "最終答案")
@@ -108,7 +107,7 @@ class ServiceTests(unittest.IsolatedAsyncioTestCase):
         thread_id = self.store.get(KEY).thread_id
         await self.server.wait_for(lambda: self.server.params("thread/unsubscribe") == [{"threadId": thread_id}])
 
-    async def test_later_chats_resume_with_current_persona(self) -> None:
+    async def test_later_chats_resume_with_current_instructions(self) -> None:
         await self.chat()
         await self.chat("再一次")
         self.assertEqual(len(self.server.params("thread/start")), 1)
@@ -229,7 +228,7 @@ class ServiceTests(unittest.IsolatedAsyncioTestCase):
             with self.subTest(code):
                 self.server.script = answer(status="failed", error=error)
                 with self.assertRaises(ModelError) as caught:
-                    await self.run_job(lambda job: self.service.generate_once(KEY, "嘴一句", instructions=ONCE_INSTRUCTIONS, job=job, models=SETTINGS))
+                    await self.run_job(lambda job: self.service.summarize(KEY, [{"ok": True}], instructions=SUMMARY_INSTRUCTIONS, job=job, models=SETTINGS))
                 self.assertEqual(caught.exception.code, code)
         self.assertEqual(self.service.last_error, "usage_limit_or_unavailable")
 
@@ -339,10 +338,12 @@ class ServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.server.methods().count("model/list"), 2)
         self.assertEqual([params["effort"] for params in self.server.params("turn/start")], ["medium", "medium", "high"])
 
-    async def test_requested_effort_overrides_the_model_default(self) -> None:
-        await self.run_job(lambda job: self.service.generate_once(KEY, "嘴一句", instructions=ONCE_INSTRUCTIONS, job=job, models=SETTINGS, effort="high"))
+    async def test_mode_effort_overrides_the_model_default(self) -> None:
+        self.server.models = [{**MODELS[0], "defaultReasoningEffort": "high"}, MODELS[1]]
+        self.server.script = answer(("final_answer", json.dumps(PLAN)))
+        await self.intent()
         (turn,) = self.server.params("turn/start")
-        self.assertEqual((turn["model"], turn["effort"]), ("gpt-test", "high"))
+        self.assertEqual((turn["model"], turn["effort"]), ("gpt-test", "medium"))
 
     async def test_missing_model_is_a_configuration_error(self) -> None:
         with self.assertRaises(ModelError) as caught:

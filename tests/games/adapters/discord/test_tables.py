@@ -104,18 +104,6 @@ class BlackjackViewTests(unittest.TestCase):
         state = Blackjack(Round(deck("10", "10", "8", "6", "K"))).play("stand", None)
         self.assertEqual(texts(tables.seat_view(table(state), "HoRo"))[-1], "### 🏆 你贏了\nHoRo 爆牌")
 
-    def test_line_follows_the_settlement(self) -> None:
-        view = seat_view(table(Blackjack(Round(deck("A", "9", "K", "7"))), taunt="下次再來"))
-        self.assertEqual(layout(view), SETTLED)
-        self.assertTrue(texts(view)[-1].startswith("### ✨ Blackjack！\n起手 21 點\n"))
-        self.assertTrue(testing.text(view).endswith("**睦\\_頭**　下次再來"))
-
-    def test_line_during_a_round_sits_below_its_own_separator(self) -> None:
-        view = seat_view(table(Blackjack(Round(deck("10", "9", "8", "8"))), taunt="叫啊"))
-        self.assertEqual(layout(view), SETTLED)
-        self.assertTrue(texts(view)[-1].endswith("**睦\\_頭**　叫啊"))
-        self.assertNotIn("###", texts(view)[-1])
-
 
 class SlotsViewTests(unittest.TestCase):
     def test_new_table_shows_the_brief_over_an_unknown_board(self) -> None:
@@ -167,7 +155,7 @@ class ControlTests(unittest.TestCase):
 
     def test_closed_idle_table_folds_into_one_line_without_controls(self) -> None:
         settled = Blackjack(Round(deck("10", "9", "8", "7", "5"))).settle()
-        view = seat_view(table(settled, farewell="已閒置結束", taunt="下次再來"))
+        view = seat_view(table(settled, farewell="已閒置結束"))
         self.assertEqual(testing.text(view), "🪑 **已閒置結束**　21 點・<@1>・你輸了")
         self.assertEqual(colour(view), NEUTRAL_COLOUR)
         self.assertEqual([item for item in view.walk_children()
@@ -208,7 +196,7 @@ class RevealTests(unittest.IsolatedAsyncioTestCase):
         shown = []
         clicked = self.interaction(shown)
         await clicked.response.defer()
-        view = SlotsView(table(Slots(evaluate((3, 4, 7))), taunt=None), HOST)
+        view = SlotsView(table(Slots(evaluate((3, 4, 7)))), HOST)
         with patch.object(tables, "SPIN_DELAYS", (0, 0, 0)):
             await view.present(clicked)
         self.assertEqual(len(shown), 4)

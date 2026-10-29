@@ -4,7 +4,7 @@ import asyncio
 
 import discord
 
-from src.core.adapters.discord.brand import BRAND_COLOUR, ICONS, NEUTRAL_COLOUR, card_title, rana_says, tint
+from src.core.adapters.discord.brand import BRAND_COLOUR, ICONS, NEUTRAL_COLOUR, card_title, tint
 from src.core.adapters.discord.live import name_text
 from src.games.adapters.discord.format import (
     ACTION_LABELS,
@@ -55,7 +55,7 @@ class SeatView(discord.ui.LayoutView):
             return
         content, rows = self.compose()
         items = [self.header(), discord.ui.Separator(), discord.ui.TextDisplay(content)]
-        if footer := [*self.settlement(outcome), *self.tail()]:
+        if footer := self.settlement(outcome):
             items += [discord.ui.Separator(), discord.ui.TextDisplay("\n".join(footer))]
         self.add_item(discord.ui.Container(*items, accent_colour=outcome.colour if outcome else BRAND_COLOUR))
         for row in rows:
@@ -78,9 +78,6 @@ class SeatView(discord.ui.LayoutView):
 
     def brief(self) -> str:
         return name_text(self.table.game.brief, self.name)
-
-    def tail(self) -> list[str]:
-        return [rana_says(self.table.taunt, self.host)] if self.table.taunt else []
 
     def button(
         self, action: str, label: str, style: discord.ButtonStyle = discord.ButtonStyle.secondary, emoji: str | None = None,

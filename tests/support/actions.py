@@ -68,7 +68,7 @@ class ActionHarness:
         tasks = TaskGroup("test.games", WORK)
         self.games = Lobby(store, DiscordLobbyBoard(self.client, self.live), self.live, tasks)
         self.play = Play(store, Tables(), self.games, DiscordPlayers(self.live),
-                         DiscordTables(self.client, self.live, self.games), AsyncMock(), tasks)
+                         DiscordTables(self.client, self.live, self.games), tasks)
         self.access = AiAccess(self.ai, self.model, TaskGroup("test.access", WORK))
         registry = ActionRegistry()
         registry.register(

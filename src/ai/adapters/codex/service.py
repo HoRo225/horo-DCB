@@ -40,8 +40,6 @@ CLIENT_VERSION = "1.0.0"
 SERVICE_NAME = "horo-dcb"
 COOLDOWN_SECONDS = 5
 QUEUE_TIMEOUT_SECONDS = 30.0
-QUOTA_PERCENT = 80
-QUOTA_SECONDS = 300
 STATUS_SECONDS = 3.0
 RATE_CACHE_SECONDS = 30.0
 FIRST_EVENT_SECONDS = 45.0
@@ -124,8 +122,6 @@ class CodexService:
         self._archive_loop: asyncio.Task[None] | None = None
         self._rate_cache = RateLimits()
         self._rate_next = 0.0
-        self._quota_full = False
-        self._quota_due = 0.0
         self.last_error: str | None = None
 
     async def start(self) -> None:
@@ -266,23 +262,6 @@ class CodexService:
         self._rate_cache, self._rate_next = limits, now + RATE_CACHE_SECONDS
         return limits
 
-    def quota_full(self) -> bool:
-        now = time.monotonic()
-        if now >= self._quota_due and not self._admission.closed:
-            self._quota_due = now + QUOTA_SECONDS
-            track(self._tasks, asyncio.create_task(self._read_quota()), log=True)
-        return self._quota_full
-
-    async def _read_quota(self) -> None:
-        limits = await self.get_rate_limits()
-        if limits.error is not None:
-            return
-        full = any(window.used_percent >= QUOTA_PERCENT for window in limits.windows)
-        if full != self._quota_full:
-            logging.info("Codex quota %s %d%%; game AI %s.", "reached" if full else "fell below",
-                         QUOTA_PERCENT, "paused" if full else "resumed")
-        self._quota_full = full
-
     async def get_models(self) -> tuple[ModelInfo, ...]:
         entries: list[object] = []
         params: dict[str, object] = {"includeHidden": False}
@@ -371,25 +350,15 @@ class CodexService:
         result, _restarted = await self._turn(mode, key, prompt, (), job, models, None, request_id)
         return ModelReply(result.text.strip())
 
-    async def generate_once(
-        self, key: str, text: str, *, instructions: str, job: Job, models: ModelSettings,
-        request_id: str | None = None, effort: str | None = None,
-    ) -> ModelReply:
-        self._require_job(key, job)
-        mode = Mode("once", instructions, MAX_CHAT_BUDGET_MS)
-        result, _restarted = await self._turn(mode, key, text, (), job, models, None, request_id, effort)
-        return ModelReply(result.text.strip())
-
     async def _turn(
         self, mode: Mode, key: str, text: str, images: tuple[str, ...], job: Job,
-        models: ModelSettings, on_progress: Callable[[str, str], None] | None,
-        request_id: str | None, effort: str | None = None,
+        models: ModelSettings, on_progress: Callable[[str, str], None] | None, request_id: str | None,
     ) -> tuple[TurnResult, bool]:
         loop = asyncio.get_running_loop()
         started = loop.time()
         outcome = "unavailable"
         try:
-            settings = await self._resolve(job, models, effort or mode.effort)
+            settings = await self._resolve(job, models, mode.effort)
             choices: tuple[ModelChoice, ...] = (settings.primary,)
             if mode.fallback and settings.fallback is not None and settings.fallback.model != settings.primary.model:
                 choices += (settings.fallback,)
@@ -621,4 +590,3 @@ class CodexService:
                     future.set_result(True)
         if event.method in ("account/login/completed", "account/updated"):
             self._rate_next = 0.0
-            self._quota_due = 0.0

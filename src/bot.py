@@ -14,7 +14,7 @@ from src.admin.adapters.discord.logins import CodexLogins
 from src.admin.adapters.discord.ports import AdminServices
 from src.admin.adapters.discord.sessions import PanelSessionRegistry
 from src.admin.adapters.discord.status import admin_actions
-from src.ai import AiAccess, AiSettings, AiText
+from src.ai import AiAccess, AiSettings
 from src.ai.adapters.codex.service import LOGIN_SECONDS, CodexService
 from src.ai.adapters.discord.actions import ai_actions
 from src.ai.adapters.discord.cog import AiCog
@@ -94,8 +94,7 @@ def compose(bot: HoroBot, codex: CodexService, db: sqlite3.Connection, guild_id:
     game_store, game_tasks = SqliteGameStore(db), supervisor.group("games", WORK)
     lobby = Lobby(game_store, DiscordLobbyBoard(bot, live), live, game_tasks)
     game_tables, game_players, game_presenter = Tables(), DiscordPlayers(live), DiscordTables(bot, live, lobby)
-    play = Play(game_store, game_tables, lobby, game_players, game_presenter, AiText(ai_settings, codex, live.bot_name),
-                game_tasks)
+    play = Play(game_store, game_tables, lobby, game_players, game_presenter, game_tasks)
     games_cog = GamesCog(bot, play, lobby, game_tables, game_presenter, game_players, live,
                          supervisor.group("games.cog", SCHEDULED))
     panels = PanelSessionRegistry(supervisor.group("admin", PRESENTATION), supervisor.group("admin", WORK))

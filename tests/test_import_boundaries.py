@@ -178,7 +178,7 @@ class FeatureBoundaryTests(unittest.TestCase):
         for module, source in (
             ("src.admin.adapters.discord.pages.games", "from src.games.adapters.discord.access import hub_link"),
             ("src.admin.adapters.discord.pages.ai", "from src.ai.adapters.discord.errors import codex_error_text"),
-            ("src.games.app.play", "from src.ai import AiText"),
+            ("src.games.app.play", "from src.ai import AiSettings"),
             ("src.steam.adapters.discord.cog", "import src.voice"),
         ):
             with self.subTest(source):

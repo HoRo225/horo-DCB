@@ -8,13 +8,6 @@ IDLE_SECONDS = 10 * 60
 NO_LOBBY = "遊戲大廳尚未開放，請等管理員設定遊戲頻道。"
 NO_IDENTITY = "目前無法確認你的伺服器身分，請稍後再試。"
 NO_ROLE = "你沒有使用這個功能的身分組。"
-OUTCOMES = {
-    "win": "贏",
-    "blackjack": "Blackjack",
-    "push": "平手",
-    "lose": "輸",
-    "bust": "爆牌",
-}
 TABLE_RULES = (
     "- 每人一張賭桌，開新桌會刪掉舊桌。\n"
     "- Bot 重新啟動時會收掉所有賭桌，請重新開桌。\n"

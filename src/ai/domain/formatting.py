@@ -2,19 +2,6 @@ from __future__ import annotations
 
 import re
 
-_MENTION = re.compile(r"@(everyone|here|[!&]?[0-9]{17,20})")
-
-
-def escape_mentions(text: str) -> str:
-    return _MENTION.sub("@\u200b\\1", text)
-
-
-def clean_line(text: str | None, limit: int) -> str | None:
-    text = escape_mentions((text or "").strip())
-    if len(text) > limit:
-        text = text[:limit - 1].rstrip() + "…"
-    return text or None
-
 
 def _find_natural_split(text: str, max_chars: int) -> int:
     if len(text) <= max_chars:

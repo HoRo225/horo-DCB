@@ -1,6 +1,6 @@
 import unittest
 
-from src.ai.domain.formatting import clean_line, discord_tables, reasoning_title, split_markdown
+from src.ai.domain.formatting import discord_tables, reasoning_title, split_markdown
 
 NOTICE = "\n\n-# 截斷"
 
@@ -75,16 +75,6 @@ class ReasoningSummaryTests(unittest.TestCase):
         self.assertEqual(reasoning_title("**"), "")
         self.assertEqual(reasoning_title("**整理答案**\n\n<!-- -->"), "整理答案")
         self.assertEqual(reasoning_title("<!-- -->"), "")
-
-
-class CleanLineTests(unittest.TestCase):
-    def test_defuses_mentions_and_trims(self) -> None:
-        self.assertEqual(clean_line("  @everyone 好\n", 50), "@​everyone 好")
-        self.assertEqual(clean_line("<@123456789012345678> 好", 50), "<@​123456789012345678> 好")
-        self.assertEqual(clean_line("一二三四五", 3), "一二…")
-        self.assertEqual(clean_line("一二三", 3), "一二三")
-        self.assertIsNone(clean_line(" ", 5))
-        self.assertIsNone(clean_line(None, 5))
 
 
 if __name__ == "__main__":

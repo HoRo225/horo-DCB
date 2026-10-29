@@ -7,7 +7,6 @@ from typing import ClassVar
 
 from src.games.domain import blackjack, slots
 from src.games.domain.blackjack import Card, Round
-from src.games.domain.rules import OUTCOMES
 from src.games.domain.slots import Spin
 
 type Symbol = Callable[[str], str]
@@ -82,11 +81,6 @@ class Blackjack:
             value["outcome"] = hand.result()
         return value
 
-    def remark(self) -> dict[str, object] | None:
-        if self.hand is None or not self.hand.done:
-            return None
-        return {"結果": OUTCOMES[self.hand.result()]}
-
 
 @dataclass(frozen=True, slots=True)
 class Slots:
@@ -109,9 +103,6 @@ class Slots:
             value.update(result=slots.board(self.spin.grid, symbol), summary=slots.summary(self.spin, symbol),
                          multiplier=self.spin.multiplier)
         return value
-
-    def remark(self) -> dict[str, object] | None:
-        return None if self.spin is None else {"倍數": self.spin.multiplier}
 
 
 type TableState = Blackjack | Slots

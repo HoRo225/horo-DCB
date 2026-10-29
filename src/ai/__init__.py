@@ -11,7 +11,6 @@ from src.ai.app.ports import (
     StoreError,
 )
 from src.ai.app.settings import MAX_CODEX_ALLOWED_CHANNELS, AiSettings
-from src.ai.app.text import AiText
 from src.ai.domain.conversation import (
     CLEANUP_SECONDS,
     MAX_ACTIVE_KEYS,
@@ -38,7 +37,6 @@ __all__ = [
     "MAX_CODEX_ALLOWED_CHANNELS",
     "AiAccess",
     "AiSettings",
-    "AiText",
     "ArchiveResult",
     "DeviceLogin",
     "Job",
