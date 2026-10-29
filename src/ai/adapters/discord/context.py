@@ -118,8 +118,8 @@ def _attachment_kind(attachment: Any) -> str | None:
     return "media"
 
 
-def _discord_media_url(value: Any) -> str | None:
-    for name in ("url", "proxy_url"):
+def _discord_media_url(value: Any, *, proxied: bool = False) -> str | None:
+    for name in ("proxy_url",) if proxied else ("url", "proxy_url"):
         url = getattr(value, name, None)
         if isinstance(url, str) and is_discord_media_url(url):
             return url
@@ -162,7 +162,7 @@ def select_message_media(
         for attachment in getattr(message, "attachments", ()):
             kind = _attachment_kind(attachment)
             if kind is not None:
-                add(kind, _discord_media_url(attachment), f"attachment:{attachment.id}")
+                add(kind, _discord_media_url(attachment, proxied=kind == "video"), f"attachment:{attachment.id}")
 
         content = getattr(message, "content", "")
         if isinstance(content, str):
@@ -171,7 +171,7 @@ def select_message_media(
                 add("media", str(emoji.url), f"emoji:{emoji.id}")
 
         for embed in getattr(message, "embeds", ()):
-            video = _discord_media_url(getattr(embed, "video", None))
+            video = _discord_media_url(getattr(embed, "video", None), proxied=True)
             if video is not None:
                 add("video", video)
             else:

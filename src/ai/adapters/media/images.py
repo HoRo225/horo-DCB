@@ -4,6 +4,7 @@ import asyncio
 import base64
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
+from urllib.parse import urlsplit, urlunsplit
 
 import aiohttp
 
@@ -15,7 +16,6 @@ from src.ai.domain.conversation import (
     is_discord_media_url,
 )
 
-_LABELS = {"video": "影片"}
 MEDIA_CHUNK_BYTES = 64 * 1024
 HTTP_TIMEOUT = aiohttp.ClientTimeout(total=15, connect=3, sock_read=10)
 SUPPORTED_IMAGE_TYPES = {
@@ -72,6 +72,11 @@ class MediaBudget:
         self.output_bytes += len(data)
         self.images_left -= 1
         return f"data:{content_type};base64,{base64.b64encode(data).decode('ascii')}"
+
+
+def first_frame_url(url: str) -> str:
+    scheme, host, path, query, fragment = urlsplit(url)
+    return urlunsplit((scheme, host, path, f"{query}&format=jpeg" if query else "format=jpeg", fragment))
 
 
 def _image_type(data: bytes) -> str | None:
@@ -135,25 +140,26 @@ async def read_message_media(
                 if budget.images_left <= 0:
                     budget.skipped += 1
                     continue
-                data = await fetch(url, budget.source_bytes)
+                data = await fetch(first_frame_url(url) if kind == "video" else url, budget.source_bytes)
                 if data is None:
                     budget.broken += 1
                     continue
                 budget.add_source(len(data))
                 content_type = _image_type(data)
-                if kind == "media" and content_type is None:
+                if content_type is None:
                     budget.broken += 1
                     continue
-                if kind == "media" and not _needs_frames(content_type, data):
-                    result.append(("靜態圖", (budget.data_url(content_type, data),)))
+                if kind == "video" or not _needs_frames(content_type, data):
+                    label = "影片" if kind == "video" else "靜態圖"
+                    result.append((label, (budget.data_url(content_type, data),)))
                     continue
-                sampled = await frames.extract("image" if kind == "media" else kind, data)
+                sampled = await frames.extract(data)
                 if not sampled:
                     budget.broken += 1
                     continue
                 result.append(
                     (
-                        _LABELS.get(kind, "動畫"),
+                        "動畫",
                         tuple(
                             budget.data_url("image/jpeg", frame)
                             for frame in sampled[: budget.images_left]
@@ -194,7 +200,7 @@ def describe_media(items: list[MediaItem], skipped: int, broken: int, timed_out:
         end = start + len(images) - 1
         if label != "靜態圖":
             span = f"圖 {start}" if start == end else f"圖 {start}–{end}"
-            parts.append(f"{span}：{label}依時間順序取樣的 {len(images)} 格")
+            parts.append(f"{span}：影片的第一格" if label == "影片" else f"{span}：{label}依時間順序取樣的 {len(images)} 格")
         start = end + 1
     if skipped:
         parts.append(f"另有 {skipped} 個媒體因數量上限未讀取")

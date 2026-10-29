@@ -51,7 +51,7 @@ class SelectMessageMediaTest(unittest.TestCase):
             [
                 ("media", f"{CDN}/attachments/1/1/a.png"),
                 ("media", f"{CDN}/attachments/1/3/a.gif"),
-                ("video", f"{CDN}/attachments/1/4/clip.mp4"),
+                ("video", "https://media.discordapp.net/attachments/1/4/clip.mp4"),
                 ("media", f"{CDN}/emojis/{EMOJI_ID}.png"),
                 ("media", f"{CDN}/emojis/{ANIMATED_EMOJI_ID}.webp?animated=true"),
                 ("video", f"{CDN}/v.mp4"),

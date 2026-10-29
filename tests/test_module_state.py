@@ -16,7 +16,7 @@ CONSTANTS = {
     "ai/adapters/discord/errors.py": {"_ERROR_TEXT"},
     "ai/adapters/discord/messages.py": {"DENIAL_CODES"},
     "ai/adapters/discord/output.py": {"PROGRESS_OVERRIDES"},
-    "ai/adapters/media/images.py": {"_LABELS", "SUPPORTED_IMAGE_TYPES"},
+    "ai/adapters/media/images.py": {"SUPPORTED_IMAGE_TYPES"},
     "core/adapters/discord/brand.py": {"_TONE_EMOJIS", "_TONE_COLOURS"},
     "games/adapters/discord/format.py": {"SUIT_SYMBOLS", "SLOT_FALLBACK", "ACTION_LABELS", "RESULTS"},
     "games/adapters/discord/tables.py": {"VIEWS"},

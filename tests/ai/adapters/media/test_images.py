@@ -59,17 +59,21 @@ class ReadMediaTest(unittest.IsolatedAsyncioTestCase):
         sampler.extract.assert_not_awaited()
         self.assertEqual(budget.images_left, 9)
 
-    async def test_animations_and_videos_are_sampled(self) -> None:
-        payloads = {
-            "gif": GIF, "apng": encode(("red", "blue"), "PNG"), "awebp": encode(("red", "blue"), "WEBP"),
-            "video": b"\0" * 16,
-        }
-        sources = [("media", "gif"), ("media", "apng"), ("media", "awebp"), ("video", "video")]
-        items, _budget, sampler = await self.read(sources, payloads)
-        self.assertEqual([label for label, _images in items], ["動畫", "動畫", "動畫", "影片"])
-        self.assertEqual([call.args[0] for call in sampler.extract.await_args_list],
-                         ["image", "image", "image", "video"])
+    async def test_animations_are_sampled(self) -> None:
+        payloads = {"gif": GIF, "apng": encode(("red", "blue"), "PNG"), "awebp": encode(("red", "blue"), "WEBP")}
+        items, _budget, sampler = await self.read([("media", name) for name in payloads], payloads)
+        self.assertEqual([label for label, _images in items], ["動畫", "動畫", "動畫"])
+        self.assertEqual([call.args[0] for call in sampler.extract.await_args_list], list(payloads.values()))
         self.assertTrue(all(images[0].startswith("data:image/jpeg;base64,") for _label, images in items))
+
+    async def test_video_reads_the_proxy_first_frame(self) -> None:
+        proxy = "https://media.discordapp.net/attachments/1/2/clip.mp4"
+        payloads = {f"{proxy}?ex=1&hm=2&format=jpeg": JPEG, f"{proxy}?format=jpeg": b"\0" * 16}
+        sources = [("video", f"{proxy}?ex=1&hm=2"), ("video", proxy)]
+        items, budget, sampler = await self.read(sources, payloads)
+        self.assertEqual([(label, image[:22]) for label, (image,) in items], [("影片", "data:image/jpeg;base64")])
+        self.assertEqual(budget.broken, 1)
+        sampler.extract.assert_not_awaited()
 
     async def test_still_png_and_webp_are_not_sampled(self) -> None:
         payloads = {"png": encode(("red",), "PNG"), "webp": encode(("red",), "WEBP"), "jpg": encode(("red",), "JPEG")}
@@ -78,8 +82,8 @@ class ReadMediaTest(unittest.IsolatedAsyncioTestCase):
         sampler.extract.assert_not_awaited()
 
     async def test_broken_sources_are_counted_and_skipped(self) -> None:
-        payloads = {"gone": None, "text": b"not an image", "video": b"\0" * 16, "png": PNG, "svg": b"<svg/>"}
-        sources = [("media", "gone"), ("media", "text"), ("video", "video"), ("broken", "svg"), ("media", "png")]
+        payloads = {"gone": None, "text": b"not an image", "gif": GIF, "png": PNG, "svg": b"<svg/>"}
+        sources = [("media", "gone"), ("media", "text"), ("media", "gif"), ("broken", "svg"), ("media", "png")]
         items, budget, _sampler = await self.read(sources, payloads, frames([]))
         self.assertEqual([label for label, _images in items], ["靜態圖"])
         self.assertEqual(budget.broken, 4)
@@ -149,7 +153,7 @@ class DescribeMediaTest(unittest.TestCase):
             "\n（圖 2–5：動畫依時間順序取樣的 4 格；另有 3 個媒體因數量上限未讀取；"
             "另有 1 個媒體無法讀取；另有 2 個媒體逾時未讀取。）",
         )
-        self.assertEqual(describe_media([("影片", ("a",))], 0, 0, 0), "\n（圖 1：影片依時間順序取樣的 1 格。）")
+        self.assertEqual(describe_media([("影片", ("a",))], 0, 0, 0), "\n（圖 1：影片的第一格。）")
         self.assertEqual(describe_media([("靜態圖", ("a",))], 0, 0, 0), "")
 
 
