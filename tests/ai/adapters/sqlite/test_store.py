@@ -1,5 +1,7 @@
 import sqlite3
+import tempfile
 import unittest
+from pathlib import Path
 
 from src.ai.adapters.sqlite.store import SqliteAiStore
 from src.ai.app.ports import StoreError
@@ -56,6 +58,20 @@ class SqliteAiStoreTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.store.models()
 
+    def test_tip_is_claimed_once_per_user(self) -> None:
+        self.assertEqual([self.store.claim_tip(user) for user in (7, 7, 8)], [True, False, True])
+
+    def test_claimed_tip_survives_a_restart(self) -> None:
+        temp = tempfile.TemporaryDirectory()
+        self.addCleanup(temp.cleanup)
+        path = Path(temp.name) / "horo.db"
+        claims = []
+        for _restart in range(2):
+            db = open_db(path)
+            claims.append(SqliteAiStore(db).claim_tip(7))
+            db.close()
+        self.assertEqual(claims, [True, False])
+
     def test_database_failures_surface_as_store_errors(self) -> None:
         self.db.execute("CREATE TRIGGER reject BEFORE INSERT ON settings BEGIN SELECT RAISE(ABORT, 'disk full'); END")
         with self.assertRaises(StoreError) as caught:
@@ -65,6 +81,9 @@ class SqliteAiStoreTest(unittest.TestCase):
         self.db.execute("DROP TABLE settings")
         with self.assertRaises(StoreError):
             self.store.models()
+        self.db.execute("DROP TABLE ai_tipped")
+        with self.assertRaises(StoreError):
+            self.store.claim_tip(7)
 
 
 if __name__ == "__main__":

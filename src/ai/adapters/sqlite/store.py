@@ -21,6 +21,7 @@ class StorageFailure(StoreError, sqlite3.Error):
 
 class SqliteAiStore:
     def __init__(self, db: sqlite3.Connection) -> None:
+        self._db = db
         self._settings = SettingsStore(db, OperationStore(db))
 
     @contextmanager
@@ -60,3 +61,7 @@ class SqliteAiStore:
     def save_models(self, payload: dict[str, object], *, operation_id: str | None) -> bool:
         with self._saving():
             return self._settings.save("ai.models", payload, {AI_MODELS: payload}, operation_id=operation_id)
+
+    def claim_tip(self, user_id: int) -> bool:
+        with self._saving():
+            return self._db.execute("INSERT OR IGNORE INTO ai_tipped (user_id) VALUES (?)", (user_id,)).rowcount == 1

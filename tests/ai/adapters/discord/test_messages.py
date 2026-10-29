@@ -2,7 +2,7 @@ import asyncio
 import contextlib
 import unittest
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import discord
 
@@ -11,9 +11,11 @@ from src.ai.adapters.discord.errors import codex_error_text
 from src.ai.adapters.discord.messages import AiMessages
 from src.ai.adapters.media.frames import Frames
 from src.ai.adapters.media.images import MediaReader
+from src.ai.adapters.sqlite.store import SqliteAiStore
 from src.ai.domain.conversation import MAX_PROMPT_CHARACTERS
-from src.ai.domain.prompts import CHAT_INSTRUCTIONS
+from src.ai.domain.prompts import chat_instructions
 from src.core.adapters.discord.live import LiveGuild
+from src.core.adapters.sqlite.db import open_db
 from src.core.app.supervisor import PRESENTATION
 from tests.support import testing
 from tests.support.ai import FakeActions, FakeMedia, FakeModel, Games, MemoryAiStore
@@ -50,8 +52,35 @@ def make_message(content: str = f"<@{BOT}> 你好", *, mention: bool = True, ref
     )
 
 
+def history_message(
+    channel: SimpleNamespace, message_id: int, author: SimpleNamespace, content: str, parent: int | None = None,
+    **fields: object,
+) -> SimpleNamespace:
+    reference = None if parent is None else SimpleNamespace(message_id=parent, channel_id=channel.id, resolved=None)
+    return SimpleNamespace(**({
+        "id": message_id, "author": author, "content": content, "channel": channel, "reference": reference,
+        "attachments": [], "embeds": [], "stickers": [], "components": [],
+    } | fields))
+
+
+def serve_history(channel: SimpleNamespace, history: dict[int, object]) -> None:
+    async def fetch(message_id: int) -> object:
+        found = history[message_id]
+        if isinstance(found, BaseException):
+            raise found
+        if found is None:
+            await asyncio.Event().wait()
+        return found
+
+    channel.fetch_message = AsyncMock(side_effect=fetch)
+
+
+MEMBER = SimpleNamespace(id=USER, display_name="小明")
+BOT_AUTHOR = SimpleNamespace(id=BOT, display_name="舊名字")
+
+
 class Harness:
-    def __init__(self, message: SimpleNamespace, **store: object) -> None:
+    def __init__(self, message: SimpleNamespace, *, tips: object | None = None, **store: object) -> None:
         self.message = message
         self.model = FakeModel()
         self.store = MemoryAiStore(**({"channel_ids": (CHANNEL,), "role_ids": (ROLE,)} | store))
@@ -60,7 +89,14 @@ class Harness:
         self.media = FakeMedia()
         live = LiveGuild(SimpleNamespace(get_guild=lambda guild_id: message.guild), GUILD, lambda: False)
         self.messages = AiMessages(live, self.settings, self.model, self.actions, Games(99), self.media,
-                                   cleanups=testing.group(PRESENTATION))
+                                   tips=self.store if tips is None else tips, cleanups=testing.group(PRESENTATION))
+
+    def reply_to(self, history: dict[int, object], nearest: int) -> None:
+        self.message.reference = SimpleNamespace(message_id=nearest, channel_id=CHANNEL, resolved=None)
+        serve_history(self.message.channel, history)
+
+    def prompt(self) -> str:
+        return self.model.chat.await_args.args[1]
 
     async def send(self, message: SimpleNamespace | None = None) -> None:
         await self.messages.handle(message or self.message, BOT)
@@ -162,7 +198,7 @@ class AnswerTests(unittest.IsolatedAsyncioTestCase):
         await harness.send()
         harness.message.reply.assert_awaited_once()
         self.assertEqual(harness.model.chat.await_args.args[1:3], ("你好", ()))
-        self.assertEqual(harness.model.chat.await_args.kwargs["instructions"], CHAT_INSTRUCTIONS)
+        self.assertEqual(harness.model.chat.await_args.kwargs["instructions"], chat_instructions("霍蘿"))
         self.assertEqual(harness.model.accepted, [f"guild:{GUILD}:channel:{CHANNEL}:user:{USER}"])
         sent = harness.message.channel.send.await_args
         self.assertTrue(sent.args[0].endswith("最終答案"))
@@ -188,6 +224,34 @@ class AnswerTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(harness.answered(), "-# ℹ️ 已開始新的對話（先前的無法接續）\n最終答案")
         harness.model.chat.return_value = ModelReply("最終答案")
         await harness.send()
+        self.assertEqual(harness.answered(), "最終答案")
+
+    async def test_tip_is_remembered_across_restarts(self) -> None:
+        db = open_db(":memory:")
+        self.addCleanup(db.close)
+        answers = []
+        for _restart in range(2):
+            harness = Harness(make_message(), tips=SqliteAiStore(db))
+            await harness.send()
+            answers.append(harness.answered())
+        self.assertEqual(answers, [f"-# ℹ️ {TIP}\n最終答案", "最終答案"])
+
+    async def test_failed_answer_keeps_the_tip_for_later(self) -> None:
+        harness = Harness(make_message())
+        harness.model.chat.side_effect = ModelError("unavailable")
+        await harness.send()
+        harness.message.channel.send.assert_not_awaited()
+        harness.model.chat.side_effect = None
+        await harness.send()
+        self.assertEqual(harness.answered(), f"-# ℹ️ {TIP}\n最終答案")
+
+    async def test_unreadable_tip_state_still_answers(self) -> None:
+        db = open_db(":memory:")
+        self.addCleanup(db.close)
+        db.execute("DROP TABLE ai_tipped")
+        harness = Harness(make_message(), tips=SqliteAiStore(db))
+        with self.assertLogs(level="WARNING"):
+            await harness.send()
         self.assertEqual(harness.answered(), "最終答案")
 
     async def test_typing_failure_still_sends_answer(self) -> None:
@@ -227,7 +291,7 @@ class AnswerTests(unittest.IsolatedAsyncioTestCase):
         await harness.send()
         _key, prompt, images = harness.model.chat.await_args.args
         self.assertEqual(images, (f"img:{STICKER_URL}",))
-        self.assertTrue(prompt.startswith("【被回覆的訊息】\n被回覆文字"))
+        self.assertTrue(prompt.startswith("【被回覆的訊息】霍蘿：\n被回覆文字"))
         self.assertIn("這是什麼", prompt)
         self.assertIn("最終答案", harness.answered())
 
@@ -237,6 +301,95 @@ class AnswerTests(unittest.IsolatedAsyncioTestCase):
         await harness.send()
         deadline = harness.media.read.await_args.kwargs["deadline"]
         self.assertLessEqual(deadline, harness.model.job.work_deadline)
+
+
+class ReplyChainTests(unittest.IsolatedAsyncioTestCase):
+    def chain(self, harness: Harness, length: int) -> dict[int, object]:
+        channel = harness.message.channel
+        return {
+            n: history_message(channel, n, BOT_AUTHOR if n % 2 == 0 else MEMBER, f"第 {n} 則", n - 1 if n > 1 else None)
+            for n in range(1, length + 1)
+        }
+
+    async def test_chain_reads_five_messages_oldest_first_with_author_names(self) -> None:
+        harness = Harness(make_message(f"<@{BOT}> 然後呢"))
+        harness.reply_to(self.chain(harness, 7), 7)
+        await harness.send()
+        self.assertEqual(
+            harness.prompt(),
+            "【回覆鏈 1】小明：\n第 3 則\n\n【回覆鏈 2】霍蘿：\n第 4 則\n\n【回覆鏈 3】小明：\n第 5 則\n\n"
+            "【回覆鏈 4】霍蘿：\n第 6 則\n\n【被回覆的訊息】小明：\n第 7 則\n\n【本次問題】\n然後呢",
+        )
+        self.assertEqual([call.args[0] for call in harness.message.channel.fetch_message.await_args_list],
+                         [7, 6, 5, 4, 3])
+
+    async def test_chain_stops_quietly_where_history_cannot_be_read(self) -> None:
+        response = MagicMock(status=404, reason="gone")
+        breaks = {
+            "已刪除": lambda older: setattr(older.reference, "resolved", discord.DeletedReferencedMessage(
+                discord.MessageReference(message_id=1, channel_id=CHANNEL))),
+            "跨頻道": lambda older: setattr(older.reference, "channel_id", CHANNEL + 1),
+            "HTTP 錯誤": lambda older: history.__setitem__(1, discord.NotFound(response, "gone")),
+            "逾時": lambda older: history.__setitem__(1, None),
+        }
+        for name, cut in breaks.items():
+            with self.subTest(name), patch("src.ai.adapters.discord.context.REFERENCE_TIMEOUT_SECONDS", 0.05):
+                harness = Harness(make_message(f"<@{BOT}> 然後呢"))
+                history = self.chain(harness, 3)
+                cut(history[2])
+                harness.reply_to(history, 3)
+                await harness.send()
+                self.assertEqual(
+                    harness.prompt(),
+                    "【回覆鏈 1】霍蘿：\n第 2 則\n\n【被回覆的訊息】小明：\n第 3 則\n\n【本次問題】\n然後呢",
+                )
+                self.assertTrue(harness.answered().endswith("最終答案"))
+                harness.message.progress.edit.assert_not_awaited()
+
+    async def test_chain_reading_stops_at_the_context_deadline(self) -> None:
+        harness = Harness(make_message(f"<@{BOT}> 然後呢"))
+        history = self.chain(harness, 3)
+        history[1] = None
+        harness.reply_to(history, 3)
+        loop = asyncio.get_running_loop()
+        started = loop.time()
+        with patch("src.ai.adapters.discord.request.CONTEXT_TIMEOUT_SECONDS", 0.05):
+            await harness.send()
+        self.assertLess(loop.time() - started, 1)
+        self.assertTrue(harness.prompt().startswith("【回覆鏈 1】霍蘿：\n第 2 則\n\n【被回覆的訊息】小明：\n第 3 則"))
+        self.assertLess(harness.media.read.await_args.kwargs["deadline"], started + 1)
+
+    async def test_long_reply_ends_the_chain_without_more_reads(self) -> None:
+        harness = Harness(make_message(f"<@{BOT}> 然後呢"))
+        history = self.chain(harness, 2)
+        history[2] = history_message(harness.message.channel, 2, MEMBER, "長" * MAX_PROMPT_CHARACTERS, 1)
+        harness.reply_to(history, 2)
+        await harness.send()
+        harness.message.channel.fetch_message.assert_awaited_once_with(2)
+        self.assertTrue(harness.prompt().startswith("【被回覆的訊息】小明：\n長"))
+
+    async def test_only_the_replied_message_and_the_question_lend_media(self) -> None:
+        harness = Harness(make_message(f"<@{BOT}> 看圖"))
+        older_sticker = SimpleNamespace(id=8, url="https://cdn.discordapp.com/stickers/8.png",
+                                        format=SimpleNamespace(name="png"))
+        nearest_sticker = SimpleNamespace(id=7, url=STICKER_URL, format=SimpleNamespace(name="png"))
+        channel = harness.message.channel
+        history = {
+            1: history_message(channel, 1, MEMBER, "舊圖", stickers=[older_sticker]),
+            2: history_message(channel, 2, BOT_AUTHOR, "新圖", 1, stickers=[nearest_sticker]),
+        }
+        harness.reply_to(history, 2)
+        await harness.send()
+        self.assertEqual(harness.media.read.await_args.args[0], [[("media", STICKER_URL)], []])
+        self.assertEqual(harness.model.chat.await_args.args[2], (f"img:{STICKER_URL}",))
+        self.assertIn("【回覆鏈 1】小明：\n舊圖", harness.prompt())
+
+    async def test_unreadable_replied_message_is_reported(self) -> None:
+        harness = Harness(make_message(f"<@{BOT}> 然後呢"))
+        harness.reply_to({7: discord.NotFound(MagicMock(status=404, reason="gone"), "gone")}, 7)
+        await harness.send()
+        self.assertIn("目前無法讀取被回覆的訊息", text(harness.message.progress.edit.await_args.kwargs["view"]))
+        harness.model.chat.assert_not_awaited()
 
 
 class FailureTests(unittest.IsolatedAsyncioTestCase):
@@ -339,7 +492,7 @@ class FailureTests(unittest.IsolatedAsyncioTestCase):
         harness.messages = AiMessages(
             LiveGuild(SimpleNamespace(get_guild=lambda guild_id: harness.message.guild), GUILD, lambda: False),
             harness.settings, harness.model, harness.actions, Games(99), MediaReader(Frames()),
-            cleanups=testing.group(PRESENTATION),
+            tips=harness.store, cleanups=testing.group(PRESENTATION),
         )
         await harness.send()
         _key, prompt, images = harness.model.chat.await_args.args

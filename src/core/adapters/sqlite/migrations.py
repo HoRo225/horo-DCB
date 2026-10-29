@@ -72,4 +72,7 @@ DELETE FROM codex_threads WHERE conversation_key GLOB 'guild:*:thread:*' AND par
     """
 DROP TABLE requests;
 """,
+    """
+CREATE TABLE ai_tipped (user_id INTEGER PRIMARY KEY);
+""",
 )

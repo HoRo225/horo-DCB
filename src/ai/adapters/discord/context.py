@@ -11,9 +11,12 @@ import discord
 from src.ai.adapters.media.images import SUPPORTED_IMAGE_TYPES, ImageAttachmentError
 from src.ai.app.settings import AiSettings
 from src.ai.domain.conversation import MAX_PROMPT_CHARACTERS, conversation_key, is_discord_media_url
+from src.ai.domain.prompts import Quote
 from src.core.adapters.discord.channels import member_role_ids
 
 IMAGE_EXTENSIONS = frozenset({".jpg", ".jpeg", ".png", ".webp", ".gif", ".svg"})
+REFERENCE_TIMEOUT_SECONDS = 2.0
+MAX_REPLY_CHAIN = 5
 _CUSTOM_EMOJI = re.compile(r"<a?:[A-Za-z0-9_~]+:([1-9][0-9]*)>")
 
 
@@ -67,7 +70,7 @@ def visible_message_text(message: Any) -> str:
     return "\n".join(parts)
 
 
-async def get_referenced_message(message: Any) -> Any | None:
+async def get_referenced_message(message: Any, *, timeout: float = REFERENCE_TIMEOUT_SECONDS) -> Any | None:
     reference = getattr(message, "reference", None)
     if reference is None:
         return None
@@ -94,9 +97,30 @@ async def get_referenced_message(message: Any) -> Any | None:
         return None
 
     try:
-        return await asyncio.wait_for(message.channel.fetch_message(message_id), 2)
+        return await asyncio.wait_for(message.channel.fetch_message(message_id), timeout)
     except discord.HTTPException, aiohttp.ClientError, TimeoutError:
         return None
+
+
+async def reply_chain(nearest: Any, *, deadline: float) -> list[Any]:
+    chain = [nearest]
+    size = len(visible_message_text(nearest))
+    loop = asyncio.get_running_loop()
+    while len(chain) < MAX_REPLY_CHAIN and size < MAX_PROMPT_CHARACTERS:
+        older = await get_referenced_message(
+            chain[-1], timeout=min(REFERENCE_TIMEOUT_SECONDS, deadline - loop.time()),
+        )
+        if older is None:
+            break
+        chain.append(older)
+        size += len(visible_message_text(older))
+    chain.reverse()
+    return chain
+
+
+def quote(message: Any, *, bot_user_id: int, bot_name: str) -> Quote:
+    author = message.author
+    return Quote(bot_name if author.id == bot_user_id else author.display_name, visible_message_text(message))
 
 
 def _attachment_kind(attachment: Any) -> str | None:

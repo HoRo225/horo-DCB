@@ -4,7 +4,7 @@ import asyncio
 import itertools
 import logging
 import time
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 
 from src.ai.app.ports import TextModel
 from src.ai.app.settings import AiSettings
@@ -18,9 +18,10 @@ LINE_LIMIT = 60
 
 
 class AiText:
-    def __init__(self, settings: AiSettings, model: TextModel) -> None:
+    def __init__(self, settings: AiSettings, model: TextModel, bot_name: Callable[[], str]) -> None:
         self._settings = settings
         self._model = model
+        self._bot_name = bot_name
         self._once_users = itertools.count(1)
 
     async def round_line(self, channel_id: int, facts: Mapping[str, object]) -> str | None:
@@ -48,7 +49,7 @@ class AiText:
                 result = "quota"
             else:
                 key = conversation_key(settings.guild_id, channel_id, next(self._once_users), is_thread=False)
-                prompt = persona_prompt(ROUND_LINE, dict(facts))
+                prompt = persona_prompt(self._bot_name(), ROUND_LINE, dict(facts))
                 try:
                     async with asyncio.timeout(REMARK_SECONDS):
                         reply = await asyncio.create_task(request(key, prompt))

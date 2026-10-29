@@ -16,24 +16,25 @@ from src.ai.adapters.discord.context import (
     allowed_channel_id,
     conversation_access,
     get_referenced_message,
+    quote,
+    reply_chain,
     require_short,
     select_media,
-    visible_message_text,
 )
 from src.ai.adapters.discord.errors import codex_error_text
 from src.ai.adapters.discord.intent import route_intent
 from src.ai.adapters.discord.output import AiProgress, reply_notice, send_ai_answer
 from src.ai.adapters.media.images import ImageAttachmentError, MediaItem, MediaReader, describe_media
-from src.ai.app.ports import ActionRunner, GamesChannel, ModelError, StoreError, TextModel
+from src.ai.app.ports import ActionRunner, GamesChannel, ModelError, NewcomerTips, StoreError, TextModel
 from src.ai.app.settings import AiSettings
 from src.ai.domain.conversation import CLEANUP_SECONDS, WORK_TIMEOUT_SECONDS
-from src.ai.domain.prompts import CHAT_INSTRUCTIONS, chat_prompt
+from src.ai.domain.prompts import chat_instructions, chat_prompt
 from src.core.adapters.discord.brand import ICONS
 from src.core.adapters.discord.live import LiveGuild, can_send as member_can_send, message_source
 from src.core.app.ports import Actor
 from src.core.app.supervisor import TaskGroup
 
-IMAGE_TIMEOUT_SECONDS = 30.0
+CONTEXT_TIMEOUT_SECONDS = 30.0
 RESTARTED_NOTICE = "已開始新的對話（先前的無法接續）"
 NEWCOMER_TIP = "第一次來？跟我說「說明」看看我能做什麼"
 
@@ -47,7 +48,7 @@ class AiServices:
     games: GamesChannel
     media: MediaReader
     cleanups: TaskGroup
-    tipped: set[int]
+    tips: NewcomerTips
 
 
 def _image_count(items: list[MediaItem]) -> int:
@@ -70,6 +71,7 @@ class AiRequest:
         content: str,
         mentions_bot: bool,
         referenced_message: Any,
+        bot_user_id: int,
         bot_name: str,
         received_context: dict[str, object] | None = None,
     ) -> None:
@@ -79,6 +81,7 @@ class AiRequest:
         self.content = content
         self.mentions_bot = mentions_bot
         self.referenced_message = referenced_message
+        self.bot_user_id = bot_user_id
         self.bot_name = bot_name
         self.id = secrets.token_hex(4)
         self.queued_at = time.monotonic()
@@ -162,31 +165,23 @@ class AiRequest:
         if not await self.can_send():
             raise ModelError("revoked")
         require_short(self.content)
-        if (
-            self.mentions_bot
-            and self.referenced_message is None
-            and getattr(message, "reference", None) is not None
-        ):
-            self.referenced_message = await get_referenced_message(message)
-            if self.referenced_message is None:
+        deadline = min(self.job.work_deadline, asyncio.get_running_loop().time() + CONTEXT_TIMEOUT_SECONDS)
+        nearest = self.referenced_message
+        if self.mentions_bot and nearest is None and getattr(message, "reference", None) is not None:
+            nearest = await get_referenced_message(message)
+            if nearest is None:
                 raise ImageAttachmentError(
                     "目前無法讀取被回覆的訊息，請重新回覆或重新上傳內容。",
                 )
-
-        referenced = self.referenced_message
-        media_groups = select_media([message] if referenced is None else [referenced, message])
+        chain = [] if nearest is None else await reply_chain(nearest, deadline=deadline)
+        quotes = [quote(item, bot_user_id=self.bot_user_id, bot_name=self.bot_name) for item in chain]
         with self.timed("images"):
             media_by_message, skipped, broken, timed_out = await self.services.media.read(
-                media_groups,
-                deadline=min(
-                    self.job.work_deadline,
-                    asyncio.get_running_loop().time() + IMAGE_TIMEOUT_SECONDS,
-                ),
+                select_media([message] if nearest is None else [nearest, message]), deadline=deadline,
             )
         media_items = [item for items in media_by_message for item in items]
         images = tuple(url for _label, urls in media_items for url in urls)
-        referenced_text = None if referenced is None else visible_message_text(referenced)
-        if not self.content and not images and not referenced_text:
+        if not self.content and not images and not any(item.text for item in quotes):
             raise ImageAttachmentError(
                 "目前無法讀取這些媒體，請重新上傳後再試。"
                 if broken or timed_out
@@ -194,10 +189,8 @@ class AiRequest:
             )
         prompt = chat_prompt(
             self.content,
-            referenced_text,
-            referenced_image_count=(
-                0 if referenced is None else _image_count(media_by_message[0])
-            ),
+            quotes,
+            referenced_image_count=0 if nearest is None else _image_count(media_by_message[0]),
             current_image_count=_image_count(media_by_message[-1]),
             media_note=describe_media(media_items, skipped, broken, timed_out),
         )
@@ -207,11 +200,12 @@ class AiRequest:
 
     def _notes(self, restarted: bool) -> list[str]:
         notes = [RESTARTED_NOTICE] * restarted
-        user_id, tipped = self.message.author.id, self.services.tipped
-        if user_id not in tipped:
-            tipped.add(user_id)
-            notes.append(NEWCOMER_TIP)
-        return notes
+        try:
+            first = self.services.tips.claim_tip(self.message.author.id)
+        except StoreError:
+            logging.warning("AI newcomer tip state unavailable; answering without the tip.")
+            first = False
+        return [*notes, NEWCOMER_TIP] if first else notes
 
     async def run(self) -> None:
         message, model, progress = self.message, self.services.model, self.progress
@@ -249,7 +243,7 @@ class AiRequest:
                                     self.key,
                                     prompt,
                                     images,
-                                    instructions=CHAT_INSTRUCTIONS,
+                                    instructions=chat_instructions(self.bot_name),
                                     job=job,
                                     models=models,
                                     on_progress=progress.update,

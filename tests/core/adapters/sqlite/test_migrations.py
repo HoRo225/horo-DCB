@@ -15,10 +15,11 @@ from src.steam.adapters.sqlite.store import STEAM_CHANNEL_ID, STEAM_ENABLED, STE
 from src.voice.adapters.sqlite.store import VOICE_ENABLED, VOICE_ENTRY_CHANNEL_ID
 
 LATEST = 14 + len(MIGRATIONS)
-TABLES = {
-    "operations", "discord_effects", "settings", "game_tables",
+BASELINE_TABLES = {
+    "operations", "discord_effects", "settings", "game_tables", "requests",
     "voice_rooms", "steam_posted", "codex_threads", "codex_pending_archives",
 }
+TABLES = BASELINE_TABLES - {"requests"} | {"ai_tipped"}
 LIVE_SETTINGS = {setting.key for setting in (
     AI_ENABLED, AI_CHANNEL_IDS, AI_ROLE_IDS, AI_MODELS, VOICE_ENABLED, VOICE_ENTRY_CHANNEL_ID,
     STEAM_ENABLED, STEAM_CHANNEL_ID, STEAM_ROLE_IDS, GAMES_CHANNEL_ID, GAMES_ROLE_IDS, GAMES_HUB_MESSAGE,
@@ -117,7 +118,7 @@ class UpgradeTests(unittest.TestCase):
         self.assertEqual(db.execute("PRAGMA user_version").fetchone(), (16,))
         self.assertEqual(db.execute("SELECT n FROM extra").fetchall(), [(16,)])
         tables = {name for (name,) in db.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
-        self.assertEqual(tables, TABLES | {"requests", "extra"})
+        self.assertEqual(tables, BASELINE_TABLES | {"extra"})
 
     def test_v16_drops_requests_and_keeps_every_other_table(self) -> None:
         db = open_db(self.path, MIGRATIONS[:1])
@@ -135,6 +136,19 @@ class UpgradeTests(unittest.TestCase):
             (16,), [entry for entry in schema if entry[2] != "requests"],
             {name: table for name, table in rows.items() if name != "requests"},
         ))
+
+    def test_v17_adds_an_empty_tip_table_and_keeps_every_other_table(self) -> None:
+        db = open_db(self.path, MIGRATIONS[:2])
+        db.executescript("INSERT INTO settings VALUES ('feature.ai', 'true'); INSERT INTO voice_rooms VALUES (50, 7);")
+        db.close()
+        version, schema, rows = self.contents()
+        self.assertEqual(version, (16,))
+        self.open(MIGRATIONS[:3]).close()
+        version, upgraded, upgraded_rows = self.contents()
+        self.assertEqual(
+            (version, [entry for entry in upgraded if entry[2] != "ai_tipped"], upgraded_rows),
+            ((17,), schema, rows | {"ai_tipped": []}),
+        )
 
     def test_versions_before_the_baseline_are_refused(self) -> None:
         raw = self.raw()

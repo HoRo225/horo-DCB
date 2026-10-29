@@ -21,6 +21,7 @@ class MemoryAiStore:
         }
         self.saved: list[tuple[str, object, str | None]] = []
         self.failure: Exception | None = None
+        self.tipped: set[int] = set()
 
     def _get(self, name: str) -> object:
         if self.failure is not None:
@@ -53,6 +54,11 @@ class MemoryAiStore:
 
     def save_models(self, payload: dict[str, object], *, operation_id: str | None) -> bool:
         return self._save("models", payload, operation_id)
+
+    def claim_tip(self, user_id: int) -> bool:
+        first = user_id not in self.tipped
+        self.tipped.add(user_id)
+        return first
 
 
 class FakeModel:

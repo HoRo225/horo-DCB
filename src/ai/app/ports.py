@@ -144,6 +144,10 @@ class AiStore(Protocol):
     def save_models(self, payload: dict[str, object], *, operation_id: str | None) -> bool: ...
 
 
+class NewcomerTips(Protocol):
+    def claim_tip(self, user_id: int) -> bool: ...
+
+
 class GamesChannel(Protocol):
     @property
     def channel_id(self) -> int | None: ...

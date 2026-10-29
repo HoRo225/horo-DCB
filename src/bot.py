@@ -78,7 +78,8 @@ def compose(bot: HoroBot, codex: CodexService, db: sqlite3.Connection, guild_id:
     operations = OperationStore(db)
     backups = SqliteBackups(db)
     maintenance = Maintenance(operations, backups, supervisor.group("maintenance", SCHEDULED))
-    ai_settings = AiSettings(SqliteAiStore(db), codex, guild_id)
+    ai_store = SqliteAiStore(db)
+    ai_settings = AiSettings(ai_store, codex, guild_id)
 
     def member_roles(user_id: int) -> frozenset[int] | None:
         member = live.member(user_id)
@@ -91,7 +92,8 @@ def compose(bot: HoroBot, codex: CodexService, db: sqlite3.Connection, guild_id:
     game_store, game_tasks = SqliteGameStore(db), supervisor.group("games", WORK)
     lobby = Lobby(game_store, DiscordLobbyBoard(bot, live), live, game_tasks)
     game_tables, game_players, game_presenter = Tables(), DiscordPlayers(live), DiscordTables(bot, live, lobby)
-    play = Play(game_store, game_tables, lobby, game_players, game_presenter, AiText(ai_settings, codex), game_tasks)
+    play = Play(game_store, game_tables, lobby, game_players, game_presenter, AiText(ai_settings, codex, live.bot_name),
+                game_tasks)
     games_cog = GamesCog(bot, play, lobby, game_tables, game_presenter, game_players, live,
                          supervisor.group("games.cog", SCHEDULED))
     panels = PanelSessionRegistry(supervisor.group("admin", PRESENTATION), supervisor.group("admin", WORK))
@@ -115,7 +117,7 @@ def compose(bot: HoroBot, codex: CodexService, db: sqlite3.Connection, guild_id:
     )
     actions = ActionEngine(registry, operations, live, receipts, supervisor.group("actions", WORK))
     messages = AiMessages(live, ai_settings, codex, actions, lobby, MediaReader(Frames()),
-                          cleanups=supervisor.group("ai", PRESENTATION))
+                          tips=ai_store, cleanups=supervisor.group("ai", PRESENTATION))
     ai_cog = AiCog(bot, live, ai_settings, codex, messages, requests=supervisor.group("ai", REQUEST))
     admin = AdminServices(
         live=live, panels=panels, codex=codex, ai=ai_settings, access=access, voice=voice, steam=steam,
