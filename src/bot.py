@@ -26,6 +26,7 @@ from src.ai.adapters.sqlite.conversations import ConversationStore
 from src.ai.adapters.sqlite.store import SqliteAiStore
 from src.core.adapters.discord.brand import load_app_emojis, report_interaction_error, sync_discord_brand
 from src.core.adapters.discord.channels import member_role_ids
+from src.core.adapters.discord.confirmations import Confirmations
 from src.core.adapters.discord.effects import EffectResolver, effect_actions
 from src.core.adapters.discord.live import LiveGuild
 from src.core.adapters.discord.receipts import DiscordReceipts
@@ -116,8 +117,9 @@ def compose(bot: HoroBot, codex: CodexService, db: sqlite3.Connection, guild_id:
         effect_actions(effects),
     )
     actions = ActionEngine(registry, operations, live, receipts, supervisor.group("actions", WORK))
+    confirmations = Confirmations(actions, live, supervisor.group("confirmations", WORK))
     messages = AiMessages(live, ai_settings, codex, actions, lobby, MediaReader(Frames()),
-                          tips=ai_store, cleanups=supervisor.group("ai", PRESENTATION))
+                          tips=ai_store, cleanups=supervisor.group("ai", PRESENTATION), confirmations=confirmations)
     ai_cog = AiCog(bot, live, ai_settings, codex, messages, requests=supervisor.group("ai", REQUEST))
     admin = AdminServices(
         live=live, panels=panels, codex=codex, ai=ai_settings, access=access, voice=voice, steam=steam,
@@ -144,7 +146,7 @@ def compose(bot: HoroBot, codex: CodexService, db: sqlite3.Connection, guild_id:
         watchdog=supervisor.group("watchdog", SCHEDULED),
         shutdown=shutdown,
         cogs=(games_cog, VoiceCog(voice, live), AdminCog(admin), ai_cog, SteamCog(steam)),
-        dynamic_items=(receipts.private_results.item,),
+        dynamic_items=(receipts.private_results.item, confirmations.item),
     )
 
 

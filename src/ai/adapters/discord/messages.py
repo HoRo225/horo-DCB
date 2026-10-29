@@ -17,6 +17,7 @@ from src.ai.adapters.discord.request import AiRequest, AiServices
 from src.ai.adapters.media.images import MediaReader
 from src.ai.app.ports import ActionRunner, GamesChannel, NewcomerTips, TextModel
 from src.ai.app.settings import AiSettings
+from src.core.adapters.discord.confirmations import Confirmations
 from src.core.adapters.discord.live import LiveGuild, message_source
 from src.core.app.supervisor import TaskGroup
 
@@ -27,9 +28,9 @@ DENIAL_CODES = {"suspended": "busy", "channel": "not_allowed_channel", "role": "
 class AiMessages:
     def __init__(
         self, live: LiveGuild, settings: AiSettings, model: TextModel, actions: ActionRunner, games: GamesChannel,
-        media: MediaReader, *, tips: NewcomerTips, cleanups: TaskGroup,
+        media: MediaReader, *, tips: NewcomerTips, cleanups: TaskGroup, confirmations: Confirmations,
     ) -> None:
-        self._services = AiServices(live, settings, model, actions, games, media, cleanups, tips)
+        self._services = AiServices(live, settings, model, actions, games, media, cleanups, tips, confirmations)
 
     async def handle(self, message: discord.Message, bot_user_id: int) -> None:
         if message.author.bot or message.webhook_id is not None:

@@ -30,8 +30,9 @@ from src.ai.app.settings import AiSettings
 from src.ai.domain.conversation import CLEANUP_SECONDS, WORK_TIMEOUT_SECONDS
 from src.ai.domain.prompts import chat_instructions, chat_prompt
 from src.core.adapters.discord.brand import ICONS
+from src.core.adapters.discord.confirmations import Confirmations
 from src.core.adapters.discord.live import LiveGuild, can_send as member_can_send, message_source
-from src.core.app.ports import Actor
+from src.core.app.actions import Grant
 from src.core.app.supervisor import TaskGroup
 
 CONTEXT_TIMEOUT_SECONDS = 30.0
@@ -49,6 +50,11 @@ class AiServices:
     media: MediaReader
     cleanups: TaskGroup
     tips: NewcomerTips
+    confirmations: Confirmations
+
+
+def ai_grant(settings: AiSettings, guild_id: int, channel_id: int) -> Grant:
+    return lambda actor: settings.denial_reason(guild_id, channel_id, actor.role_ids) is None
 
 
 def _image_count(items: list[MediaItem]) -> int:
@@ -93,6 +99,7 @@ class AiRequest:
         self.generation = settings.generation
         self.allowed_channel_id = allowed_channel_id(message.channel)
         self.channel_generation = settings.channel_generation(self.allowed_channel_id)
+        self.granted = ai_grant(settings, message.guild.id, self.allowed_channel_id)
         self.source = message_source(message)
         self.context = received_context if received_context is not None else services.actions.context(self.source)
         self.job: Any = None
@@ -125,11 +132,6 @@ class AiRequest:
 
     def current(self) -> bool:
         return self.services.settings.is_current(self.generation, self.allowed_channel_id, self.channel_generation)
-
-    def granted(self, actor: Actor) -> bool:
-        return self.services.settings.denial_reason(
-            self.message.guild.id, self.allowed_channel_id, actor.role_ids,
-        ) is None
 
     async def send_error(self, exc: Exception, *, deadline: float) -> None:
         self.outcome = (

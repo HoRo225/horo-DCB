@@ -45,6 +45,9 @@ class Step:
 
 type Run = Callable[[Step, Mapping[str, object]], Awaitable[Mapping[str, object] | None]]
 type Grant = Callable[[Actor], bool]
+type Describe = Callable[[Mapping[str, object]], str]
+type Warn = Callable[[Mapping[str, object]], str | None]
+type Line = tuple[str, str | None]
 
 
 @dataclass(frozen=True, slots=True)
@@ -75,7 +78,13 @@ class ActionSpec:
     params: Mapping[str, Param]
     admin: bool
     effect: Configure | Network | Query | Play
+    label: str | Describe
     validate: Callable[[Source, Mapping[str, object]], Awaitable[None]] | None = None
+    warning: Warn | None = None
+
+    def describe(self, params: Mapping[str, object]) -> Line:
+        label = self.label if isinstance(self.label, str) else self.label(params)
+        return label, self.warning(params) if self.warning is not None else None
 
 
 @dataclass(frozen=True, slots=True)
@@ -233,6 +242,12 @@ class ActionEngine:
         except asyncio.CancelledError:
             stop_remaining.set()
             raise
+
+    def review(self, plan: Plan) -> list[Line]:
+        return [self._registry.spec(action.name).describe(action.params) for action in plan.actions]
+
+    def needs_confirmation(self, plan: Plan) -> bool:
+        return any(warning is not None for _label, warning in self.review(plan))
 
     async def explain(self, source: Source, text: str, *, grant: Grant) -> None:
         await self._receipts.explain(source, text, lambda: self._current(source, admin=False, grant=grant))

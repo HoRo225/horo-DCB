@@ -112,22 +112,23 @@ class Engine(unittest.IsolatedAsyncioTestCase):
         registry.register(
             ActionGroup("board", (
                 ActionSpec("move", {"to": Param("enum", choices=("left", "right"), required=False)}, admin=False,
-                           effect=Play(self.moves)),
-                ActionSpec("rest", {}, admin=False, effect=Play(self.moves)),
+                           effect=Play(self.moves), label="移動"),
+                ActionSpec("rest", {}, admin=False, effect=Play(self.moves), label="休息"),
             ), hint="move 移動。", exclusive=True, available=lambda actor, channel_id: self.blocked,
                 snapshot=lambda user_id: dict(self.board) if user_id else {"state_token": None, "busy": True},
                 busy="棋盤忙碌中。"),
             ActionGroup("settings", (
-                ActionSpec("set_flag", {"value": Param("bool")}, admin=True, effect=Configure(set_flag)),
+                ActionSpec("set_flag", {"value": Param("bool")}, admin=True, effect=Configure(set_flag),
+                           label="設定旗標"),
                 ActionSpec("bind", {"channel_id": Param("id", target=CHANNEL_TARGET)}, admin=True,
-                           effect=Configure(bind, stale="設定已過期。"), validate=self.validate),
-                ActionSpec("sync", {}, admin=True, effect=Network(self.network)),
+                           effect=Configure(bind, stale="設定已過期。"), validate=self.validate, label="綁定頻道"),
+                ActionSpec("sync", {}, admin=True, effect=Network(self.network), label="同步"),
                 ActionSpec("tag", {"ids": Param("ids", target=Target("roles"))}, admin=True,
-                           effect=Configure(tag)),
+                           effect=Configure(tag), label="標記身分組"),
                 ActionSpec("resolve", {"item": Param("text", target=Target("quoted"))}, admin=True,
-                           effect=Configure(set_flag)),
+                           effect=Configure(set_flag), label="處理項目"),
             )),
-            ActionGroup("info", (ActionSpec("lookup", {}, admin=False, effect=Query("說明", render)),),
+            ActionGroup("info", (ActionSpec("lookup", {}, admin=False, effect=Query("說明", render), label="查詢說明"),),
                         hint="lookup 查詢。"),
         )
         return ActionEngine(registry, self.operations, self.presence, self.receipts, self.tasks)
@@ -150,7 +151,7 @@ class CatalogueTests(Engine):
     def test_hints_follow_registration_order_and_duplicates_are_refused(self) -> None:
         self.assertEqual(self.engine.catalogue.hints(), ("move 移動。", "lookup 查詢。"))
         registry = ActionRegistry()
-        spec = ActionSpec("lookup", {}, admin=False, effect=Query("說明", AsyncMock()))
+        spec = ActionSpec("lookup", {}, admin=False, effect=Query("說明", AsyncMock()), label="查詢說明")
         registry.register(ActionGroup("a", (spec,)))
         with self.assertRaises(ValueError):
             registry.register(ActionGroup("b", (spec,)))

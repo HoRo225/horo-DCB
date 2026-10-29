@@ -34,10 +34,12 @@ class DiscordContractTests(unittest.TestCase):
         self.assertEqual(discord_contract(), {
             "command:控制台",
             "command:新話題",
+            "custom_id:horo:confirm:{}:{}",
             "custom_id:horo:game:pick",
             "custom_id:horo:game:rules:{}",
             "custom_id:horo:private:{}",
             "custom_id:{}:{}",
+            "template:horo:confirm:(?P<token>[A-Za-z0-9_-]+):(?P<choice>yes|no)",
             "template:horo:game:pick",
             "template:horo:game:rules:(?P<game>blackjack|slots)",
             "template:horo:private:(?P<token>[A-Za-z0-9_-]+)",

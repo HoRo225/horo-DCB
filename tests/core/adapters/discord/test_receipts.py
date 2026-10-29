@@ -40,8 +40,8 @@ class ReceiptTests(unittest.IsolatedAsyncioTestCase):
         self.render = AsyncMock(return_value={"view": receipt_view([DONE], name="睦_頭"), "attachments": []})
         registry = ActionRegistry()
         registry.register(ActionGroup("info", (
-            ActionSpec("help", {}, admin=False, effect=Query("功能說明", self.render)),
-            ActionSpec("admin_status", {}, admin=True, effect=Query("管理狀態", self.render)),
+            ActionSpec("help", {}, admin=False, effect=Query("功能說明", self.render), label="查看功能說明"),
+            ActionSpec("admin_status", {}, admin=True, effect=Query("管理狀態", self.render), label="查詢管理狀態"),
         )))
         self.registry = registry
         self.live = LiveGuild(self.client, G, lambda: False)

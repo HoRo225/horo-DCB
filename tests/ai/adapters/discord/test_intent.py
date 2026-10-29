@@ -5,7 +5,7 @@ import re
 import unittest
 from contextlib import asynccontextmanager
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, MagicMock
 
 import discord
 
@@ -15,6 +15,7 @@ from src.ai.adapters.discord.request import AiRequest, AiServices
 from src.ai.domain.conversation import conversation_key
 from src.ai.domain.intent import Intent
 from src.ai.domain.prompts import SUMMARY_INSTRUCTIONS, intent_instructions
+from src.core.adapters.discord.confirmations import Confirmations
 from src.core.adapters.discord.live import LiveGuild
 from src.core.app.actions import Outcome
 from src.core.app.supervisor import PRESENTATION
@@ -92,6 +93,8 @@ class FakeActions:
         self.snapshot_calls, self.mutation_count, self.seen_game = 0, 0, []
         self.results = [{"ok": True, "code": "done", "text": "操作已完成，請查看私人結果。", "private_ref": "PRIVATE_REF_TOKEN"}]
         self.receipts = {}
+        self.needs_confirmation = MagicMock(return_value=False)
+        self.review = MagicMock(return_value=[])
         self.execute = AsyncMock(side_effect=self._execute)
         self.explain = AsyncMock(side_effect=self._explain)
 
@@ -124,10 +127,12 @@ class FrontendIntentTest(unittest.IsolatedAsyncioTestCase):
         self.settings = AiSettings(self.store, self.model, GUILD)
         self.media = FakeMedia()
         self.live = LiveGuild(self.actions.client, GUILD, lambda: False)
+        self.confirmations = Confirmations(self.actions, self.live, testing.group())
         self.services = AiServices(self.live, self.settings, self.model, self.actions, Games(99), self.media,
-                                   testing.group(PRESENTATION), self.store)
+                                   testing.group(PRESENTATION), self.store, self.confirmations)
         self.messages = AiMessages(self.live, self.settings, self.model, self.actions, Games(99), self.media,
-                                   tips=self.store, cleanups=testing.group(PRESENTATION))
+                                   tips=self.store, cleanups=testing.group(PRESENTATION),
+                                   confirmations=self.confirmations)
 
     async def handle(self, message):
         self.actions.attach(message)
@@ -260,6 +265,24 @@ class FrontendIntentTest(unittest.IsolatedAsyncioTestCase):
         self.model.structured.return_value = Intent("plan", Plan((Action("steam_query", {}), Action("help", {}))))
         await self.handle(FakeMessage(801))
         self.actions.execute.assert_awaited_once()
+
+    async def test_a_plan_needing_confirmation_replies_a_confirmation_card_instead_of_running(self):
+        plan = Plan((Action("steam_query", {}), Action("ai_enabled", {"enabled": False})))
+        self.model.structured.return_value = Intent("plan", plan)
+        self.actions.needs_confirmation.side_effect = lambda seen: seen == plan
+        self.actions.review.return_value = [("查詢 Steam 免費遊戲", None), ("關閉 AI", "關閉後會中斷。")]
+        message = FakeMessage(content="<@799> 查 Steam 然後關閉 AI")
+        await self.handle(message)
+        self.actions.execute.assert_not_awaited()
+        self.model.summarize.assert_not_awaited()
+        sent = message.channel.send.await_args.kwargs
+        self.assertEqual(sent["reference"].message_id, message.id)
+        rendered = text(sent["view"])
+        self.assertIn("查詢 Steam 免費遊戲", rendered)
+        self.assertIn("**關閉 AI**　關閉後會中斷。", rendered)
+        buttons = [item.item for item in sent["view"].walk_children() if isinstance(item, discord.ui.DynamicItem)]
+        self.assertEqual([re.sub(r"horo:confirm:[A-Za-z0-9_-]+:", "horo:confirm:<token>:", button.custom_id)
+                          for button in buttons], ["horo:confirm:<token>:yes", "horo:confirm:<token>:no"])
 
     async def test_results_without_a_receipt_reply_in_receipt_style_without_private_buttons(self):
         results = [{"ok": True, "code": "done", "text": "已查詢Steam 免費遊戲。", "private_ref": "UNBOUND"},

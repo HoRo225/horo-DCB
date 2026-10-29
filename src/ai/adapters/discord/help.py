@@ -25,4 +25,4 @@ def help_actions(games: GamesChannel, bot_name: Callable[[], str]) -> ActionGrou
     async def show_help(actor: Actor) -> Mapping[str, object]:
         return {"view": help_view(games.channel_id, bot_name()), "attachments": []}
 
-    return ActionGroup("help", (ActionSpec("help", {}, admin=False, effect=Query("功能說明", show_help)),), hint=HINT)
+    return ActionGroup("help", (ActionSpec("help", {}, admin=False, effect=Query("功能說明", show_help), label="查看功能說明"),), hint=HINT)

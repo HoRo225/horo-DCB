@@ -51,10 +51,11 @@ def steam_actions(steam: Steam, live: LiveGuild) -> ActionGroup:
         return {"view": view, "attachments": []}
 
     return ActionGroup("steam", (
-        ActionSpec("steam_enabled", {"enabled": Param("bool")}, admin=True, effect=Configure(set_enabled)),
+        ActionSpec("steam_enabled", {"enabled": Param("bool")}, admin=True, effect=Configure(set_enabled),
+                   label=lambda params: "開啟 Steam 自動通知" if params["enabled"] else "關閉 Steam 自動通知"),
         ActionSpec("steam_channel", {"channel_id": Param("id", target=TEXT_CHANNEL)}, admin=True,
-                   effect=Configure(bind_channel, stale=CHANNEL_STALE)),
+                   effect=Configure(bind_channel, stale=CHANNEL_STALE), label="設定 Steam 通知頻道"),
         ActionSpec("steam_roles", {"ids": Param("ids", target=REGULAR_ROLES)}, admin=True,
-                   effect=Configure(set_roles, stale=ROLES_STALE)),
-        ActionSpec("steam_query", {}, admin=True, effect=Query("Steam 免費遊戲", offers)),
+                   effect=Configure(set_roles, stale=ROLES_STALE), label="設定 Steam 通知身分組"),
+        ActionSpec("steam_query", {}, admin=True, effect=Query("Steam 免費遊戲", offers), label="查詢 Steam 免費遊戲"),
     ))

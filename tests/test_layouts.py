@@ -17,6 +17,7 @@ from src.ai import DeviceLogin, ModelChoice, ModelInfo, ModelSettings, RateLimit
 from src.ai.adapters.discord.help import help_view
 from src.ai.adapters.sqlite.store import AI_ENABLED
 from src.core.adapters.discord.brand import ICONS, WHITE, notice_view
+from src.core.adapters.discord.confirmations import Confirmations, cancelled_view, confirm_view
 from src.core.adapters.discord.receipts import receipt_view
 from src.core.adapters.sqlite.db import transaction
 from src.games.app.tables import LiveTable
@@ -219,6 +220,11 @@ class LayoutBudgetTest(unittest.IsolatedAsyncioTestCase):
                 fits(f"ai receipt explained={bool(said)}", receipt_view(receipt, said, name=host, buttons=admin.receipts.private_results.make_buttons(
                     item["private_ref"] for item in receipt if "private_ref" in item)))
             fits("notice", notice_view("註" * 2000, title="標" * 100))
+            confirmations, token = Confirmations(MagicMock(), MagicMock(), testing.group()), "t" * 32
+            asked = [("名" * 100, "註" * 300)] * 4
+            fits("action confirmation", confirm_view(asked, (confirmations.item(token, "yes"),
+                                                             confirmations.item(token, "no"))))
+            fits("action confirmation cancelled", cancelled_view(asked))
 
 
 if __name__ == "__main__":

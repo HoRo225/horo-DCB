@@ -37,8 +37,9 @@ def voice_actions(voice: Voice, live: LiveGuild) -> ActionGroup:
         await voice.reconcile(still_current=step.still_current)
 
     return ActionGroup("voice", (
-        ActionSpec("voice_enabled", {"enabled": Param("bool")}, admin=True, effect=Configure(set_enabled)),
+        ActionSpec("voice_enabled", {"enabled": Param("bool")}, admin=True, effect=Configure(set_enabled),
+                   label=lambda params: "開啟臨時語音" if params["enabled"] else "關閉臨時語音"),
         ActionSpec("voice_entry", {"channel_id": Param("id", target=VOICE_CHANNEL)}, admin=True,
-                   effect=Configure(bind_entry, stale=STALE)),
-        ActionSpec("voice_sync", {}, admin=True, effect=Network(sync)),
+                   effect=Configure(bind_entry, stale=STALE), label="設定臨時語音入口"),
+        ActionSpec("voice_sync", {}, admin=True, effect=Network(sync), label="重新同步臨時語音"),
     ))

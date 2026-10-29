@@ -25,4 +25,4 @@ def admin_actions(
                     f"遊戲大廳：{lobby()}\n"
                     f"待處理：{pending()} 項")), "attachments": []}
 
-    return ActionGroup("admin", (ActionSpec("admin_status", {}, admin=True, effect=Query("管理狀態", status)),))
+    return ActionGroup("admin", (ActionSpec("admin_status", {}, admin=True, effect=Query("管理狀態", status), label="查詢管理狀態"),))

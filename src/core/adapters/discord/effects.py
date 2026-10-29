@@ -144,5 +144,9 @@ def effect_actions(resolver: EffectResolver) -> ActionGroup:
             "effect_id": Param("text", target=Target("quoted")),
             "resolution": Param("enum", choices=("confirmed", "retry", "skip")),
             "message_id": Param("id", required=False),
-        }, admin=True, effect=Network(resolve)),
+        }, admin=True, effect=Network(resolve),
+            label=lambda params: {"confirmed": "核對後標記已送達", "retry": "重送待處理項目",
+                                  "skip": "略過待處理項目"}[params["resolution"]],
+            warning=lambda params: {"retry": "確定要重送？無法復原", "skip": "確定要略過此次？無法復原"}.get(
+                params["resolution"])),
     ))

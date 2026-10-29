@@ -71,7 +71,8 @@ class StartupTests(unittest.IsolatedAsyncioTestCase):
         ids = {custom_id for view in views for item in view.walk_children()
                if (custom_id := getattr(item, "custom_id", None))}
         self.assertIn("horo:game:pick", ids)
-        for custom_id in ids | {*(f"horo:game:rules:{key}" for key in GAMES), "horo:private:abc_123"}:
+        for custom_id in ids | {*(f"horo:game:rules:{key}" for key in GAMES), "horo:private:abc_123",
+                                "horo:confirm:abc_123:yes", "horo:confirm:abc_123:no"}:
             with self.subTest(custom_id):
                 self.assertTrue(any(pattern.fullmatch(custom_id) for pattern in patterns))
 

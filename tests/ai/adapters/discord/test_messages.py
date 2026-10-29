@@ -89,7 +89,8 @@ class Harness:
         self.media = FakeMedia()
         live = LiveGuild(SimpleNamespace(get_guild=lambda guild_id: message.guild), GUILD, lambda: False)
         self.messages = AiMessages(live, self.settings, self.model, self.actions, Games(99), self.media,
-                                   tips=self.store if tips is None else tips, cleanups=testing.group(PRESENTATION))
+                                   tips=self.store if tips is None else tips, cleanups=testing.group(PRESENTATION),
+                                   confirmations=MagicMock())
 
     def reply_to(self, history: dict[int, object], nearest: int) -> None:
         self.message.reference = SimpleNamespace(message_id=nearest, channel_id=CHANNEL, resolved=None)
@@ -492,7 +493,7 @@ class FailureTests(unittest.IsolatedAsyncioTestCase):
         harness.messages = AiMessages(
             LiveGuild(SimpleNamespace(get_guild=lambda guild_id: harness.message.guild), GUILD, lambda: False),
             harness.settings, harness.model, harness.actions, Games(99), MediaReader(Frames()),
-            tips=harness.store, cleanups=testing.group(PRESENTATION),
+            tips=harness.store, cleanups=testing.group(PRESENTATION), confirmations=MagicMock(),
         )
         await harness.send()
         _key, prompt, images = harness.model.chat.await_args.args

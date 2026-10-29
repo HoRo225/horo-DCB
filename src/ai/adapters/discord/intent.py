@@ -46,6 +46,12 @@ async def route_intent(request: AiRequest, models: ModelSettings) -> bool:
             await reply(request.message, view=help_view(services.games.channel_id, request.bot_name))
         request.outcome = "help"
         return True
+    if actions.needs_confirmation(intent.plan):
+        if await request.can_send():
+            await reply(request.message, view=services.confirmations.ask(
+                request.source, intent.plan, received=request.context, grant=request.granted))
+        request.outcome = "confirmation"
+        return True
     outcome = await actions.execute(request.source, intent.plan, received=request.context,
                                     deadline=request.job.work_deadline, grant=request.granted)
     results = outcome.results

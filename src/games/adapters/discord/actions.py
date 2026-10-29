@@ -58,12 +58,16 @@ def game_actions(play: Play, lobby: Lobby, live: LiveGuild) -> tuple[ActionGroup
         return None
 
     table = ActionGroup("game", (
-        ActionSpec("open_table", {"game": Param("enum", choices=tuple(GAMES))}, admin=False, effect=act("open_table")),
-        *(ActionSpec(name, {}, admin=False, effect=act(name)) for name in ("deal", "again", "hit", "stand", "leave_table")),
+        ActionSpec("open_table", {"game": Param("enum", choices=tuple(GAMES))}, admin=False, effect=act("open_table"),
+                   label=lambda params: f"開始玩「{GAMES[params['game']].title}」"),
+        *(ActionSpec(name, {}, admin=False, effect=act(name), label=label) for name, label in (
+            ("deal", "開新局"), ("again", "再來一局"), ("hit", "叫牌"), ("stand", "停牌"), ("leave_table", "離桌"))),
     ), hint=HINT, exclusive=True, available=available, snapshot=snapshot, busy=BUSY)
     settings = ActionGroup("games", (
-        ActionSpec("games_roles", {"ids": Param("ids", target=REGULAR_ROLES)}, admin=True, effect=Configure(set_roles)),
-        ActionSpec("games_channel", {"channel_id": Param("id", target=TEXT_CHANNEL)}, admin=True, effect=Network(set_channel)),
-        ActionSpec("publish_hub", {}, admin=True, effect=Network(publish)),
+        ActionSpec("games_roles", {"ids": Param("ids", target=REGULAR_ROLES)}, admin=True, effect=Configure(set_roles),
+                   label="設定遊戲可用身分組"),
+        ActionSpec("games_channel", {"channel_id": Param("id", target=TEXT_CHANNEL)}, admin=True, effect=Network(set_channel),
+                   label="設定遊戲頻道"),
+        ActionSpec("publish_hub", {}, admin=True, effect=Network(publish), label="重發遊戲大廳"),
     ))
     return table, settings
