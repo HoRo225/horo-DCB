@@ -1,4 +1,3 @@
-import io
 import unittest
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
@@ -7,7 +6,8 @@ import discord
 
 from src.core.adapters.discord.brand import ICONS
 from src.core.adapters.discord.live import LiveGuild
-from src.games.adapters.discord.presenter import DiscordLobbyBoard, DiscordTables, draw_banner
+from src.games.adapters.discord.presenter import DiscordLobbyBoard, DiscordTables
+from src.games.adapters.discord.views import lobby_view
 from src.games.app.ports import PresentError
 from src.games.app.tables import LiveTable, Posted
 from src.games.domain.table import Slots
@@ -19,10 +19,6 @@ G, CHANNEL = 5, 10
 
 def http(error: type[discord.HTTPException], status: int) -> discord.HTTPException:
     return error(MagicMock(status=status), "refused")
-
-
-def galleries(view: discord.ui.LayoutView) -> int:
-    return sum(isinstance(item, discord.ui.MediaGallery) for item in view.walk_children())
 
 
 class Messages:
@@ -53,40 +49,6 @@ class TableMessageTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(posted, Posted(CHANNEL, 30, f"https://discord.com/channels/{G}/{CHANNEL}/30"))
         view = self.channel.send.await_args.kwargs["view"]
         self.assertIn(f"{'a' * 32}:again", view.actions)
-
-    def lobby(self, banner: discord.File | None) -> tuple[DiscordTables, AsyncMock]:
-        client = Client(Guild(G).add(self.channel))
-        drawing = AsyncMock(return_value=banner)
-        return DiscordTables(client, LiveGuild(client, G, lambda: False), SimpleNamespace(), drawing), drawing
-
-    def picked(self, *, fetched: object, attach: bool = True) -> MagicMock:
-        clicked = testing.interaction()
-        clicked.message.fetch = AsyncMock(side_effect=fetched) if isinstance(fetched, Exception) else AsyncMock(return_value=fetched)
-        clicked.app_permissions = discord.Permissions(attach_files=attach)
-        return clicked
-
-    async def test_lobby_redraw_keeps_the_uploaded_banner_without_reuploading(self) -> None:
-        tables, drawing = self.lobby(discord.File(io.BytesIO(b"png"), "hub.png"))
-        kept = SimpleNamespace(id=70, filename="hub.png")
-        content = await tables.lobby_message(self.picked(fetched=SimpleNamespace(attachments=[kept])))
-        self.assertEqual((galleries(content["view"]), content["attachments"]), (1, [kept]))
-        drawing.assert_not_awaited()
-
-    async def test_lobby_redraw_uploads_a_banner_only_when_it_may_attach_one(self) -> None:
-        unreadable = http(discord.Forbidden, 403)
-        for fetched in (SimpleNamespace(attachments=[]), unreadable):
-            with self.subTest(fetched=fetched):
-                tables, _ = self.lobby(discord.File(io.BytesIO(b"png"), "hub.png"))
-                content = await tables.lobby_message(self.picked(fetched=fetched))
-                self.assertEqual((galleries(content["view"]), [file.filename for file in content["attachments"]]),
-                                 (1, ["hub.png"]))
-                tables, drawing = self.lobby(discord.File(io.BytesIO(b"png"), "hub.png"))
-                content = await tables.lobby_message(self.picked(fetched=fetched, attach=False))
-                self.assertEqual((galleries(content["view"]), content["attachments"]), (0, []))
-                drawing.assert_not_awaited()
-        tables, _ = self.lobby(None)
-        content = await tables.lobby_message(self.picked(fetched=unreadable))
-        self.assertEqual((galleries(content["view"]), content["attachments"]), (0, []))
 
     async def test_refused_or_missing_channel_is_a_present_error(self) -> None:
         self.channel.send.side_effect = http(discord.Forbidden, 403)
@@ -120,8 +82,7 @@ class TableMessageTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("**HoRo**　再來", testing.text(tables.view(self.table)))
         guild.me = SimpleNamespace(display_name="睦")
         self.assertIn("**睦**　再來", testing.text(tables.view(self.table)))
-        content = await tables.lobby_message(self.picked(fetched=SimpleNamespace(attachments=[]), attach=False))
-        self.assertIn("和睦玩一局", testing.text(content["view"]))
+        self.assertIn("和睦玩一局", testing.text(lobby_view(tables.host())))
 
     async def test_idle_closed_table_is_edited_into_a_card_without_controls(self) -> None:
         self.table.farewell = "已閒置結束"
@@ -187,7 +148,7 @@ class LobbyBoardTests(unittest.IsolatedAsyncioTestCase):
     def setUp(self) -> None:
         self.channel = MagicMock(spec=discord.TextChannel, id=CHANNEL)
         self.channel.send = AsyncMock(return_value=SimpleNamespace(id=60))
-        self.channel.permissions_for.return_value = discord.Permissions(view_channel=True, send_messages=True, attach_files=True)
+        self.channel.permissions_for.return_value = discord.Permissions(view_channel=True, send_messages=True)
         self.old = MagicMock(delete=AsyncMock())
         self.channel.get_partial_message.return_value = self.old
         self.guild = Guild(G).add(self.channel)
@@ -195,42 +156,31 @@ class LobbyBoardTests(unittest.IsolatedAsyncioTestCase):
         self.messages = Messages()
         self.client = Client(self.guild)
         self.client.get_partial_messageable = self.messages.get_partial_messageable
-        self.banner = AsyncMock(side_effect=lambda: discord.File(io.BytesIO(b"png"), "hub.png"))
-        self.board = DiscordLobbyBoard(self.client, LiveGuild(self.client, G, lambda: False), self.banner)
+        self.board = DiscordLobbyBoard(self.client, LiveGuild(self.client, G, lambda: False))
 
-    async def test_hub_is_sent_with_its_banner(self) -> None:
-        self.assertEqual(await self.board.post(CHANNEL, lambda: True), 60)
-        kwargs = self.channel.send.await_args.kwargs
-        self.assertEqual((kwargs["file"].filename, galleries(kwargs["view"])), ("hub.png", 1))
-        self.assertIn("和睦玩一局", testing.text(kwargs["view"]))
-
-    async def test_hub_without_attach_permission_or_refused_banner_goes_plain(self) -> None:
-        self.channel.permissions_for.return_value = discord.Permissions(view_channel=True, send_messages=True)
-        self.assertEqual(await self.board.post(CHANNEL, lambda: True), 60)
-        self.banner.assert_not_awaited()
-        self.channel.permissions_for.return_value = discord.Permissions(attach_files=True)
-        self.channel.send.side_effect = [http(discord.Forbidden, 403), SimpleNamespace(id=61)]
-        with self.assertLogs(level="WARNING"):
-            self.assertEqual(await self.board.post(CHANNEL, lambda: True), 61)
-        for call in self.channel.send.await_args_list[0::2]:
-            self.assertNotIn("file", call.kwargs)
-            self.assertIn("## 🎲 遊戲大廳", testing.text(call.kwargs["view"]))
-            self.assertEqual(galleries(call.kwargs["view"]), 0)
-
-    async def test_undrawable_banner_sends_the_plain_hub(self) -> None:
-        self.banner.side_effect = None
-        self.banner.return_value = None
-        await self.board.post(CHANNEL, lambda: True)
-        self.assertNotIn("file", self.channel.send.await_args.kwargs)
+    async def test_hub_is_only_the_title_card_and_menu_whatever_it_may_attach(self) -> None:
+        for attach in (True, False):
+            with self.subTest(attach=attach):
+                self.channel.permissions_for.return_value = discord.Permissions(
+                    view_channel=True, send_messages=True, attach_files=attach,
+                )
+                self.assertEqual(await self.board.post(CHANNEL, lambda: True), 60)
+                kwargs = self.channel.send.await_args.kwargs
+                self.assertEqual(list(kwargs), ["view"])
+                self.assertEqual(([type(item).__name__ for item in kwargs["view"].walk_children()],
+                                  testing.text(kwargs["view"])),
+                                 (["Container", "TextDisplay", "ActionRow", "Select"],
+                                  "## 🎲 遊戲大廳\n-# 選一個遊戲，和睦玩一局"))
 
     async def test_revoked_grant_sends_nothing(self) -> None:
         self.assertIsNone(await self.board.post(CHANNEL, lambda: False))
         self.channel.send.assert_not_awaited()
 
     async def test_send_failures_and_missing_channels_are_present_errors(self) -> None:
-        self.channel.send.side_effect = http(discord.HTTPException, 500)
-        with self.assertRaises(PresentError):
-            await self.board.post(CHANNEL, lambda: True)
+        for refusal in (http(discord.Forbidden, 403), http(discord.HTTPException, 500)):
+            self.channel.send.side_effect = refusal
+            with self.assertRaises(PresentError):
+                await self.board.post(CHANNEL, lambda: True)
         with self.assertRaises(PresentError):
             await self.board.post(CHANNEL + 1, lambda: True)
 
@@ -258,13 +208,6 @@ class LobbyBoardTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(self.board.has_channel(CHANNEL + 1))
         self.client.guilds.clear()
         self.assertIsNone(self.board.channel_problem(CHANNEL))
-
-
-class BannerTests(unittest.IsolatedAsyncioTestCase):
-    async def test_banner_is_drawn_as_a_hub_attachment(self) -> None:
-        file = await draw_banner()
-        self.assertEqual(file.filename, "hub.png")
-        self.assertEqual(file.fp.read(8), b"\x89PNG\r\n\x1a\n")
 
 
 if __name__ == "__main__":

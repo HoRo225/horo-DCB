@@ -39,17 +39,9 @@ def rules_view(game: Game, host: str) -> discord.ui.LayoutView:
                       [(heading, name_text(text, name)) for heading, text in game.rules(slot_symbol)])
 
 
-def lobby_view(host: str, *, banner: bool = True) -> discord.ui.LayoutView:
-    status = hub_status(host)
-    if banner:
-        title = [
-            discord.ui.MediaGallery(discord.MediaGalleryItem("attachment://hub.png", description="遊戲大廳橫幅")),
-            discord.ui.TextDisplay(f"-# {status}"),
-        ]
-    else:
-        title = [card_title(f"{ICONS['games']} 遊戲大廳", status)]
+def lobby_view(host: str) -> discord.ui.LayoutView:
     view = LobbyView(timeout=None)
-    view.add_item(discord.ui.Container(*title, accent_colour=BRAND_COLOUR))
+    view.add_item(discord.ui.Container(card_title(f"{ICONS['games']} 遊戲大廳", hub_status(host)), accent_colour=BRAND_COLOUR))
     view.add_item(discord.ui.ActionRow(pick_select(host)))
     return view
 
@@ -76,7 +68,7 @@ def game_pick_item(
                         play.snapshot(user_id)["state_token"], game=self.item.values[0])
             await play.execute(move, tables.reply(interaction))
             try:
-                await interaction.edit_original_response(**await tables.lobby_message(interaction))
+                await interaction.edit_original_response(view=lobby_view(tables.host()))
             except Exception:
                 logging.warning("Game lobby menu could not be reset after a pick.", exc_info=True)
 

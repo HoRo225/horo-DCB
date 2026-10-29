@@ -175,7 +175,6 @@ class LayoutBudgetTest(unittest.IsolatedAsyncioTestCase):
             view._render_closed()
             fits("panel closed", view)
             fits("lobby", lobby_view(host))
-            fits("lobby without banner", lobby_view(host, banner=False))
             for game in GAMES.values():
                 fits(f"{game.key} full rules", rules_view(game, host))
 

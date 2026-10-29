@@ -74,10 +74,6 @@ def voice_channel(channel_id: int, guild: object) -> MagicMock:
     return channel
 
 
-async def no_banner() -> None:
-    return None
-
-
 class FakeCodex(FakeModel):
     def __init__(self) -> None:
         super().__init__()
@@ -124,7 +120,7 @@ class Admin:
         self.offers = FakeSource()
         steam_store = SqliteSteamStore(db)
         self.steam = Steam(steam_store, self.offers, DiscordAnnouncer(client, live), supervisor.group("steam", SCHEDULED))
-        self.games = Lobby(SqliteGameStore(db), DiscordLobbyBoard(client, live, banner=no_banner), live,
+        self.games = Lobby(SqliteGameStore(db), DiscordLobbyBoard(client, live), live,
                            supervisor.group("games", WORK))
         self.receipts = DiscordReceipts(self.operations, live, client, ActionRegistry())
         kinds = EffectRegistry()

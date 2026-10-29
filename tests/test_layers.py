@@ -9,7 +9,7 @@ SRC = Path(__file__).resolve().parents[1] / "src"
 SQL = re.compile(r"^\s*(SELECT|INSERT|UPDATE|DELETE|CREATE|ALTER|DROP)\s")
 FEATURES = ("ai", "games", "voice", "steam", "admin")
 ROOT_FILES = frozenset({"__init__.py", "bot.py"})
-PACKAGES = frozenset({"core", *FEATURES, "assets"})
+PACKAGES = frozenset({"core", *FEATURES})
 SQL_HOMES = frozenset({"bot.py"})
 
 

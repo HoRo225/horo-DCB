@@ -12,23 +12,14 @@ HUB_URL = f"https://discord.com/channels/{GUILD}/{CHANNEL}/50"
 
 
 class Presenter:
-    def __init__(self, seat=lambda: None) -> None:
+    def __init__(self) -> None:
         self.replies: list[FakeReply] = []
-        self.seat = seat
-        self.redrawn_after: list[object] = []
-        self.redraw_error: Exception | None = None
 
     def hub_link(self) -> list[discord.ui.Button]:
         return [discord.ui.Button(label="前往遊戲大廳", url=HUB_URL)]
 
     def host(self) -> str:
         return "HoRo"
-
-    async def lobby_message(self, interaction: discord.Interaction) -> dict[str, object]:
-        self.redrawn_after.append(self.seat())
-        if self.redraw_error is not None:
-            raise self.redraw_error
-        return {"view": lobby_view("睦"), "attachments": ["hub.png"]}
 
     def reply(self, interaction: discord.Interaction) -> FakeReply:
         self.replies.append(FakeReply())
@@ -39,55 +30,66 @@ def links(view: discord.ui.LayoutView) -> list[str]:
     return [item.url for item in view.walk_children() if isinstance(item, discord.ui.Button)]
 
 
-def galleries(view: discord.ui.LayoutView) -> int:
-    return sum(isinstance(item, discord.ui.MediaGallery) for item in view.walk_children())
+def assert_title_card_then_menu(case: unittest.TestCase, view: discord.ui.LayoutView, status: str) -> None:
+    case.assertEqual(([type(item).__name__ for item in view.walk_children()], testing.text(view)),
+                     (["Container", "TextDisplay", "ActionRow", "Select"], f"## 🎲 遊戲大廳\n-# {status}"))
+    case.assertEqual(view.children[1].children[0].custom_id, "horo:game:pick")
 
 
 class LobbyViewTests(unittest.TestCase):
-    def test_lobby_card_holds_the_banner_or_title_then_the_game_menu(self) -> None:
-        for banner in (True, False):
-            with self.subTest(banner=banner):
-                view = lobby_view("睦_頭", banner=banner)
-                card, menu = view.children
-                self.assertEqual((len(card.children), galleries(view)), (2, 1) if banner else (1, 0))
-                self.assertIn("選一個遊戲，和睦\\_頭玩一局", testing.text(view))
-                [select] = menu.children
-                self.assertEqual(select.custom_id, "horo:game:pick")
-                self.assertEqual([(option.value, option.label, option.description) for option in select.options],
-                                 [("blackjack", "21 點", "跟睦_頭比點數 · 叫牌或停牌"),
-                                  ("slots", "拉霸", "3×3 盤面 · 各線倍數相加")])
-                self.assertTrue(all(option.emoji for option in select.options))
+    def test_lobby_card_holds_the_title_then_the_game_menu(self) -> None:
+        view = lobby_view("睦_頭")
+        assert_title_card_then_menu(self, view, "選一個遊戲，和睦\\_頭玩一局")
+        [select] = view.children[1].children
+        self.assertEqual([(option.value, option.label, option.description) for option in select.options],
+                         [("blackjack", "21 點", "跟睦_頭比點數 · 叫牌或停牌"),
+                          ("slots", "拉霸", "3×3 盤面 · 各線倍數相加")])
+        self.assertTrue(all(option.emoji for option in select.options))
 
 
 class GamePickTests(unittest.IsolatedAsyncioTestCase):
     def setUp(self) -> None:
         self.game = GameHarness(self)
-        self.presenter = Presenter(lambda: self.game.store.seat(PLAYER))
+        self.presenter = Presenter()
         self.roles: frozenset[int] | None = frozenset({ROLE})
         players = SimpleNamespace(role_ids=lambda user_id: self.roles)
         self.pick = game_pick_item(self.game.play, self.game.lobby, self.presenter, players)
+        self.reset_after: list[object] = []
 
-    async def choose(self, game: str, *, edit_error: Exception | None = None) -> discord.Interaction:
+    async def choose(
+        self, game: str, *, edit_error: Exception | None = None, attach: bool = True,
+    ) -> discord.Interaction:
         picked = testing.interaction()
-        picked.edit_original_response.side_effect = edit_error
+
+        def reset(**kwargs: object) -> None:
+            self.reset_after.append(self.game.store.seat(PLAYER))
+            if edit_error is not None:
+                raise edit_error
+
+        picked.edit_original_response.side_effect = reset
         picked.id, picked.user.id, picked.guild_id, picked.channel_id = 900, PLAYER, GUILD, CHANNEL
-        picked.message.attachments = []
+        picked.app_permissions = discord.Permissions(attach_files=attach)
         item = await self.pick.from_custom_id(picked, None, None)
         item.item._values = [game]
         await item.callback(picked)
         return picked
 
     async def test_pick_acknowledges_opens_a_table_then_resets_the_lobby(self) -> None:
-        picked = await self.choose("slots")
-        picked.response.defer.assert_awaited_once_with()
-        picked.response.edit_message.assert_not_awaited()
-        [seat] = self.presenter.redrawn_after
-        self.assertEqual(seat.game, "slots")
-        redrawn = picked.edit_original_response.await_args.kwargs
-        self.assertEqual((galleries(redrawn["view"]), redrawn["attachments"]), (1, ["hub.png"]))
-        self.assertEqual(self.game.records.get_effect("interaction:900:table-send").payload, {"user_id": PLAYER})
-        [reply] = self.presenter.replies
-        self.assertEqual(reply.answers(), [("opened", "賭桌已開啟。", f"https://discord.com/channels/{GUILD}/{CHANNEL}/100")])
+        for attach in (True, False):
+            with self.subTest(attach=attach):
+                self.setUp()
+                picked = await self.choose("slots", attach=attach)
+                picked.response.defer.assert_awaited_once_with()
+                picked.response.edit_message.assert_not_awaited()
+                [seat] = self.reset_after
+                self.assertEqual(seat.game, "slots")
+                redrawn = picked.edit_original_response.await_args.kwargs
+                self.assertEqual(list(redrawn), ["view"])
+                assert_title_card_then_menu(self, redrawn["view"], "選一個遊戲，和 HoRo 玩一局")
+                self.assertEqual(self.game.records.get_effect("interaction:900:table-send").payload, {"user_id": PLAYER})
+                [reply] = self.presenter.replies
+                self.assertEqual(reply.answers(),
+                                 [("opened", "賭桌已開啟。", f"https://discord.com/channels/{GUILD}/{CHANNEL}/100")])
 
     async def assert_reset_failure_is_quiet(self, **failure: Exception) -> None:
         with self.assertLogs(level="WARNING") as logs:
@@ -96,10 +98,6 @@ class GamePickTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.game.store.seat(PLAYER).game, "slots")
         picked.followup.send.assert_not_awaited()
         picked.response.send_message.assert_not_awaited()
-
-    async def test_lobby_that_cannot_be_rebuilt_leaves_the_table_open_quietly(self) -> None:
-        self.presenter.redraw_error = discord.HTTPException(MagicMock(status=500), "down")
-        await self.assert_reset_failure_is_quiet()
 
     async def test_lobby_edit_refusal_leaves_the_table_open_quietly(self) -> None:
         await self.assert_reset_failure_is_quiet(edit_error=discord.HTTPException(MagicMock(status=500), "down"))

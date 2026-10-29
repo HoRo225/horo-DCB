@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import logging
-from collections.abc import Awaitable, Callable
+from collections.abc import Callable
 
 import discord
 
@@ -9,7 +9,6 @@ from src.core.adapters.discord.brand import ICONS, send_notice
 from src.core.adapters.discord.channels import post_problem
 from src.core.adapters.discord.live import LiveGuild
 from src.games.adapters.discord.access import hub_link
-from src.games.adapters.discord.art import banner_file, banner_png, render
 from src.games.adapters.discord.format import slot_symbol
 from src.games.adapters.discord.tables import SeatView, seat_view
 from src.games.adapters.discord.views import lobby_view
@@ -18,24 +17,11 @@ from src.games.app.ports import PresentError
 from src.games.app.tables import LiveTable, Posted
 
 
-async def draw_banner() -> discord.File | None:
-    try:
-        await render(banner_png)
-    except Exception:
-        logging.exception("Game hub banner could not be drawn.")
-        return None
-    return banner_file()
-
-
 class DiscordTables:
-    def __init__(
-        self, client: discord.Client, live: LiveGuild, lobby: Lobby,
-        banner: Callable[[], Awaitable[discord.File | None]] = draw_banner,
-    ) -> None:
+    def __init__(self, client: discord.Client, live: LiveGuild, lobby: Lobby) -> None:
         self._client = client
         self._live = live
         self._lobby = lobby
-        self._banner = banner
 
     def symbol(self, name: str) -> str:
         return slot_symbol(name)
@@ -45,17 +31,6 @@ class DiscordTables:
 
     def hub_link(self) -> list[discord.ui.Button]:
         return hub_link(self._lobby.hub_message, self._live.guild_id)
-
-    async def lobby_message(self, interaction: discord.Interaction) -> dict[str, object]:
-        try:
-            attachments = (await interaction.message.fetch()).attachments
-        except discord.HTTPException:
-            attachments = []
-        if attachments:
-            return {"view": lobby_view(self.host()), "attachments": attachments}
-        if interaction.app_permissions.attach_files and (file := await self._banner()):
-            return {"view": lobby_view(self.host()), "attachments": [file]}
-        return {"view": lobby_view(self.host(), banner=False), "attachments": []}
 
     def view(self, table: LiveTable) -> SeatView:
         return seat_view(table, self.host())
@@ -115,13 +90,9 @@ class InteractionReply:
 
 
 class DiscordLobbyBoard:
-    def __init__(
-        self, client: discord.Client, live: LiveGuild,
-        banner: Callable[[], Awaitable[discord.File | None]] = draw_banner,
-    ) -> None:
+    def __init__(self, client: discord.Client, live: LiveGuild) -> None:
         self._client = client
         self._live = live
-        self._banner = banner
 
     def _channel(self, channel_id: int | None) -> discord.abc.GuildChannel | None:
         guild = self._live.guild()
@@ -137,29 +108,16 @@ class DiscordLobbyBoard:
         return post_problem(guild, self._channel(channel_id), "遊戲頻道")
 
     async def post(self, channel_id: int, still_current: Callable[[], bool]) -> int | None:
-        guild = self._live.guild()
-        channel = guild.get_channel(channel_id) if guild is not None else None
+        channel = self._channel(channel_id)
         if channel is None:
             raise PresentError("game channel is unavailable")
-        try:
-            message = await self._send(guild, channel, still_current)
-        except discord.HTTPException as error:
-            raise PresentError(str(error)) from error
-        return None if message is None else message.id
-
-    async def _send(
-        self, guild: discord.Guild, channel: discord.TextChannel, still_current: Callable[[], bool],
-    ) -> discord.Message | None:
-        if channel.permissions_for(guild.me).attach_files and (file := await self._banner()):
-            if not still_current():
-                return None
-            try:
-                return await channel.send(view=lobby_view(self._live.bot_name()), file=file)
-            except discord.Forbidden:
-                logging.warning("Game lobby banner was refused; posting without it.")
         if not still_current():
             return None
-        return await channel.send(view=lobby_view(self._live.bot_name(), banner=False))
+        try:
+            message = await channel.send(view=lobby_view(self._live.bot_name()))
+        except discord.HTTPException as error:
+            raise PresentError(str(error)) from error
+        return message.id
 
     async def withdraw(self, channel_id: int, message_id: int) -> bool:
         try:
