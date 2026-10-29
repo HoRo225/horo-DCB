@@ -88,7 +88,6 @@ class StoreTests(unittest.TestCase):
             self.store.record_hub("missing:game-hub", 10, 60)
         self.assertEqual(self.store.hub_message(), [10, 50])
         self.assertTrue(self.store.begin_hub("b:game-hub", 10, operation_id="b"))
-        self.assertEqual(self.records.get_effect("b:game-hub").payload, {"previous_hub": [10, 50]})
 
     def test_idle_close_removes_the_seat_with_an_optional_cleanup(self) -> None:
         self.opened(Seat(1, "slots", 10, 20))

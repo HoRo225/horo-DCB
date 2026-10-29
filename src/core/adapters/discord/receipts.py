@@ -51,7 +51,7 @@ class DiscordReceipts:
         self._live = live
         self._client = client
         self._registry = registry
-        self.private_results = PrivateResults(self._authorize, self._render, self._label, live.bot_name)
+        self.private_results = PrivateResults(self._authorize, self._render, self._label)
         self._sent: OrderedDict[int, object | None] = OrderedDict()
         self._lock = asyncio.Lock()
 
@@ -171,14 +171,12 @@ class DiscordReceipts:
         return self._query(kind)[1].label
 
     async def _authorize(self, entry: PrivateResult, interaction: discord.Interaction) -> str | None:
-        if (query := self._query(entry.kind)) is None:
-            return "這份私人結果已失效，請重新查詢。"
         actor = await self._live.fresh_actor(interaction.channel_id, interaction.user.id)
         if actor is None:
             return "無法確認目前的伺服器身分。"
         if problem := self._live.act_problem(interaction.guild_id, interaction.channel_id, actor):
             return problem
-        if query[0].admin and not actor.admin:
+        if self._registry.spec(entry.kind).admin and not actor.admin:
             return "此操作僅限伺服器管理員使用。"
         return None
 

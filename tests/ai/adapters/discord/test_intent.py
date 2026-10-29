@@ -396,17 +396,6 @@ class FrontendIntentTest(unittest.IsolatedAsyncioTestCase):
         self.model.try_start_request.assert_called_once_with(USER)
         message.channel.send.assert_awaited_once()
 
-    async def test_replay_with_nothing_left_to_replay_stays_silent(self):
-        message = FakeMessage()
-        self.actions.prior = lambda message_id: (Plan(()), {"game": None})
-        await self.handle(message)
-        self.model.structured.assert_not_awaited()
-        self.model.chat.assert_not_awaited()
-        self.actions.execute.assert_not_awaited()
-        message.channel.send.assert_not_awaited()
-        message.posted.edit.assert_not_awaited()
-        message.posted.delete.assert_awaited_once()
-
     async def test_raw_direct_input_limit_blocks_intent_operations_and_media(self):
         message = FakeMessage(content="<@799> " + "問" * 4001)
         message.with_untrusted_quote_and_images()

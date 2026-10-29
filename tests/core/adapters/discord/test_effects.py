@@ -23,7 +23,7 @@ EXPIRED = "操作已過期，項目仍保留待處理。"
 ASK_MESSAGE = "請提供已核對的訊息 ID。"
 MISMATCH = "訊息作者、原頻道或時間與此項目不符。"
 NOT_RETRYABLE = "此建立操作不能盲目重做；請核對已建立的資源，或略過此項目。"
-MANUAL_CLEANUP = "請先核對並人工清理未啟用資源，再略過原項目；不會恢復舊指令。"
+MANUAL_CLEANUP = "請先到原頻道核對並清理，再按略過。"
 UNSAVED = "處理結果無法儲存；項目仍保留待查，請稍後重新整理。"
 
 
@@ -99,28 +99,20 @@ class ResolverTests(Harness):
     async def resolve(self, effect_id: str, resolution: str, **kwargs) -> str | None:
         return await self.effects.resolve(effect_id, resolution, actor_id=ADMIN, **kwargs)
 
-    def test_registry_rejects_duplicate_names_and_calls_unknown_kinds_other(self) -> None:
+    def test_registry_rejects_duplicate_and_unknown_kinds(self) -> None:
         with self.assertRaises(ValueError):
             self.kinds.register(EffectKind("note", "重複"))
-        legacy = self.kinds.kind("legacy")
-        self.assertEqual((legacy.label, legacy.proof, legacy.retry), ("其他項目", None, None))
-
-    async def test_unregistered_kind_can_only_be_skipped(self) -> None:
-        self.effect("legacy", "legacy")
-        self.assertEqual(await self.resolve("legacy", "confirmed", message_id=501), MANUAL_CLEANUP)
-        self.assertEqual(await self.resolve("legacy", "retry"), NOT_RETRYABLE)
-        self.assertEqual(self.status("legacy"), "unknown")
-        self.assertIsNone(await self.resolve("legacy", "skip"))
-        self.assertEqual((self.status("legacy"), self.records.get_effect("legacy").error), ("skipped", "explicitly_skipped"))
+        with self.assertRaises(KeyError):
+            self.kinds.kind("legacy")
 
     async def test_pending_lists_waiting_effects_with_their_actions(self) -> None:
         for effect_id, kind, status in (("sent", "note", "unknown"), ("lost", "note", "failed"), ("queued", "open", "pending"),
-                                        ("old", "legacy", "unknown"), ("done", "note", "done"), ("gone", "note", "skipped")):
+                                        ("done", "note", "done"), ("gone", "note", "skipped")):
             self.effect(effect_id, kind, status=status)
         shown = {item.effect.effect_id: (item.kind.label, item.confirmable, item.retryable) for item in self.effects.pending()}
         self.assertEqual(shown, {
             "sent": ("通知", True, True), "lost": ("通知", False, True),
-            "queued": ("開啟", False, False), "old": ("其他項目", False, False),
+            "queued": ("開啟", False, False),
         })
 
     async def test_only_a_current_administrator_may_resolve(self) -> None:
@@ -343,7 +335,7 @@ class FeatureKindTests(Harness):
         settings = SettingsStore(self.db, self.records)
         with transaction(self.db):
             settings.put({GAMES_HUB_MESSAGE: [CHANNEL, 999]})
-        effect = self.effect("hub", "game_hub_publish", payload={"previous_hub": [CHANNEL, 888]})
+        effect = self.effect("hub", "game_hub_publish")
         self.channel.fetch_message.return_value = self.message(effect)
         self.assertIsNone(await self.resolve("hub", "confirmed", message_id=501))
         self.assertEqual(self.status("hub"), "done")

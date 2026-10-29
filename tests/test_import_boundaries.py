@@ -1,5 +1,4 @@
 import ast
-import re
 import subprocess
 import sys
 import unittest
@@ -304,16 +303,6 @@ class RuntimeImportTests(unittest.TestCase):
             modules = loaded_modules(f"src.{feature}.adapters.discord.cog")
             with self.subTest(feature):
                 self.assertLessEqual({feature_of(m) for m in modules} - {None}, {feature})
-
-    def test_nothing_imports_the_codex_sdk_or_pydantic(self) -> None:
-        pattern = re.compile(r"^\s*(?:from|import)\s+(?:openai_codex|pydantic)\b", re.M)
-        for sample in ("import pydantic", "from openai_codex.models import x", "    import openai_codex"):
-            self.assertIsNotNone(pattern.search(sample), sample)
-        self.assertIsNone(pattern.search("import pydantic_extra_types"))
-        for path in SRC.rglob("*.py"):
-            with self.subTest(str(path.relative_to(ROOT))):
-                self.assertIsNone(pattern.search(path.read_text(encoding="utf-8")))
-        self.assertTrue({"openai_codex", "pydantic"}.isdisjoint(loaded_modules("src.bot")))
 
     def test_panel_pages_do_not_import_the_database(self) -> None:
         for path in (SRC / "admin").rglob("*.py"):

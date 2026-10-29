@@ -14,7 +14,7 @@ class SteamPageTests(PanelCase):
     async def test_query_renders_each_offer_with_its_price(self) -> None:
         await self.open_panel()
         await self.go("Steam 免費遊戲")
-        self.admin.offers.result = fetched(SteamOffer(10, "Test Game", "NT$100", "", (), None))
+        self.admin.offers.result = fetched(SteamOffer(10, "Test Game", "NT$100", "", None))
         shown = self.screen(await self.click(self.button("重新查詢")))
         self.assertIn("**Test Game**\n~~NT$100~~ → **免費**", shown)
 

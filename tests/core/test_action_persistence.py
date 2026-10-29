@@ -1,7 +1,5 @@
 import unittest
 
-from src.core.adapters.sqlite.operations import OperationStore
-from src.core.domain.actions import Action, Plan
 from tests.support.actions import ActionHarness
 
 DONE = '{"code":"done","ok":true,"text":"管理操作已完成。"}'
@@ -95,16 +93,6 @@ class ActionPersistenceGoldenTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.harness.rows(), stored)
         self.harness.channel.send.assert_awaited_once()
 
-    async def test_stored_plan_with_a_retired_action_is_not_replayed(self) -> None:
-        operations = OperationStore(self.harness.db)
-        retired = {"kind": "plan", "question": "",
-                   "actions": [{"name": "ai_display", "params": {"enabled": False}}, {"name": "help", "params": {}}]}
-        operations.register_request(1000, 1, 5, 10, {"decision": retired, "game": None})
-        with self.assertLogs(level="WARNING") as logs:
-            self.assertEqual(self.harness.service.prior(1000), (Plan(()), {"game": None}))
-        self.assertIn("ai_display", " ".join(logs.output))
-        await self.harness.execute(("help", {}), message_id=1001)
-        self.assertEqual(self.harness.service.prior(1001), (Plan((Action("help", {}),)), {"game": None}))
 
 
 if __name__ == "__main__":

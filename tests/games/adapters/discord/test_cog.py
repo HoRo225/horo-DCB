@@ -130,18 +130,13 @@ class ClickTests(unittest.IsolatedAsyncioTestCase):
             clicked.response.edit_message.assert_not_awaited()
             clicked.response.send_message.assert_not_awaited()
 
-    async def test_button_on_an_ended_table_says_so_and_points_to_the_lobby(self) -> None:
-        await self.game.lobby.publish_hub()
-        hub_channel, hub_id = self.game.lobby.hub_message
+    async def test_buttons_on_ended_tables_get_no_response(self) -> None:
         for custom_id in (f"{self.table.token}:again", f"{'f' * 32}:leave_table"):
             with self.subTest(custom_id=custom_id):
                 clicked = self.harness.click(custom_id, self.message_id + 1)
                 await self.harness.cog.on_interaction(clicked)
-                sent = clicked.response.send_message.await_args.kwargs
-                self.assertTrue(sent["ephemeral"])
-                self.assertIn("這張賭桌已經結束，請從遊戲大廳重新開桌。", testing.text(sent["view"]))
-                [link] = [item for item in sent["view"].walk_children() if isinstance(item, discord.ui.Button)]
-                self.assertEqual(link.url, f"https://discord.com/channels/{GUILD}/{hub_channel}/{hub_id}")
+                clicked.response.defer.assert_not_awaited()
+                clicked.response.send_message.assert_not_awaited()
                 clicked.response.edit_message.assert_not_awaited()
 
     async def test_click_errors_reply_with_an_error_card(self) -> None:

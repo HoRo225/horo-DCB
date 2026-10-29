@@ -5,8 +5,7 @@ from dataclasses import dataclass
 
 from src.core.domain.records import DiscordEffect
 
-OTHER = "其他項目"
-MANUAL_CLEANUP = "請先核對並人工清理未啟用資源，再略過原項目；不會恢復舊指令。"
+MANUAL_CLEANUP = "請先到原頻道核對並清理，再按略過。"
 UNDELIVERED = "已處理送出要求；尚未確認送達，請重新整理查看狀態。"
 
 type StillCurrent = Callable[[], bool]
@@ -64,4 +63,4 @@ class EffectRegistry:
             self._kinds[kind.name] = kind
 
     def kind(self, name: str) -> EffectKind:
-        return self._kinds.get(name) or EffectKind(name, OTHER)
+        return self._kinds[name]

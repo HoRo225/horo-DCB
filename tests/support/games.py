@@ -9,10 +9,11 @@ from collections.abc import Awaitable, Callable, Mapping
 from src.core.adapters.sqlite.db import open_db
 from src.core.adapters.sqlite.operations import OperationStore
 from src.core.app.supervisor import WORK, TaskGroup
-from src.games import LiveTable, Lobby, Move, Play, Tables
+from src.games import Lobby, Play, Tables
 from src.games.adapters.sqlite.store import SqliteGameStore
+from src.games.app.play import Move
 from src.games.app.ports import Player, Refused
-from src.games.app.tables import Posted
+from src.games.app.tables import LiveTable, Posted
 from src.games.domain.blackjack import Card
 from src.games.domain.slots import Spin, evaluate
 from src.games.domain.table import Dealer, TableState

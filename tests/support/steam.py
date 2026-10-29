@@ -15,7 +15,7 @@ GONE_CHANNEL = "指定通知頻道已不存在，未綁定頻道。"
 
 def offer(app_id: int, **fields: object) -> SteamOffer:
     return SteamOffer(**{"app_id": app_id, "name": f"game{app_id}", "old_price": "NT$100", "description": "desc",
-                         "developers": ("dev",), "header_image": None} | fields)
+                         "header_image": None} | fields)
 
 
 def fetched(*offers: SteamOffer, failed: int = 0) -> SteamFetchResult:
@@ -23,10 +23,9 @@ def fetched(*offers: SteamOffer, failed: int = 0) -> SteamFetchResult:
 
 
 def announcement_effect(effect_id: str, app_id: int, *, status: str = "pending", channel_id: int = 10,
-                        role_ids: tuple[int, ...] = (), error: str | None = None, nonce: str | None = "nonce",
-                        message_id: int | None = None) -> DiscordEffect:
+                        role_ids: tuple[int, ...] = (), error: str | None = None, nonce: str | None = "nonce") -> DiscordEffect:
     payload = Announcement(offer(app_id), role_ids).payload()
-    return DiscordEffect(effect_id, None, ANNOUNCE, status, channel_id, message_id, nonce, payload, error, 0, 0)
+    return DiscordEffect(effect_id, None, ANNOUNCE, status, channel_id, None, nonce, payload, error, 0, 0)
 
 
 class FakeStore:

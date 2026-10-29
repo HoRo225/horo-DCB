@@ -45,8 +45,7 @@ class SqliteGameStore:
         with transaction(self._db):
             if self._operations.get_effect(effect_id) is not None:
                 return False
-            self._operations.create_effect(effect_id, HUB_PUBLISH, channel_id, {"previous_hub": self.hub_message()},
-                                           operation_id=operation_id)
+            self._operations.create_effect(effect_id, HUB_PUBLISH, channel_id, {}, operation_id=operation_id)
             self._operations.update_effect(effect_id, "unknown")
         return True
 

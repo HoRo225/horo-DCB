@@ -174,18 +174,18 @@ def discord_tables(text: str) -> str:
     return "\n".join(out)
 
 
-def split_reasoning_summary(summary: str) -> tuple[str | None, str]:
+def reasoning_title(summary: str) -> str:
     cleaned = "\n".join(
         line for line in summary.strip().splitlines() if line.strip() != "<!-- -->"
     ).strip()
     if not cleaned.startswith("**"):
-        return None, cleaned
+        return ""
     closing = cleaned.find("**", 2)
     if closing == -1 and "\n" not in cleaned:
-        return cleaned[2:].rstrip("*").strip() or None, ""
+        return cleaned[2:].rstrip("*").strip()
     if closing <= 2:
-        return None, cleaned
+        return ""
     remainder = cleaned[closing + 2 :]
     if remainder and not remainder.startswith(("\n", "\r")):
-        return None, cleaned
-    return cleaned[2:closing].strip() or None, remainder.strip()
+        return ""
+    return cleaned[2:closing].strip()

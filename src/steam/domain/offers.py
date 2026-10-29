@@ -14,17 +14,12 @@ class SteamOffer:
     name: str
     old_price: str
     description: str
-    developers: tuple[str, ...]
     header_image: str | None
     ends_at: int | None = None
 
     @property
     def store_url(self) -> str:
         return f"https://store.steampowered.com/app/{self.app_id}/"
-
-
-def offer_from_payload(fields: Mapping[str, Any]) -> SteamOffer:
-    return SteamOffer(**{**fields, "developers": tuple(fields["developers"])})
 
 
 @dataclass(frozen=True, slots=True)
@@ -37,7 +32,7 @@ class Announcement:
 
     @classmethod
     def parse(cls, payload: Mapping[str, Any]) -> Announcement:
-        return cls(offer_from_payload(payload["offer"]), tuple(payload["role_ids"]))
+        return cls(SteamOffer(**payload["offer"]), tuple(payload["role_ids"]))
 
 
 def announced_app(payload: Mapping[str, Any]) -> int:

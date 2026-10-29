@@ -28,7 +28,7 @@ class SteamQueryTests(unittest.IsolatedAsyncioTestCase):
             (None, "無法取得"),
             (SteamFetchResult(frozenset(), (), failed_app_count=3), "無法取得"),
             (SteamFetchResult(frozenset(), ()), "沒有符合條件"),
-            (SteamFetchResult(frozenset(), (SteamOffer(1, "遊戲", "NT$1", "", (), ""),), failed_app_count=2), "資料不完整：2 款"),
+            (SteamFetchResult(frozenset(), (SteamOffer(1, "遊戲", "NT$1", "", ""),), failed_app_count=2), "資料不完整：2 款"),
         ):
             with self.subTest(shown=shown):
                 steam = SimpleNamespace(fetch_current_offers=AsyncMock(return_value=result))
@@ -37,7 +37,7 @@ class SteamQueryTests(unittest.IsolatedAsyncioTestCase):
                 self.assertIn(shown, text((await query.effect.render(ADMIN))["view"]))
 
     async def test_query_card_keeps_its_title_offer_list_and_thumbnails(self) -> None:
-        offers = tuple(SteamOffer(n, f"遊戲{n}", "NT$1", "", (), f"https://cdn.example.com/{n}.jpg") for n in range(4))
+        offers = tuple(SteamOffer(n, f"遊戲{n}", "NT$1", "", f"https://cdn.example.com/{n}.jpg") for n in range(4))
         for failed, accent in ((0, BRAND_COLOUR), (1, WARN_COLOUR)):
             with self.subTest(failed=failed):
                 steam = SimpleNamespace(fetch_current_offers=AsyncMock(

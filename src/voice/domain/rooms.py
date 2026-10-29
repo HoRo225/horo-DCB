@@ -19,10 +19,6 @@ REQUIRED_PERMISSIONS = (
     ("deafen_members", "拒聽成員"),
 )
 OWNER_PERMISSIONS = ("view_channel", "connect", "manage_channels", "move_members", "mute_members", "deafen_members")
-RECORDED = frozenset({
-    "guild_id", "owner_id", "name", "category_id", "overwrites", "user_limit", "bitrate", "rtc_region",
-    "video_quality_mode",
-})
 
 
 @dataclass(frozen=True, slots=True)

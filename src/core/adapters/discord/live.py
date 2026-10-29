@@ -188,8 +188,8 @@ class LiveGuild:
                         return MISSING_TARGET[stage]
                     if not is_text_channel(channel) or not channel.permissions_for(member).view_channel:
                         return unusable
-            case "role" | "roles":
-                for identifier in value if isinstance(value, list) else [value]:
+            case "roles":
+                for identifier in value:
                     role = guild.get_role(identifier)
                     if role is None:
                         return MISSING_TARGET[stage]

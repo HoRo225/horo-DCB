@@ -4,8 +4,8 @@ from types import SimpleNamespace
 from src.core.adapters.discord.live import LiveGuild
 from src.core.app.actions import Step
 from src.core.app.ports import Actor, Source
-from src.games import GAMES
 from src.games.adapters.discord.actions import game_actions
+from src.games.domain.catalog import GAMES
 from tests.support.games import CHANNEL, GUILD, PLAYER, ROLE, GameHarness
 
 
@@ -43,7 +43,7 @@ class GameGroupTests(unittest.IsolatedAsyncioTestCase):
         result = await self.spec("open_table").effect.run(step, {"game": "slots"})
         self.assertTrue(result["ok"])
         self.assertEqual(self.game.records.get("req:0").kind, "game_action")
-        self.assertEqual(self.game.records.get_effect("req:0:table-send").payload["source_message_id"], 77)
+        self.assertEqual(self.game.records.get_effect("req:0:table-send").payload, {"user_id": PLAYER})
 
 
 if __name__ == "__main__":

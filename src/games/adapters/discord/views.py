@@ -16,8 +16,6 @@ if TYPE_CHECKING:
     from src.games.adapters.discord.access import DiscordPlayers
     from src.games.adapters.discord.presenter import DiscordTables
 
-RETIRED = "這個遊戲已下架，請重新從遊戲大廳選擇。"
-
 
 class LobbyView(discord.ui.LayoutView):
     def is_dispatchable(self) -> bool:
@@ -86,7 +84,7 @@ def game_pick_item(
 
 
 def rules_item(tables: DiscordTables) -> type[discord.ui.DynamicItem[discord.ui.Button]]:
-    class RulesButton(discord.ui.DynamicItem[discord.ui.Button], template=r"horo:game:rules:(?P<game>[a-z_]+)"):
+    class RulesButton(discord.ui.DynamicItem[discord.ui.Button], template=r"horo:game:rules:(?P<game>blackjack|slots)"):
         def __init__(self, game: str) -> None:
             super().__init__(
                 discord.ui.Button(label="完整規則", emoji=ICONS["rules"], style=discord.ButtonStyle.secondary,
@@ -100,9 +98,6 @@ def rules_item(tables: DiscordTables) -> type[discord.ui.DynamicItem[discord.ui.
 
         @reported
         async def callback(self, interaction: discord.Interaction) -> None:
-            if (game := GAMES.get(self.game)) is None:
-                await send_notice(interaction, RETIRED, items=tables.hub_link())
-                return
-            await interaction.response.send_message(view=rules_view(game, tables.host()), ephemeral=True)
+            await interaction.response.send_message(view=rules_view(GAMES[self.game], tables.host()), ephemeral=True)
 
     return RulesButton

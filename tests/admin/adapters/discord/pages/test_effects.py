@@ -57,7 +57,7 @@ class EffectsPageTest(unittest.IsolatedAsyncioTestCase):
         for effect_id in ("first", "second"):
             self.add(effect_id, {"private_ref": "PRIVATE_SECRET", "salary": 999999})
         kinds = EffectRegistry()
-        kinds.register(EffectKind("note", "結果卡", proof=MessageProof(), retry=AsyncMock()))
+        kinds.register(EffectKind("note", "結果卡", proof=MessageProof(), retry=AsyncMock()), EffectKind("open", "開啟賭桌"))
         pending = lambda: [PendingEffect(effect, kinds.kind(effect.kind)) for effect in self.records.effects(status="unknown")]
         self.effects = SimpleNamespace(pending=pending, resolve=AsyncMock(return_value=None))
         self.panel = Panel(self.effects)
@@ -98,14 +98,13 @@ class EffectsPageTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual({option.description for option in self.select().options}, {f"（已刪除）ID {CHANNEL}"})
         self.assertIn(f"**原頻道**　（已刪除）ID {CHANNEL}", self.shown())
 
-    async def test_unregistered_kind_is_other_and_offers_only_skip(self) -> None:
-        self.add("legacy", kind="legacy.kind")
-        self.panel.state(EffectPick).effect_id = "legacy"
+    async def test_kind_without_proof_or_retry_offers_only_skip(self) -> None:
+        self.add("open", kind="open")
+        self.panel.state(EffectPick).effect_id = "open"
         render_effects(self.panel)
         shown = self.shown()
-        self.assertIn("**其他項目** · 結果不明", shown)
+        self.assertIn("**開啟賭桌** · 結果不明", shown)
         self.assertIn("這類項目不能核對或重送，請到原頻道確認並清理後按略過。", shown)
-        self.assertNotIn("legacy.kind", shown)
         self.assertNotIn("核對後標記已送達", self.labels())
         self.assertNotIn("已查核未送達，重送", self.labels())
         self.assertIn("略過此次", self.labels())

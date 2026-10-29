@@ -28,7 +28,7 @@ class ConversationStore:
         self.db.execute(
             "INSERT INTO codex_threads (conversation_key, thread_id, parent_channel_id) VALUES (?, ?, ?) "
             "ON CONFLICT (conversation_key) DO UPDATE SET thread_id = excluded.thread_id, "
-            "parent_channel_id = COALESCE(codex_threads.parent_channel_id, excluded.parent_channel_id)",
+            "parent_channel_id = excluded.parent_channel_id",
             (key, thread_id, parent_channel_id),
         )
 

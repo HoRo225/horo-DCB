@@ -68,7 +68,7 @@ def render_effects(view, note=None):
         more = f"\n還有 {len(pending) - 25} 項，處理完前面的會自動遞補。" if len(pending) > 25 else ""
         children.append(discord.ui.TextDisplay(f"**{len(pending)} 項待處理**\n結果不明表示可能已送達；查核前不會自動重送。{more}"))
         select = view.control(("select", "effect"), lambda: discord.ui.Select(), lambda item, interaction: pick(view, item, interaction))
-        select.options = [discord.SelectOption(label=f"{item.kind.label} · {STATES.get(item.effect.status, '待處理')}",
+        select.options = [discord.SelectOption(label=f"{item.kind.label} · {STATES[item.effect.status]}",
                                                value=item.effect.effect_id, description=channel_name(view, item.effect.channel_id)[:100],
                                                default=item.effect.effect_id == picked.effect_id) for item in pending[:25]]
         children.append(discord.ui.ActionRow(select))
@@ -76,7 +76,7 @@ def render_effects(view, note=None):
         effect, can_confirm, can_retry = chosen.effect, chosen.confirmable, chosen.retryable
         origin = mention(effect.channel_id, view.guild.get_channel_or_thread(effect.channel_id) is not None)
         children.append(discord.ui.TextDisplay(
-            f"**{chosen.kind.label}** · {STATES.get(effect.status, '待處理')}\n"
+            f"**{chosen.kind.label}** · {STATES[effect.status]}\n"
             f"**原頻道**　{origin} · <t:{effect.updated_at}:f>"
             + ("" if can_confirm or can_retry else "\n這類項目不能核對或重送，請到原頻道確認並清理後按略過。")))
         async def confirm(interaction):

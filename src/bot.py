@@ -140,7 +140,7 @@ def compose(bot: HoroBot, codex: CodexService, db: sqlite3.Connection, guild_id:
         maintenance=maintenance,
         watchdog=supervisor.group("watchdog", SCHEDULED),
         shutdown=shutdown,
-        cogs=(games_cog, VoiceCog(voice, live), AdminCog(admin), ai_cog, SteamCog(bot, steam)),
+        cogs=(games_cog, VoiceCog(voice, live), AdminCog(admin), ai_cog, SteamCog(steam)),
         dynamic_items=(receipts.private_results.item,),
     )
 

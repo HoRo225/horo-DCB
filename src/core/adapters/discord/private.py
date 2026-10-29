@@ -51,26 +51,9 @@ def private_result_item(results: PrivateResults) -> type[discord.ui.DynamicItem[
     return PrivateResultButton
 
 
-async def disable_button(interaction: discord.Interaction, custom_id: str) -> None:
-    try:
-        view = discord.ui.LayoutView.from_message(interaction.message)
-        buttons = [item for item in view.walk_children()
-                   if isinstance(item, discord.ui.Button) and item.custom_id == custom_id]
-        if not buttons:
-            return
-        for button in buttons:
-            button.disabled = True
-        view.stop()
-        await interaction.response.edit_message(view=view)
-    except Exception:
-        logging.warning("Expired private result button could not be disabled.", exc_info=True)
-
-
 class PrivateResults:
-    def __init__(
-        self, authorize: Authorize, render: Render, label: Callable[[str], str], bot_name: Callable[[], str],
-    ) -> None:
-        self.authorize, self.render, self.label, self.bot_name = authorize, render, label, bot_name
+    def __init__(self, authorize: Authorize, render: Render, label: Callable[[str], str]) -> None:
+        self.authorize, self.render, self.label = authorize, render, label
         self.item = private_result_item(self)
         self._items: OrderedDict[str, PrivateResult] = OrderedDict()
 
@@ -111,15 +94,10 @@ class PrivateResults:
                 buttons[key] = self.item(token, f"查看{self.label(entry.kind)}") if entry else self.item(token)
         return list(buttons.values())
 
-    def _expired(self) -> str:
-        return f"私人結果已過期，請再 @{discord.utils.escape_markdown(self.bot_name())} 問一次。"
-
     async def show(self, token: str, interaction: discord.Interaction) -> None:
         self._prune()
         entry = self._items.get(token)
         if entry is None:
-            await disable_button(interaction, f"horo:private:{token}")
-            await send_notice(interaction, self._expired(), "deadline")
             return
         if (interaction.user.id != entry.user_id or interaction.guild_id != entry.guild_id
                 or interaction.channel_id != entry.channel_id or interaction.message is None
@@ -132,14 +110,14 @@ class PrivateResults:
                 await send_notice(interaction, problem)
                 return
             if entry.expires_at <= time.monotonic() or self._items.get(token) is not entry:
-                await send_notice(interaction, self._expired(), "deadline")
+                await interaction.delete_original_response()
                 return
             result = await self.render(entry, interaction)
             if problem := await self.authorize(entry, interaction):
                 await send_notice(interaction, problem)
                 return
             if entry.expires_at <= time.monotonic() or self._items.get(token) is not entry:
-                await send_notice(interaction, self._expired(), "deadline")
+                await interaction.delete_original_response()
                 return
             await interaction.edit_original_response(**result)
         except Exception:

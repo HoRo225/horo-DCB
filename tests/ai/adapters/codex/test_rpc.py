@@ -69,12 +69,12 @@ class RpcTests(unittest.IsolatedAsyncioTestCase):
             await self.client.request("turn/start", {"threadId": "gone", "input": []})
         self.assertTrue(caught.exception.thread_missing)
 
-        async def draining(ws, params):
+        async def shutting_down(ws, params):
             raise FakeRpcError(-32600, "server is shutting down", {"reason": "serverShuttingDown"})
-        self.server.handlers["account/read"] = draining
+        self.server.handlers["account/read"] = shutting_down
         with self.assertRaises(RpcError) as caught:
             await self.client.request("account/read", {})
-        self.assertTrue(caught.exception.draining)
+        self.assertEqual(caught.exception.data, {"reason": "serverShuttingDown"})
         self.assertFalse(caught.exception.thread_missing)
 
     async def test_overloaded_requests_retry_with_backoff(self) -> None:

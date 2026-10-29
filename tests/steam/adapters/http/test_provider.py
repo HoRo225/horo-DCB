@@ -39,7 +39,6 @@ def details(**data: object) -> dict[str, object]:
         "name": "Free &amp; Fun",
         "is_free": True,
         "short_description": "  short\n desc ",
-        "developers": ["Dev A", "", "Dev B"],
         "header_image": HEADER,
         "price_overview": {"currency": "TWD", "initial": 34900, "final": 0, "discount_percent": 100,
                            "initial_formatted": "NT$ 349", "final_formatted": "NT$ 0"},
@@ -118,7 +117,7 @@ class ProviderTest(unittest.IsolatedAsyncioTestCase):
     async def test_free_to_keep_promotion_becomes_a_clean_offer(self) -> None:
         self.listed(10)
         result = await self.provider.fetch_current_offers()
-        self.assertEqual(result.offers, (SteamOffer(10, "Free & Fun", "NT$ 349", "short desc", ("Dev A", "Dev B"), HEADER),))
+        self.assertEqual(result.offers, (SteamOffer(10, "Free & Fun", "NT$ 349", "short desc", HEADER),))
         self.assertEqual((result.active_app_ids, result.failed_app_count), (frozenset({10}), 0))
         self.assertEqual(self.steam.requests[0][1]["maxprice"], "free")
         self.assertEqual(self.steam.requests[1][1]["appids"], "10")

@@ -19,12 +19,13 @@ from src.ai.adapters.sqlite.store import AI_ENABLED
 from src.core.adapters.discord.brand import ICONS, WHITE, notice_view
 from src.core.adapters.discord.receipts import receipt_view
 from src.core.adapters.sqlite.db import transaction
-from src.games import GAMES, LiveTable
+from src.games.app.tables import LiveTable
 from src.games.adapters.discord.tables import seat_view
 from src.games.adapters.discord.views import lobby_view, rules_view
 from src.games.adapters.sqlite.store import GAMES_HUB_MESSAGE
 from src.games.domain import slots
 from src.games.domain.blackjack import RANKS, SUITS, Card, Round
+from src.games.domain.catalog import GAMES
 from src.games.domain.table import Blackjack, Slots
 from src.steam import SteamFetchResult, SteamOffer
 from src.steam.adapters.discord.views import build_offer_view
@@ -90,7 +91,7 @@ class LayoutBudgetTest(unittest.IsolatedAsyncioTestCase):
         name = "名" * 200
         host = "_" * 32
         with (
-            patch.dict("src.core.adapters.discord.brand._brand_urls", card=image),
+            patch.dict("src.core.adapters.discord.brand._brand_urls", avatar=image),
             patch.dict("src.core.adapters.discord.brand.APP_EMOJIS", emojis),
         ):
             db = testing.memory_db(self)
@@ -115,12 +116,12 @@ class LayoutBudgetTest(unittest.IsolatedAsyncioTestCase):
             )
             view.state(SteamQuery).result = SteamFetchResult(
                 frozenset(),
-                tuple(SteamOffer(n, name, "NT$1,000,000", "", ("dev",), image) for n in range(10)),
+                tuple(SteamOffer(n, name, "NT$1,000,000", "", image) for n in range(10)),
                 failed_app_count=10,
             )
             view.state(SteamQuery).fetched_at = int(time.time())
             view.state(ModelEditor).catalog = tuple(
-                ModelInfo(f"gpt-{n}", f"Model {n}", "low", ("low",), ("text",)) for n in range(30)
+                ModelInfo(f"gpt-{n}", f"Model {n}", "low", ("low",)) for n in range(30)
             )
             view.state(ModelEditor).draft = ModelSettings(ModelChoice("gpt-0"), ModelChoice("gpt-1"))
             view.state(ModelEditor).notice = ("warn", "註" * 60)
@@ -209,7 +210,7 @@ class LayoutBudgetTest(unittest.IsolatedAsyncioTestCase):
             fits("slots closed idle", seat_view(spin, host))
 
             roles = [MagicMock(mention=f"<@&{10**18 + n}>") for n in range(25)]
-            offer = SteamOffer(1, name, "NT$1,000,000", "說" * 5000, ("開發商",) * 10, image, ends_at=2**31)
+            offer = SteamOffer(1, name, "NT$1,000,000", "說" * 5000, image, ends_at=2**31)
             fits("steam offer", build_offer_view(offer, roles))
             fits("ai help", help_view(10**18, "_" * 32))
             receipt = [{"ok": n % 2 == 0, "text": "果" * 200, "private_ref": f"ref{n}"} for n in range(3)] + [

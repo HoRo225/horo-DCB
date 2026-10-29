@@ -36,8 +36,6 @@ class OpenTests(PanelCase):
         shown = self.screen(opened)
         self.assertIn("🟠 需要處理 · **🎲 遊戲大廳**\n尚未設定遊戲頻道", shown)
         self.assertIn("🟠 需要處理 · **🤖 樂奈**\n白名單頻道尚未設定", shown)
-        self.assertNotIn("發言頻道", shown)
-        self.assertNotIn("樂奈金庫", shown)
         self.assertIn("-# 4 項功能 · 2 個需要處理 · 2 個停用 · 閒置 10 分鐘後自動關閉", shown)
         pending = self.button("待處理項目（0）")
         self.assertEqual((pending.disabled, pending.style), (True, discord.ButtonStyle.secondary))

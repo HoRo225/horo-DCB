@@ -49,4 +49,25 @@ CREATE TABLE codex_threads (
 );
 CREATE TABLE codex_pending_archives (thread_id TEXT PRIMARY KEY);
 """
-MIGRATIONS: tuple[str, ...] = ()
+MIGRATIONS: tuple[str, ...] = (
+    """
+DELETE FROM settings WHERE key NOT IN (
+    'feature.ai', 'ai.channel_ids', 'ai.role_ids', 'ai.models',
+    'feature.temp_voice', 'voice.entry_channel_id',
+    'feature.steam_free_games', 'steam.channel_id', 'steam.role_ids',
+    'games.channel_id', 'games.role_ids', 'games.hub_message'
+);
+DELETE FROM requests;
+INSERT OR IGNORE INTO steam_posted (app_id)
+SELECT json_extract(payload, '$.offer.app_id') FROM discord_effects
+WHERE kind = 'steam.announce' AND status IN ('pending', 'unknown', 'failed');
+DELETE FROM discord_effects
+WHERE status NOT IN ('pending', 'unknown', 'failed') OR kind NOT IN ('voice.create', 'voice.delete');
+DELETE FROM operations
+WHERE operation_id NOT IN (SELECT operation_id FROM discord_effects WHERE operation_id IS NOT NULL);
+DELETE FROM game_tables WHERE game NOT IN ('blackjack', 'slots');
+INSERT OR IGNORE INTO codex_pending_archives (thread_id)
+SELECT thread_id FROM codex_threads WHERE conversation_key GLOB 'guild:*:thread:*' AND parent_channel_id IS NULL;
+DELETE FROM codex_threads WHERE conversation_key GLOB 'guild:*:thread:*' AND parent_channel_id IS NULL;
+""",
+)

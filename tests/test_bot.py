@@ -9,6 +9,7 @@ from src.bot import HoroBot, main
 from src.core.adapters.sqlite.operations import OperationStore
 from src.core.app.supervisor import WORK
 from src.games.adapters.discord.views import lobby_view
+from src.games.domain.catalog import GAMES
 from src.steam import SteamOffer
 from src.steam.adapters.discord.views import build_offer_view
 from tests.support import testing
@@ -67,11 +68,11 @@ class StartupTests(unittest.IsolatedAsyncioTestCase):
     async def test_every_persistent_custom_id_reaches_a_registered_handler(self) -> None:
         await self.start()
         patterns = self.bot._connection._view_store._dynamic_items
-        views = [lobby_view("HoRo"), build_offer_view(SteamOffer(730, "G", "", "", (), None))]
+        views = [lobby_view("HoRo"), build_offer_view(SteamOffer(730, "G", "", "", None))]
         ids = {custom_id for view in views for item in view.walk_children()
                if (custom_id := getattr(item, "custom_id", None))}
         self.assertIn("horo:game:pick", ids)
-        for custom_id in ids | {"horo:game:rules:blackjack", "horo:steam:claim:730", "horo:private:abc_123"}:
+        for custom_id in ids | {*(f"horo:game:rules:{key}" for key in GAMES), "horo:private:abc_123"}:
             with self.subTest(custom_id):
                 self.assertTrue(any(pattern.fullmatch(custom_id) for pattern in patterns))
 

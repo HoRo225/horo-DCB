@@ -24,7 +24,6 @@ OWNER_ONLY = "只有開桌的玩家可以操作這張賭桌。"
 SEAT_GONE = "這張賭桌已失效，這局沒有結算；請從遊戲大廳重新開桌。"
 STALE = "賭桌狀態已經改變，請查看目前畫面再操作。"
 NO_TABLE = "請先從遊戲大廳開桌。"
-PICK_GAME = "請指定要開 21 點或拉霸賭桌。"
 SUPERSEDED = "玩家已重新開桌，這次開桌已作廢。"
 OPEN_UNCERTAIN = "賭桌是否已送出還無法確認，已列入管理員的待處理項目核對；不會自動重送。"
 OPENED = "賭桌已開啟。"
@@ -79,13 +78,8 @@ class Play:
         restored = []
         for seat in self._store.seats():
             self._tables.advance(seat.user_id)
-            if (game := GAMES.get(seat.game)) is None:
-                if self._store.close_seat(seat.user_id):
-                    self._tables.advance(seat.user_id)
-                logging.warning("Game table %s has unknown game %r and was closed.", seat.message_id, seat.game)
-                continue
             posted = Posted(seat.channel_id, seat.message_id, self._presenter.url(seat.channel_id, seat.message_id))
-            table = LiveTable(seat.user_id, game.start(), self._tables.token(seat.user_id), posted)
+            table = LiveTable(seat.user_id, GAMES[seat.game].start(), self._tables.token(seat.user_id), posted)
             self._tables.add(table)
             restored.append(table)
         return restored
@@ -281,11 +275,7 @@ class Play:
         self, move: Move, player: Player, previous: LiveTable | None, operation_id: str,
         inputs: Mapping[str, object], reply: Reply | None,
     ) -> Mapping[str, object]:
-        if (game := GAMES.get(move.game)) is None:
-            result = self._remember(operation_id, inputs, failure("game", PICK_GAME))
-            if reply is not None:
-                await reply.notice(PICK_GAME)
-            return result
+        game = GAMES[move.game]
         for orphan in self._store.open_orphans(player.user_id):
             if orphan.message_id is not None:
                 await self._presenter.delete(orphan.channel_id, orphan.message_id)
@@ -293,8 +283,7 @@ class Play:
         new = LiveTable(player.user_id, game.start(), uuid4().hex, avatar_url=player.avatar_url)
         effect_id = f"{operation_id}:table-send"
         uncertain = failure("unknown", OPEN_UNCERTAIN)
-        payload = {"user_id": player.user_id, "game": move.game, "source_message_id": move.source_id}
-        self._store.begin_open(effect_id, move.channel_id, payload, operation_id, inputs, uncertain)
+        self._store.begin_open(effect_id, move.channel_id, {"user_id": player.user_id}, operation_id, inputs, uncertain)
         opening = self._tables.advance(player.user_id)
         if previous is not None:
             previous.token = opening

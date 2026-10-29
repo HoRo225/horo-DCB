@@ -40,8 +40,6 @@ SERVER_REQUEST_REPLIES: dict[str, dict[str, object]] = {
     "item/tool/requestUserInput": {"answers": {}},
     "mcpServer/elicitation/request": {"action": "decline"},
     "item/tool/call": {"contentItems": [], "success": False},
-    "execCommandApproval": {"decision": "denied"},
-    "applyPatchApproval": {"decision": "denied"},
 }
 _RUNTIME_VERSION = re.compile(r"^[^/\s]+/([0-9]+\.[0-9]+\.[0-9]+)")
 
@@ -68,10 +66,6 @@ class RpcError(Exception):
     @property
     def overloaded(self) -> bool:
         return self.code == OVERLOADED
-
-    @property
-    def draining(self) -> bool:
-        return isinstance(self.data, dict) and self.data.get("reason") == "serverShuttingDown"
 
     @property
     def thread_missing(self) -> bool:

@@ -30,6 +30,7 @@ from src.games.adapters.discord.presenter import DiscordLobbyBoard, DiscordTable
 from src.games.adapters.sqlite.store import SqliteGameStore
 from src.steam import Steam
 from src.steam.adapters.discord.announcer import DiscordAnnouncer
+from src.steam.adapters.discord.effects import steam_effect_kinds
 from src.steam.adapters.discord.views import offer_summary
 from src.steam.adapters.sqlite.store import SqliteSteamStore
 from src.voice import Voice
@@ -45,8 +46,8 @@ READY = RuntimeStatus(reason="ready", authenticated=True, plan="plus", runtime_v
 LOGGED_OUT = RuntimeStatus(reason="auth_required", runtime_version="1.0")
 LOGIN = DeviceLogin("login-1", "https://auth.openai.com/codex/device", "ABCD-1234")
 MODELS = (
-    ModelInfo("gpt-a", "Model A", "medium", ("low", "medium"), ("text",)),
-    ModelInfo("gpt-b", "Model B", "high", ("high",), ("text",)),
+    ModelInfo("gpt-a", "Model A", "medium", ("low", "medium")),
+    ModelInfo("gpt-b", "Model B", "high", ("high",)),
 )
 
 
@@ -121,13 +122,14 @@ class Admin:
         self.access = AiAccess(self.ai, self.codex, supervisor.group("access", WORK))
         self.voice = Voice(SqliteVoiceStore(db), DiscordVoiceGateway(live), supervisor.group("voice", WORK))
         self.offers = FakeSource()
-        self.steam = Steam(SqliteSteamStore(db), self.offers, DiscordAnnouncer(client, live),
-                           supervisor.group("steam", SCHEDULED))
+        steam_store = SqliteSteamStore(db)
+        self.steam = Steam(steam_store, self.offers, DiscordAnnouncer(client, live), supervisor.group("steam", SCHEDULED))
         self.games = Lobby(SqliteGameStore(db), DiscordLobbyBoard(client, live, banner=no_banner), live,
                            supervisor.group("games", WORK))
         self.receipts = DiscordReceipts(self.operations, live, client, ActionRegistry())
         kinds = EffectRegistry()
-        kinds.register(*voice_effect_kinds(self.voice), *game_effect_kinds(), self.receipts.effect_kind())
+        kinds.register(*voice_effect_kinds(self.voice), *steam_effect_kinds(self.steam, steam_store), *game_effect_kinds(),
+                       self.receipts.effect_kind())
         self.effects = EffectResolver(self.operations, kinds, live, client)
         self.panels = PanelSessionRegistry(supervisor.group("admin", PRESENTATION), supervisor.group("admin", WORK))
         self.services = AdminServices(

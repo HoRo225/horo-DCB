@@ -8,7 +8,7 @@ from typing import Any
 
 from src.core.app.supervisor import TaskGroup, cancel_all, wait_until
 from src.voice.app.ports import GatewayError, StoreError, VoiceGateway, VoiceStore
-from src.voice.domain.rooms import RECORDED, RoomSpec, VoiceStatus, bot_problem, creation_notice
+from src.voice.domain.rooms import RoomSpec, VoiceStatus, bot_problem, creation_notice
 
 CLOSING_CONFIRM = "Bot 正在關閉，未登記待查語音房。"
 CLOSING_RETRY = "Bot 正在關閉，未處理語音清理。"
@@ -250,8 +250,6 @@ class Voice:
             if effect.status != "unknown" or receipt is None or receipt.status != "running":
                 return "這筆語音建立紀錄不是尚待確認的操作。"
             recorded = effect.payload
-            if not RECORDED <= recorded.keys():
-                return "紀錄缺少可驗證的語音房資料，無法安全登記。"
             if self._gateway.guild_id() != recorded["guild_id"]:
                 return "這筆語音建立紀錄屬於其他伺服器。"
             if type(channel_id) is not int or channel_id <= 0:

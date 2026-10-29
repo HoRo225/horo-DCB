@@ -87,14 +87,14 @@ class ModelPageTests(PanelCase):
         saved = self.admin.ai.models
         await self.choose(self.select("選擇主模型"), self.option("Model B"))
         await self.choose(self.select("選擇備援模型（可停用）"), "off")
-        self.codex.get_models.return_value = (ModelInfo("gpt-a", "Model A", "medium", ("medium",), ("text",)),)
+        self.codex.get_models.return_value = (ModelInfo("gpt-a", "Model A", "medium", ("medium",)),)
         shown = self.screen(await self.click(self.button("儲存設定")))
         self.assertIn("模型或推理強度已失效，請重新選擇；已儲存設定未變更。", shown)
         self.assertEqual(self.admin.ai.models, saved)
 
     async def test_page_buttons_turn_their_own_side(self) -> None:
         self.codex.get_models.return_value = tuple(
-            ModelInfo(f"gpt-{n}", f"Model {n}", "low", ("low",), ("text",)) for n in range(30)
+            ModelInfo(f"gpt-{n}", f"Model {n}", "low", ("low",)) for n in range(30)
         )
         await self.open_models()
         shown = self.screen(await self.click(self.button("下一頁")))

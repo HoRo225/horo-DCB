@@ -10,7 +10,7 @@ MAX_IDS = 25
 MAX_TEXT = 500
 MAX_ID = 2**63 - 1
 
-type TargetKind = Literal["text_channel", "voice_channel", "text_channels", "role", "roles", "quoted"]
+type TargetKind = Literal["text_channel", "voice_channel", "text_channels", "roles", "quoted"]
 type ParamKind = Literal["id", "ids", "bool", "text", "enum", "object"]
 
 

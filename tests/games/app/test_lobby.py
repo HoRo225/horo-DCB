@@ -48,8 +48,7 @@ class PublishTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(game.lobby.hub_message, [CHANNEL, 501])
         self.assertEqual(game.board.cleared, [None, [CHANNEL, 500]])
         effect = game.records.get_effect("second:game-hub")
-        self.assertEqual((effect.kind, effect.status, effect.message_id, effect.payload),
-                         ("game_hub_publish", "done", 501, {"previous_hub": [CHANNEL, 500]}))
+        self.assertEqual((effect.kind, effect.status, effect.message_id), ("game_hub_publish", "done", 501))
 
     async def test_missing_channel_sends_nothing(self) -> None:
         game = GameHarness(self)

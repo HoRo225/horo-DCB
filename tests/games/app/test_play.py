@@ -396,13 +396,6 @@ class OpenTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(reply.answers(), [("notice", "你沒有使用這個功能的身分組。", "warn", True)])
         self.assertIs(game.table(), old)
 
-    async def test_retired_games_cannot_be_opened(self) -> None:
-        game = GameHarness(self)
-        self.assertEqual((await game.ai("open_table", game="dice"))["code"], "game")
-        result, reply = await game.ui("open_table", game="dice")
-        self.assertEqual(reply.answers(), [("notice", "請指定要開 21 點或拉霸賭桌。", "warn", False)])
-        self.assertEqual((result["code"], game.store.seat(PLAYER), game.presenter.posted), ("game", None, []))
-
     async def test_unexpected_send_error_propagates_without_a_seat(self) -> None:
         game = GameHarness(self)
         game.presenter.post_error = RuntimeError("boom")
@@ -510,13 +503,10 @@ class RestoreTests(unittest.IsolatedAsyncioTestCase):
         game.restart()
         return game
 
-    async def test_unknown_games_are_closed_and_known_tables_registered(self) -> None:
+    async def test_seated_tables_are_registered(self) -> None:
         game = await self.seated("slots", "blackjack")
-        game.db.execute("UPDATE game_tables SET game = 'dice' WHERE user_id = ?", (PLAYER,))
-        with self.assertLogs(level="WARNING"):
-            [table] = game.play.restore()
-        self.assertIsNone(game.store.seat(PLAYER))
-        self.assertIs(game.tables.at(101), table)
+        self.assertEqual(len(game.play.restore()), 2)
+        table = game.tables.at(101)
         self.assertEqual((table.state, table.posted.url), (Blackjack(), f"https://discord.com/channels/@me/{CHANNEL}/101"))
         self.assertEqual(table.token, game.token(2))
         self.assertEqual(game.presenter.edits, [])

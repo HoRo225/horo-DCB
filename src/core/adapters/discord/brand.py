@@ -61,12 +61,12 @@ APP_EMOJIS: dict[str, str] = {}
 WHITE: dict[str, str] = {}
 _TONE_EMOJIS = {"warn": "lowarn", "error": "lrerror"}
 _TONE_COLOURS = {"warn": WARN_COLOUR, "error": ERROR_COLOUR, "deadline": NEUTRAL_COLOUR}
-_brand_urls: dict[str, str | None] = {"card": None}
+_brand_urls: dict[str, str | None] = {"avatar": None}
 
 
 def sync_discord_brand(client: discord.Client) -> None:
     if client.user is not None:
-        _brand_urls["card"] = str(client.user.display_avatar)
+        _brand_urls["avatar"] = str(client.user.display_avatar)
 
 
 async def load_app_emojis(client: discord.Client) -> None:
@@ -109,7 +109,7 @@ def rana_says(line: str, name: str) -> str:
 
 
 def bot_avatar() -> str | None:
-    return _brand_urls["card"]
+    return _brand_urls["avatar"]
 
 
 def tone_colour(tone: str, colour: discord.Colour = BRAND_COLOUR) -> discord.Colour:

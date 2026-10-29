@@ -486,8 +486,6 @@ class CodexService:
                 self._store.forget(key)
                 restarted = True
             else:
-                if parent is not None and conversation.parent_channel_id is None:
-                    self._store.bind(key, conversation.thread_id, parent)
                 return conversation.thread_id, False
         response = await self._client.request("thread/start", {**params, "serviceName": SERVICE_NAME})
         thread_id = _nested_id(response, "thread")

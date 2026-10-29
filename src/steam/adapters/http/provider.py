@@ -66,7 +66,7 @@ class SteamOfferProvider:
             params={
                 "appids": str(app_id),
                 "l": "tchinese",
-                "filters": "basic,short_description,developers,price_overview",
+                "filters": "basic,short_description,price_overview",
             },
         )
         if not isinstance(payload, dict):
@@ -108,18 +108,11 @@ class SteamOfferProvider:
         )
         if not name:
             raise _SteamDetailsFailure
-        developers_value = data.get("developers")
-        developers: tuple[str, ...] = ()
-        if isinstance(developers_value, list):
-            developers = tuple(
-                cleaned for item in developers_value[:5] if (cleaned := _clean_text(item, 100))
-            )
         return SteamOffer(
             app_id=app_id,
             name=name,
             old_price=_clean_text(price.get("initial_formatted"), 80),
             description=_clean_text(data.get("short_description"), 1000),
-            developers=developers,
             header_image=_safe_https_url(data.get("header_image")),
         )
 

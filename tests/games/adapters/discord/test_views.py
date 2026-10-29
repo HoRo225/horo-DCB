@@ -4,7 +4,7 @@ from unittest.mock import MagicMock
 
 import discord
 
-from src.games.adapters.discord.views import RETIRED, game_pick_item, lobby_view, rules_item
+from src.games.adapters.discord.views import game_pick_item, lobby_view, rules_item
 from tests.support import testing
 from tests.support.games import CHANNEL, GUILD, PLAYER, ROLE, FakeReply, GameHarness
 
@@ -85,7 +85,7 @@ class GamePickTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(seat.game, "slots")
         redrawn = picked.edit_original_response.await_args.kwargs
         self.assertEqual((galleries(redrawn["view"]), redrawn["attachments"]), (1, ["hub.png"]))
-        self.assertEqual(self.game.records.get_effect("interaction:900:table-send").payload["source_message_id"], 900)
+        self.assertEqual(self.game.records.get_effect("interaction:900:table-send").payload, {"user_id": PLAYER})
         [reply] = self.presenter.replies
         self.assertEqual(reply.answers(), [("opened", "賭桌已開啟。", f"https://discord.com/channels/{GUILD}/{CHANNEL}/100")])
 
@@ -144,11 +144,8 @@ class RulesTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("{name}", rules)
         self.assertNotIn("樂奈", rules)
 
-    async def test_retired_game_points_back_to_the_lobby(self) -> None:
-        clicked = await self.press("dice")
-        notice = clicked.response.send_message.await_args.kwargs["view"]
-        self.assertIn(RETIRED, testing.text(notice))
-        self.assertEqual(links(notice), [HUB_URL])
+    def test_buttons_for_retired_games_reach_no_handler(self) -> None:
+        self.assertIsNone(rules_item(Presenter()).__discord_ui_compiled_template__.fullmatch("horo:game:rules:dice"))
 
 
 if __name__ == "__main__":

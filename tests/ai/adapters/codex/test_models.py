@@ -1,6 +1,6 @@
 import unittest
 
-from src.ai import find_model
+from src.ai import ModelInfo
 from src.ai.adapters.codex.models import parse_model_list
 
 
@@ -22,10 +22,8 @@ def entry(model: str = "gpt-x", **overrides: object) -> dict[str, object]:
 
 class ModelListTests(unittest.TestCase):
     def test_reads_upstream_model_list(self) -> None:
-        catalog = parse_model_list([entry("a"), entry("b", inputModalities=["text", "image"])])
-        self.assertEqual(find_model(catalog, "b").input_modalities, ("text", "image"))
-        self.assertEqual(find_model(catalog, "a").supported_efforts, ("low", "medium"))
-        self.assertEqual(find_model(catalog, "a").default_effort, "medium")
+        catalog = parse_model_list([entry("a"), entry("b", defaultReasoningEffort="low")])
+        self.assertEqual(catalog, (ModelInfo("a", "a", "medium", ("low", "medium")), ModelInfo("b", "b", "low", ("low", "medium"))))
 
     def test_rejects_inconsistent_catalog(self) -> None:
         for name, models in {

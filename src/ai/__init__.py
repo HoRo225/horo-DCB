@@ -8,9 +8,7 @@ from src.ai.app.ports import (
     RateLimits,
     RateWindow,
     RuntimeStatus,
-    StatusReason,
     StoreError,
-    TextModel,
 )
 from src.ai.app.settings import MAX_CODEX_ALLOWED_CHANNELS, AiSettings
 from src.ai.app.text import AiText
@@ -52,9 +50,7 @@ __all__ = [
     "RateLimits",
     "RateWindow",
     "RuntimeStatus",
-    "StatusReason",
     "StoreError",
-    "TextModel",
     "find_model",
     "model_identifier",
     "normalize_reply_image_urls",

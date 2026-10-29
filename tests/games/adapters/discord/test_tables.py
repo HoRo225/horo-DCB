@@ -4,12 +4,12 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import discord
 
 from src.core.adapters.discord.brand import BRAND_COLOUR, ERROR_COLOUR, GOLD_COLOUR, LOSS_COLOUR, NEUTRAL_COLOUR
-from src.games import GAMES, LiveTable
 from src.games.adapters.discord import tables
 from src.games.adapters.discord.tables import SlotsView
-from src.games.app.tables import Posted
+from src.games.app.tables import LiveTable, Posted
 from src.games.domain.blackjack import Round
 from src.games.domain import slots
+from src.games.domain.catalog import GAMES
 from src.games.domain.slots import evaluate
 from src.games.domain.table import Blackjack, Slots
 from tests.support import testing

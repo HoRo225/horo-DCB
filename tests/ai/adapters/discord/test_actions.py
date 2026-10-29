@@ -26,7 +26,7 @@ class AiActionTests(unittest.IsolatedAsyncioTestCase):
         self.store = MemoryAiStore(channel_ids=(10,))
         self.settings = AiSettings(self.store, self.model, G)
         self.access = AiAccess(self.settings, self.model, TaskGroup("test.access", WORK))
-        self.models = AsyncMock(return_value=(ModelInfo("gpt-5", "GPT-5", "medium", ("medium",), ("text",)),))
+        self.models = AsyncMock(return_value=(ModelInfo("gpt-5", "GPT-5", "medium", ("medium",)),))
         self.specs = {spec.name: spec for spec in ai_actions(self.settings, self.access, self.models).specs}
 
     def test_every_ai_setting_is_admin_only(self) -> None:

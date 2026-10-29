@@ -1,6 +1,6 @@
 import unittest
 
-from src.ai.domain.formatting import clean_line, discord_tables, split_markdown, split_reasoning_summary
+from src.ai.domain.formatting import clean_line, discord_tables, reasoning_title, split_markdown
 
 NOTICE = "\n\n-# 截斷"
 
@@ -65,16 +65,16 @@ class DiscordTablesTests(unittest.TestCase):
 
 class ReasoningSummaryTests(unittest.TestCase):
     def test_bold_heading_is_the_title(self) -> None:
-        self.assertEqual(split_reasoning_summary("**Checking code**\n\n正在追蹤呼叫路徑。"),
-                         ("Checking code", "正在追蹤呼叫路徑。"))
-        self.assertEqual(split_reasoning_summary("沒有標題的摘要"), (None, "沒有標題的摘要"))
+        self.assertEqual(reasoning_title("**Checking code**\n\n正在追蹤呼叫路徑。"), "Checking code")
+        self.assertEqual(reasoning_title("沒有標題的摘要"), "")
+        self.assertEqual(reasoning_title("**粗體**接著文字"), "")
 
     def test_partial_and_placeholder_headings(self) -> None:
-        self.assertEqual(split_reasoning_summary("**檢查程"), ("檢查程", ""))
-        self.assertEqual(split_reasoning_summary("**檢查程式碼*"), ("檢查程式碼", ""))
-        self.assertEqual(split_reasoning_summary("**"), (None, ""))
-        self.assertEqual(split_reasoning_summary("**整理答案**\n\n<!-- -->"), ("整理答案", ""))
-        self.assertEqual(split_reasoning_summary("<!-- -->"), (None, ""))
+        self.assertEqual(reasoning_title("**檢查程"), "檢查程")
+        self.assertEqual(reasoning_title("**檢查程式碼*"), "檢查程式碼")
+        self.assertEqual(reasoning_title("**"), "")
+        self.assertEqual(reasoning_title("**整理答案**\n\n<!-- -->"), "整理答案")
+        self.assertEqual(reasoning_title("<!-- -->"), "")
 
 
 class CleanLineTests(unittest.TestCase):

@@ -57,7 +57,6 @@ class ModelInfo:
     display_name: str
     default_effort: str
     supported_efforts: tuple[str, ...]
-    input_modalities: tuple[str, ...]
 
 
 def find_model(catalog: Iterable[ModelInfo], model: str | None) -> ModelInfo | None:

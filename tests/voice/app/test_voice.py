@@ -3,8 +3,9 @@ import unittest
 from dataclasses import replace
 
 from src.core.app.supervisor import WORK, TaskGroup
-from src.voice import Voice, VoiceStatus, build_temp_voice_name
+from src.voice import Voice, VoiceStatus
 from src.voice.app.ports import GatewayError
+from src.voice.domain.rooms import build_temp_voice_name
 from tests.support.voice import GUILD, FakeGateway, FakeVoiceStore, shape
 
 ENTRY, ALICE, BOB = 10, 1, 2
@@ -269,8 +270,6 @@ class RecordTests(VoiceTestCase):
         del self.store.owners[room]
         self.store.effects[effect.effect_id] = replace(effect, payload={**effect.payload, "guild_id": GUILD + 1})
         self.assertEqual(await self.voice.confirm(effect.effect_id, room), "這筆語音建立紀錄屬於其他伺服器。")
-        self.store.effects[effect.effect_id] = replace(effect, payload={"owner_id": ALICE})
-        self.assertEqual(await self.voice.confirm(effect.effect_id, room), "紀錄缺少可驗證的語音房資料，無法安全登記。")
         self.store.effects[effect.effect_id] = replace(effect, status="failed")
         self.assertEqual(await self.voice.confirm(effect.effect_id, room), "這筆語音建立紀錄不是尚待確認的操作。")
 

@@ -7,10 +7,9 @@ import discord
 
 from src.core.adapters.discord.brand import ICONS
 from src.core.adapters.discord.live import LiveGuild
-from src.games import LiveTable
 from src.games.adapters.discord.presenter import DiscordLobbyBoard, DiscordTables, draw_banner
 from src.games.app.ports import PresentError, TableGone
-from src.games.app.tables import Posted
+from src.games.app.tables import LiveTable, Posted
 from src.games.domain.table import Slots
 from tests.support import testing
 from tests.support.discord import Client, Guild

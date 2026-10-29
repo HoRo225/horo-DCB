@@ -161,8 +161,8 @@ def _mention_problem(spec: ActionSpec, params: Mapping[str, object], mentions: M
             case "text_channels":
                 if any(identifier not in mentions.channel_ids for identifier in value):
                     return UNMENTIONED_TARGETS
-            case "role" | "roles":
-                if any(identifier not in mentions.role_ids for identifier in (value if isinstance(value, list) else [value])):
+            case "roles":
+                if any(identifier not in mentions.role_ids for identifier in value):
                     return UNMENTIONED_TARGETS
             case "quoted":
                 if value not in content:
@@ -193,11 +193,7 @@ class ActionEngine:
         request = self._operations.get_request(message_id)
         if request is None:
             return None
-        actions = request.plan["decision"]["actions"]
-        if retired := [item["name"] for item in actions if self._registry.spec(item["name"]) is None]:
-            logging.warning("Request %s holds retired actions %s; replay skipped.", request.request_id, retired)
-            return Plan(()), self._received(request)
-        return self.catalogue.parse_plan(actions), self._received(request)
+        return self.catalogue.parse_plan(request.plan["decision"]["actions"]), self._received(request)
 
     def context(self, source: Source) -> dict[str, object]:
         presence = self._presence

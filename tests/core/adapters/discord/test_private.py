@@ -1,17 +1,12 @@
 import unittest
-from types import SimpleNamespace
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, patch
 
-import discord
-from discord.components import _component_factory
-
-from src.core.adapters.discord.brand import ICONS, NEUTRAL_COLOUR, notice_view
+from src.core.adapters.discord.brand import notice_view
 from src.core.adapters.discord.private import TTL_SECONDS, PrivateResults
 from src.core.app.ports import Source
 from tests.support.testing import interaction, text
 
 LABELS = {"help": "功能說明", "steam_query": "Steam 免費遊戲"}
-EXPIRED = f"{ICONS['deadline']} 私人結果已過期，請再 @霍蘿 問一次。"
 
 
 def source(user_id: int = 1) -> Source:
@@ -22,9 +17,19 @@ class PrivateResultsTest(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
         self.authorize = AsyncMock(return_value=None)
         self.render = AsyncMock(return_value={"view": notice_view("私人團名 9876", "info"), "attachments": []})
-        self.registry = PrivateResults(self.authorize, self.render, LABELS.__getitem__, lambda: "霍蘿")
+        self.registry = PrivateResults(self.authorize, self.render, LABELS.__getitem__)
         self.token = self.registry.issue(source(), "help")
         self.registry.bind_message(self.token, 3000)
+
+    def assert_silent(self, clicked):
+        for reply in (clicked.response.defer, clicked.response.send_message, clicked.response.edit_message,
+                      clicked.followup.send, clicked.edit_original_response):
+            reply.assert_not_awaited()
+
+    def assert_withdrawn(self, clicked):
+        clicked.delete_original_response.assert_awaited_once()
+        clicked.edit_original_response.assert_not_awaited()
+        clicked.followup.send.assert_not_awaited()
 
     def click(self, user_id=1, guild_id=5, channel_id=10, message_id=3000):
         clicked = interaction()
@@ -64,45 +69,11 @@ class PrivateResultsTest(unittest.IsolatedAsyncioTestCase):
             self.registry.bind_message(expired, 3000)
         with patch("src.core.adapters.discord.private.time.monotonic", return_value=31 * 60):
             await self.registry.show(expired, late := self.click())
-        restarted = PrivateResults(self.authorize, self.render, LABELS.__getitem__, lambda: "霍蘿")
+        restarted = PrivateResults(self.authorize, self.render, LABELS.__getitem__)
         await restarted.show(self.token, after_restart := self.click())
         self.render.assert_not_awaited()
         for clicked in (late, after_restart):
-            notice = clicked.response.send_message.await_args.kwargs["view"]
-            self.assertEqual(text(notice), EXPIRED)
-            self.assertEqual(notice.children[0].accent_colour, NEUTRAL_COLOUR)
-
-    def receipt(self, *tokens):
-        view = discord.ui.LayoutView(timeout=None)
-        view.add_item(discord.ui.Container(discord.ui.TextDisplay("操作結果")))
-        view.add_item(discord.ui.ActionRow(*self.registry.make_buttons(tokens)))
-        return SimpleNamespace(id=3000, components=[_component_factory(data) for data in view.to_components()])
-
-    async def test_expired_button_is_disabled_on_the_receipt_and_explained_privately(self):
-        other = self.registry.issue(source(), "steam_query")
-        self.registry.bind_message(other, 3000)
-        clicked = self.click()
-        clicked.message = self.receipt("gone", other)
-        await self.registry.item("gone").callback(clicked)
-        edited = clicked.response.edit_message.await_args.kwargs["view"]
-        buttons = {item.custom_id: item.disabled for item in edited.walk_children() if isinstance(item, discord.ui.Button)}
-        self.assertEqual(buttons, {"horo:private:gone": True, f"horo:private:{other}": False})
-        self.assertIn("操作結果", text(edited))
-        self.assertTrue(edited.is_finished())
-        notice = clicked.followup.send.await_args.kwargs
-        self.assertTrue(notice["ephemeral"])
-        self.assertEqual(text(notice["view"]), EXPIRED)
-        self.render.assert_not_awaited()
-
-    async def test_expired_button_still_explains_when_the_receipt_cannot_be_edited(self):
-        clicked = self.click()
-        clicked.message = self.receipt("gone")
-        clicked.response.edit_message.side_effect = discord.HTTPException(MagicMock(status=500), "down")
-        with self.assertLogs(level="WARNING"):
-            await self.registry.show("gone", clicked)
-        notice = clicked.response.send_message.await_args.kwargs
-        self.assertTrue(notice["ephemeral"])
-        self.assertEqual(text(notice["view"]), EXPIRED)
+            self.assert_silent(clicked)
 
     async def test_button_errors_reply_with_an_error_card(self):
         self.registry.show = AsyncMock(side_effect=RuntimeError("db gone"))
@@ -131,8 +102,7 @@ class PrivateResultsTest(unittest.IsolatedAsyncioTestCase):
             self.render.side_effect = slow_render
             clicked = self.click()
             await self.registry.show(token, clicked)
-        clicked.edit_original_response.assert_not_awaited()
-        self.assertNotIn("9876", text(clicked.followup.send.await_args.kwargs["view"]))
+        self.assert_withdrawn(clicked)
 
     async def test_render_failure_is_a_generic_notice(self):
         self.render.side_effect = LookupError("gone")
@@ -172,7 +142,7 @@ class PrivateResultsTest(unittest.IsolatedAsyncioTestCase):
             clock.return_value = 31 * 60
             await self.registry.show(stale, late := self.click())
         self.render.assert_awaited_once()
-        self.assertEqual(text(late.response.send_message.await_args.kwargs["view"]), EXPIRED)
+        self.assert_silent(late)
 
     def test_buttons_are_named_by_kind_and_one_per_distinct_result(self):
         again = self.registry.issue(source(), "help")
@@ -192,8 +162,7 @@ class PrivateResultsTest(unittest.IsolatedAsyncioTestCase):
         self.render.side_effect = render_and_evict
         clicked = self.click()
         await self.registry.show(self.token, clicked)
-        clicked.edit_original_response.assert_not_awaited()
-        self.assertNotIn("9876", text(clicked.followup.send.await_args.kwargs["view"]))
+        self.assert_withdrawn(clicked)
 
 
 if __name__ == "__main__":

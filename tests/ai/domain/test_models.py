@@ -12,8 +12,8 @@ from src.ai.domain.models import (
 )
 
 CATALOG = (
-    ModelInfo("primary", "Primary", "medium", ("low", "medium"), ("text",)),
-    ModelInfo("fallback", "Fallback", "low", ("low", "medium"), ("text",)),
+    ModelInfo("primary", "Primary", "medium", ("low", "medium")),
+    ModelInfo("fallback", "Fallback", "low", ("low", "medium")),
 )
 PINNED = ModelSettings(ModelChoice("primary", "low"), ModelChoice("fallback", "low"))
 

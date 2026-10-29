@@ -25,9 +25,6 @@ async def route_intent(request: AiRequest, models: ModelSettings) -> bool:
     services = request.services
     actions, model = services.actions, services.model
     prior = actions.prior(request.message.id)
-    if prior is not None and not prior[0].actions:
-        request.outcome = "operations"
-        return True
     if prior is not None:
         intent, received = Intent("plan", prior[0]), prior[1]
     else:

@@ -8,7 +8,7 @@ from typing import Any
 import aiohttp
 import discord
 
-from src.ai.domain.formatting import discord_tables, split_markdown, split_reasoning_summary
+from src.ai.domain.formatting import discord_tables, reasoning_title, split_markdown
 from src.core.adapters.discord.brand import BRAND_COLOUR, ICONS, notice_view
 from src.core.app.supervisor import TaskGroup
 
@@ -93,7 +93,7 @@ class AiProgress:
 
     def update(self, stage: str, summary: str = "") -> None:
         stage = stage if stage in PROGRESS_OVERRIDES else "generating"
-        latest = (stage, split_reasoning_summary(summary)[0] or "")
+        latest = (stage, reasoning_title(summary))
         if latest != self._latest:
             self._latest = latest
             self._changed.set()

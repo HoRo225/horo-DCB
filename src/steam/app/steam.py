@@ -82,10 +82,6 @@ class Steam:
             )
         return None
 
-    def announcement(self, message_id: int) -> Announcement | None:
-        effect = next((effect for effect in self._store.announcements("done") if effect.message_id == message_id), None)
-        return Announcement.parse(effect.payload) if effect is not None else None
-
     async def set_roles(
         self, role_ids: Sequence[int], *, still_current: StillCurrent = None, operation_id: str | None = None,
     ) -> None:

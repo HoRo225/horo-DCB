@@ -306,12 +306,6 @@ class SteamTest(unittest.IsolatedAsyncioTestCase):
                 self.store.posted_ids.clear()
                 self.guild.sent.clear()
 
-    async def test_claimed_message_finds_its_announcement(self) -> None:
-        self.store.add(announcement_effect("done", 7, status="done", role_ids=(1,), message_id=555),
-                       announcement_effect("other", 8, status="unknown"))
-        self.assertEqual(self.steam.announcement(555), Announcement(offer(7), (1,)))
-        self.assertIsNone(self.steam.announcement(1))
-
     async def test_toggle_drives_the_polling_loop(self) -> None:
         self.steam.set_enabled(False)
         self.steam.start()

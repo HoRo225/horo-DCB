@@ -13,11 +13,10 @@ class ConversationStoreTests(unittest.TestCase):
         self.addCleanup(db.close)
         self.store = ConversationStore(db)
 
-    def test_bind_keeps_the_first_known_parent(self) -> None:
-        self.store.bind(THREAD_KEY, "t1", None)
+    def test_bind_replaces_the_thread_and_its_parent(self) -> None:
         self.store.bind(THREAD_KEY, "t1", 2)
         self.store.bind(THREAD_KEY, "t2", 3)
-        self.assertEqual(self.store.get(THREAD_KEY), Conversation("t2", 2))
+        self.assertEqual(self.store.get(THREAD_KEY), Conversation("t2", 3))
         self.assertIsNone(self.store.get(USER_KEY))
         self.store.forget(THREAD_KEY)
         self.assertEqual(len(self.store), 0)

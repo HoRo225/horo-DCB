@@ -37,12 +37,10 @@ class DiscordContractTests(unittest.TestCase):
             "custom_id:horo:game:pick",
             "custom_id:horo:game:rules:{}",
             "custom_id:horo:private:{}",
-            "custom_id:horo:steam:claim:{}",
             "custom_id:{}:{}",
             "template:horo:game:pick",
-            "template:horo:game:rules:(?P<game>[a-z_]+)",
+            "template:horo:game:rules:(?P<game>blackjack|slots)",
             "template:horo:private:(?P<token>[A-Za-z0-9_-]+)",
-            "template:horo:steam:claim:(?P<app>[0-9]+)",
         })
 
 
