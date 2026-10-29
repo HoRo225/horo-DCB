@@ -2,7 +2,7 @@ import asyncio
 import unittest
 
 from src.ai import MAX_ACTIVE_KEYS, ModelError
-from src.integrations.codex.admission import Admission
+from src.ai.adapters.codex.admission import Admission
 
 A = "guild:1:channel:2:user:3"
 B = "guild:1:thread:9"

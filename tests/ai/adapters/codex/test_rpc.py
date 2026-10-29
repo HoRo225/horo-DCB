@@ -2,7 +2,7 @@ import asyncio
 import unittest
 from unittest.mock import patch
 
-from src.integrations.codex.rpc import (
+from src.ai.adapters.codex.rpc import (
     OPT_OUT_NOTIFICATIONS,
     SERVER_REQUEST_REPLIES,
     AppServerClient,
@@ -16,7 +16,7 @@ from tests.support.codex_server import FakeAppServer, FakeRpcError
 
 class RpcTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self) -> None:
-        for patcher in (patch("src.integrations.codex.rpc.RECONNECT_DELAYS", (0.01,)), patch("src.integrations.codex.rpc.OVERLOADED_DELAYS", (0.01, 0.01))):
+        for patcher in (patch("src.ai.adapters.codex.rpc.RECONNECT_DELAYS", (0.01,)), patch("src.ai.adapters.codex.rpc.OVERLOADED_DELAYS", (0.01, 0.01))):
             patcher.start()
             self.addCleanup(patcher.stop)
         self.server = FakeAppServer()

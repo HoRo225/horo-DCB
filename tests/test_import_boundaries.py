@@ -12,6 +12,9 @@ ROOT = Path(__file__).resolve().parents[1]
 SRC = ROOT / "src"
 TESTS = ROOT / "tests"
 FEATURES = ("ai", "games", "voice", "steam", "admin")
+CODEX = "src.ai.adapters.codex"
+CODEX_STORE = "src.ai.adapters.sqlite.conversations"
+CODEX_REACH = ("src.ai.domain", "src.ai.app", "src.core.domain", "src.core.app", CODEX, CODEX_STORE)
 HOSTS = frozenset({"bot", "client"})
 BOT_API = frozenset(dir(commands.Bot))
 PRIVATE_ACCESS = {
@@ -88,7 +91,16 @@ def cross_feature_problems(module: str, names: set[str]) -> list[str]:
 def core_problems(module: str, names: set[str]) -> list[str]:
     if not within(module, "src.core"):
         return []
-    return sorted(name for name in names if feature_of(name) or within(name, "src.integrations"))
+    return sorted(name for name in names if feature_of(name))
+
+
+def codex_problems(module: str, names: set[str]) -> list[str]:
+    if within(module, CODEX):
+        return sorted(name for name in names if within(name, "src") and name != "src.ai"
+                      and not any(within(name, home) for home in CODEX_REACH))
+    if module == "src.bot":
+        return []
+    return sorted(name for name in names if within(name, CODEX) or within(name, CODEX_STORE))
 
 
 def host_name(node: ast.expr) -> str | None:
@@ -192,17 +204,17 @@ class FeatureBoundaryTests(unittest.TestCase):
 
 
 class CoreBoundaryTests(unittest.TestCase):
-    def test_core_imports_no_feature_or_integration(self) -> None:
+    def test_core_imports_no_feature(self) -> None:
         for path in product_files():
             with self.subTest(path=str(path.relative_to(SRC))):
                 self.assertEqual(core_problems(module_name(path), imports(path)), [])
 
-    def test_core_loads_no_feature_or_integration_at_runtime(self) -> None:
+    def test_core_loads_no_feature_at_runtime(self) -> None:
         loaded = loaded_modules(*modules_under("src.core"))
-        self.assertEqual({m for m in loaded if feature_of(m) or within(m, "src.integrations")}, set())
+        self.assertEqual({m for m in loaded if feature_of(m)}, set())
 
     def test_detector_catches_core_reaching_out(self) -> None:
-        for source in ("from src.games import Lobby", "import src.voice.app.voice", "from src.integrations.codex import rpc",
+        for source in ("from src.games import Lobby", "import src.voice.app.voice", "from src.ai.adapters.codex import rpc",
                        "from ...ai.domain import models"):
             with self.subTest(source):
                 self.assertNotEqual(core_problems("src.core.app.x", imported(source, "src.core.app")), [])
@@ -210,32 +222,43 @@ class CoreBoundaryTests(unittest.TestCase):
         self.assertEqual(core_problems("src.bot", imported("from src.games import Lobby", "src")), [])
 
 
-class IntegrationBoundaryTests(unittest.TestCase):
-    def test_codex_imports_only_the_ai_package_and_core(self) -> None:
-        for path in (SRC / "integrations" / "codex").rglob("*.py"):
-            for name in imports(path):
-                if not within(name, "src"):
-                    continue
-                with self.subTest(path=path.name, imported=name):
-                    self.assertTrue(name == "src.ai" or within(name, "src.core") or within(name, "src.integrations.codex"))
-
-    def test_only_bot_composes_integrations(self) -> None:
+class CodexBoundaryTests(unittest.TestCase):
+    def test_codex_reaches_only_ai_core_and_its_store_and_only_bot_composes_it(self) -> None:
         for path in product_files():
-            if within(module_name(path), "src.integrations") or path == SRC / "bot.py":
-                continue
             with self.subTest(path=str(path.relative_to(SRC))):
-                self.assertFalse({name for name in imports(path) if within(name, "src.integrations")})
+                self.assertEqual(codex_problems(module_name(path), imports(path)), [])
+
+    def test_codex_detector_catches_each_violation(self) -> None:
+        for module, source in (
+            ("src.ai.adapters.codex.service", "from src.ai.adapters.discord.errors import codex_error_text"),
+            ("src.ai.adapters.codex.service", "from src.ai.adapters.media.images import MediaReader"),
+            ("src.ai.adapters.codex.rpc", "from src.core.adapters.discord.live import LiveGuild"),
+            ("src.ai.adapters.codex.turns", "from src.games import Lobby"),
+            ("src.ai.adapters.discord.cog", "from src.ai.adapters.codex.service import CodexService"),
+            ("src.ai.adapters.discord.cog", "from src.ai.adapters.sqlite.conversations import ConversationStore"),
+            ("src.admin.adapters.discord.pages.ai", "from src.ai.adapters import codex"),
+        ):
+            with self.subTest(source):
+                self.assertNotEqual(codex_problems(module, imported(source, module.rpartition(".")[0])), [])
+        for module, source in (
+            ("src.ai.adapters.codex.service", "from src.ai import ModelError\nfrom src.ai.app.ports import Job\n"
+                                              "from src.core.app.supervisor import track\nfrom .rpc import RpcError\n"
+                                              "from src.ai.adapters.sqlite.conversations import ConversationStore"),
+            ("src.bot", "from src.ai.adapters.codex.service import CodexService"),
+        ):
+            with self.subTest(source):
+                self.assertEqual(codex_problems(module, imported(source, module.rpartition(".")[0])), [])
 
     def test_detector_resolves_every_spelling(self) -> None:
-        package = "src.integrations.codex"
+        package = CODEX
         for source, expected in (
             ("from src.ai import ModelError", {"src.ai"}),
             ("from src import ai, core", {"src.ai", "src.core"}),
             ("from src.games import adapters", {"src.games.adapters"}),
             ("import src.ai.adapters.discord.cog", {"src.ai.adapters.discord.cog"}),
-            ("from ...ai.adapters import x", {"src.ai.adapters"}),
-            ("from .. import codex", {"src.integrations.codex"}),
-            ("from .rpc import x", {"src.integrations.codex.rpc"}),
+            ("from ...adapters import x", {"src.ai.adapters"}),
+            ("from .. import codex", {CODEX}),
+            ("from .rpc import x", {f"{CODEX}.rpc"}),
             ("if TYPE_CHECKING:\n    from src.games.store import GameStore", {"src.games.store"}),
         ):
             with self.subTest(source):
@@ -268,13 +291,13 @@ class RuntimeImportTests(unittest.TestCase):
     def test_domain_and_app_load_no_discord_sqlite_or_adapters(self) -> None:
         loaded = loaded_modules(*(m for m in modules_under("src") if ".domain" in m or ".app" in m))
         self.assertTrue({"discord", "sqlite3"}.isdisjoint(loaded))
-        self.assertEqual({m for m in loaded if ".adapters" in m or within(m, "src.integrations")}, set())
+        self.assertEqual({m for m in loaded if ".adapters" in m}, set())
 
-    def test_frame_worker_loads_no_discord_config_or_integrations(self) -> None:
+    def test_frame_worker_loads_no_discord_config_or_codex(self) -> None:
         modules = loaded_modules("src.ai.adapters.media.frames")
         self.assertNotIn("discord", modules)
         self.assertNotIn("src.core.app.config", modules)
-        self.assertFalse({module for module in modules if within(module, "src.integrations")})
+        self.assertFalse({module for module in modules if within(module, CODEX)})
 
     def test_feature_cogs_do_not_load_other_features(self) -> None:
         for feature in set(FEATURES) - {"admin"}:

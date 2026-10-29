@@ -6,10 +6,10 @@ from pathlib import Path
 from unittest.mock import patch
 
 from src.ai import ModelChoice, ModelError, ModelSettings
+from src.ai.adapters.codex.rpc import AppServerClient
+from src.ai.adapters.codex.service import COMMON_DISABLED_FEATURES, CodexService, feature_config
+from src.ai.adapters.sqlite.conversations import ConversationStore
 from src.core.adapters.sqlite.db import open_db
-from src.integrations.codex.conversations import ConversationStore
-from src.integrations.codex.rpc import AppServerClient
-from src.integrations.codex.service import COMMON_DISABLED_FEATURES, CodexService, feature_config
 from tests.support.codex_server import MODELS, FakeAppServer, answer, silent
 
 KEY = "guild:1:channel:2:user:3"
@@ -35,8 +35,8 @@ OVERLOADED = {"message": "busy", "codexErrorInfo": "serverOverloaded"}
 
 class ServiceTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self) -> None:
-        for patcher in (patch("src.integrations.codex.rpc.RECONNECT_DELAYS", (0.01,)),
-                        patch("src.integrations.codex.service.ARCHIVE_RETRY_SECONDS", 0.05)):
+        for patcher in (patch("src.ai.adapters.codex.rpc.RECONNECT_DELAYS", (0.01,)),
+                        patch("src.ai.adapters.codex.service.ARCHIVE_RETRY_SECONDS", 0.05)):
             patcher.start()
             self.addCleanup(patcher.stop)
         self.server = FakeAppServer()
@@ -251,7 +251,7 @@ class ServiceTests(unittest.IsolatedAsyncioTestCase):
             await scripts.pop(0)(*args)
         self.server.script = script
         stages = []
-        with patch("src.integrations.codex.service.FIRST_EVENT_SECONDS", 0.2), self.assertLogs(level="ERROR"):
+        with patch("src.ai.adapters.codex.service.FIRST_EVENT_SECONDS", 0.2), self.assertLogs(level="ERROR"):
             reply = await self.chat(progress=lambda stage, summary: stages.append(stage))
         self.assertEqual(reply.text, "重試成功")
         self.assertEqual(len(self.server.params("turn/interrupt")), 1)
@@ -261,7 +261,7 @@ class ServiceTests(unittest.IsolatedAsyncioTestCase):
         await self.chat()
         thread_id = self.store.get(KEY).thread_id
         self.server.ignore.add("thread/archive")
-        with patch("src.integrations.codex.service.ARCHIVE_RPC_SECONDS", 0.1):
+        with patch("src.ai.adapters.codex.service.ARCHIVE_RPC_SECONDS", 0.1):
             with self.assertLogs(level="WARNING"):
                 result = await self.service.reset_conversation(KEY)
             self.assertEqual((result.detached_count, result.archived_count, result.archive_unconfirmed_count), (1, 0, 1))
@@ -376,7 +376,7 @@ class CodexConfigTests(unittest.TestCase):
             self.assertTrue(chat["features"][feature])
 
     def test_compose_passes_the_process_hard_limits_to_codex(self) -> None:
-        compose = (Path(__file__).resolve().parents[3] / "compose.yaml").read_text(encoding="utf-8")
+        compose = (Path(__file__).resolve().parents[4] / "compose.yaml").read_text(encoding="utf-8")
         for limit in ('forced_login_method="chatgpt"', 'cli_auth_credentials_store="file"', "agents.enabled=false",
                       "mcp_servers={}", 'shell_environment_policy.inherit="none"', "check_for_update_on_startup=false"):
             self.assertRegex(compose, rf"- -c\n\s+- {re.escape(limit)}\n")

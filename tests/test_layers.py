@@ -9,8 +9,8 @@ SRC = Path(__file__).resolve().parents[1] / "src"
 SQL = re.compile(r"^\s*(SELECT|INSERT|UPDATE|DELETE|CREATE|ALTER|DROP)\s")
 FEATURES = ("ai", "games", "voice", "steam", "admin")
 ROOT_FILES = frozenset({"__init__.py", "bot.py"})
-PACKAGES = frozenset({"core", "integrations", *FEATURES, "assets"})
-SQL_HOMES = frozenset({"bot.py", "integrations/codex/conversations.py"})
+PACKAGES = frozenset({"core", *FEATURES, "assets"})
+SQL_HOMES = frozenset({"bot.py"})
 
 
 def module_name(path: Path) -> str:
@@ -63,7 +63,7 @@ def layer_problems(path: Path, source: str) -> list[str]:
         problems += [f"{layer} imports {name}" for name in sorted(names) if not allowed(name, rules[layer])]
     if layer == "adapters":
         kind = parts[2]
-        if kind in {"sqlite", "media"}:
+        if kind in {"sqlite", "media", "codex"}:
             problems += [f"{kind} adapter imports discord" for name in names if name.split(".")[0] == "discord"]
         if kind == "discord":
             problems += ["discord adapter imports sqlite3" for name in names if name == "sqlite3"]
@@ -136,6 +136,7 @@ class LayerTests(unittest.TestCase):
             voice / "app" / "x.py": ("import aiohttp", "from src.core.adapters.sqlite.db import transaction",
                                      "from src.games import x", "from src.voice.adapters.discord import gateway"),
             voice / "adapters" / "sqlite" / "x.py": ("import discord",),
+            SRC / "ai" / "adapters" / "codex" / "x.py": ("import discord", "from discord import Embed"),
             voice / "adapters" / "discord" / "x.py": ("import sqlite3",),
         }
         for path, samples in cases.items():
@@ -147,11 +148,12 @@ class LayerTests(unittest.TestCase):
         for path, sample in (
             (voice / "adapters" / "discord" / "x.py", "QUERY = 'SELECT 1 FROM voice_rooms'"),
             (SRC / "core" / "adapters" / "discord" / "x.py", "db.execute('UPDATE requests SET status = 1')"),
-            (SRC / "integrations" / "codex" / "rpc.py", "import sqlite3"),
+            (SRC / "ai" / "adapters" / "codex" / "rpc.py", "import sqlite3"),
+            (SRC / "ai" / "adapters" / "codex" / "conversations.py", "Q = 'SELECT 1 FROM codex_threads'"),
         ):
             with self.subTest(sample):
                 self.assertNotEqual(sql_problems(path, sample), [])
-        for path in (SRC / "core" / "adapters" / "sqlite" / "x.py", SRC / "integrations" / "codex" / "conversations.py",
+        for path in (SRC / "core" / "adapters" / "sqlite" / "x.py", SRC / "ai" / "adapters" / "sqlite" / "conversations.py",
                      SRC / "bot.py"):
             with self.subTest(str(path)):
                 self.assertEqual(sql_problems(path, "import sqlite3\nQ = 'SELECT 1'"), [])

@@ -27,14 +27,14 @@ from src.ai import (
     scope_matches,
     with_effort,
 )
+from src.ai.adapters.codex.admission import Admission
+from src.ai.adapters.codex.models import parse_model_list
+from src.ai.adapters.codex.rate_limits import normalize_rate_limits
+from src.ai.adapters.codex.rpc import AppServerClient, ConnectionLost, Notification, Phase, RpcError, ThreadEvents
+from src.ai.adapters.codex.turns import TurnResult, collect_turn, extract_reply_image_urls, normalize_error
+from src.ai.adapters.sqlite.conversations import ConversationStore
 from src.core.app.config import CODEX_WORKSPACE
 from src.core.app.supervisor import cancel_all, track
-from src.integrations.codex.admission import Admission
-from src.integrations.codex.conversations import ConversationStore
-from src.integrations.codex.models import parse_model_list
-from src.integrations.codex.rate_limits import normalize_rate_limits
-from src.integrations.codex.rpc import AppServerClient, ConnectionLost, Notification, Phase, RpcError, ThreadEvents
-from src.integrations.codex.turns import TurnResult, collect_turn, extract_reply_image_urls, normalize_error
 
 CLIENT_VERSION = "1.0.0"
 SERVICE_NAME = "horo-dcb"

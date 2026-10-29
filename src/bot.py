@@ -14,6 +14,7 @@ from src.admin.adapters.discord.ports import AdminServices
 from src.admin.adapters.discord.sessions import PanelSessionRegistry
 from src.admin.adapters.discord.status import admin_actions
 from src.ai import AiAccess, AiSettings, AiText
+from src.ai.adapters.codex.service import CodexService
 from src.ai.adapters.discord.actions import ai_actions
 from src.ai.adapters.discord.cog import AiCog
 from src.ai.adapters.discord.errors import codex_error_text
@@ -21,6 +22,7 @@ from src.ai.adapters.discord.help import help_actions
 from src.ai.adapters.discord.messages import AiMessages
 from src.ai.adapters.media.frames import Frames
 from src.ai.adapters.media.images import MediaReader
+from src.ai.adapters.sqlite.conversations import ConversationStore
 from src.ai.adapters.sqlite.store import SqliteAiStore
 from src.core.adapters.discord.brand import load_app_emojis, report_interaction_error, sync_discord_brand
 from src.core.adapters.discord.channels import member_role_ids
@@ -43,8 +45,6 @@ from src.games.adapters.discord.cog import GamesCog
 from src.games.adapters.discord.effects import game_effect_kinds
 from src.games.adapters.discord.presenter import DiscordLobbyBoard, DiscordTables
 from src.games.adapters.sqlite.store import SqliteGameStore
-from src.integrations.codex.conversations import ConversationStore
-from src.integrations.codex.service import CodexService
 from src.steam import Steam
 from src.steam.adapters.discord.actions import steam_actions
 from src.steam.adapters.discord.announcer import DiscordAnnouncer

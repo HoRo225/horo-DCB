@@ -1,7 +1,7 @@
 import unittest
 
-from src.integrations.codex.rpc import Notification, ThreadEvents
-from src.integrations.codex.turns import collect_turn
+from src.ai.adapters.codex.rpc import Notification, ThreadEvents
+from src.ai.adapters.codex.turns import collect_turn
 
 
 class CollectTurnTests(unittest.IsolatedAsyncioTestCase):

@@ -12,6 +12,7 @@ CONSTANTS = {
     "admin/adapters/discord/pages/common.py": {"STATUS_DOTS"},
     "admin/adapters/discord/pages/effects.py": {"STATES"},
     "admin/adapters/discord/panel.py": {"PAGES"},
+    "ai/adapters/codex/rpc.py": {"SERVER_REQUEST_REPLIES"},
     "ai/adapters/discord/actions.py": {"MODEL_CHOICE"},
     "ai/adapters/discord/errors.py": {"_ERROR_TEXT"},
     "ai/adapters/discord/messages.py": {"DENIAL_CODES"},
@@ -22,7 +23,6 @@ CONSTANTS = {
     "games/adapters/discord/tables.py": {"VIEWS"},
     "games/domain/rules.py": {"OUTCOMES"},
     "games/domain/slots.py": {"PAYS"},
-    "integrations/codex/rpc.py": {"SERVER_REQUEST_REPLIES"},
 }
 STATE = {
     "core/adapters/discord/brand.py": (

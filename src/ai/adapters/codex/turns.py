@@ -8,7 +8,7 @@ from dataclasses import dataclass, field
 from typing import Any, Literal
 
 from src.ai import ModelError, normalize_reply_image_urls
-from src.integrations.codex.rpc import RpcError, ThreadEvents
+from src.ai.adapters.codex.rpc import RpcError, ThreadEvents
 
 _IMAGE_RESULT_REF = re.compile(r"^turn[0-9]+image[0-9]+$")
 _MARKDOWN_IMAGE_URL = re.compile(r"!\[[^\]]*\]\((https://[^\s)]+)\)")

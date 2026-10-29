@@ -1,6 +1,6 @@
 import unittest
 
-from src.integrations.codex.rate_limits import normalize_rate_limits
+from src.ai.adapters.codex.rate_limits import normalize_rate_limits
 
 
 class RateLimitTests(unittest.TestCase):

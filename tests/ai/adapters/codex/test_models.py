@@ -1,7 +1,7 @@
 import unittest
 
 from src.ai import find_model
-from src.integrations.codex.models import parse_model_list
+from src.ai.adapters.codex.models import parse_model_list
 
 
 def entry(model: str = "gpt-x", **overrides: object) -> dict[str, object]:

@@ -1,7 +1,7 @@
 import unittest
 
+from src.ai.adapters.sqlite.conversations import Conversation, ConversationStore
 from src.core.adapters.sqlite.db import open_db
-from src.integrations.codex.conversations import Conversation, ConversationStore
 
 THREAD_KEY = "guild:1:thread:5"
 USER_KEY = "guild:1:channel:2:user:3"
