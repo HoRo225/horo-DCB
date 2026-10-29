@@ -1,10 +1,10 @@
+import asyncio
 import time
 import unittest
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import discord
 
-from src.admin.adapters.discord.codex_login import CodexLogin
 from src.admin.adapters.discord.pages.ai import AiReadings, render_ai, render_ai_access
 from src.admin.adapters.discord.pages.ai_models import ModelEditor
 from src.admin.adapters.discord.pages.common import PendingConfirm
@@ -13,7 +13,7 @@ from src.admin.adapters.discord.pages.games import render_games
 from src.admin.adapters.discord.pages.steam import SteamQuery, render_steam
 from src.admin.adapters.discord.pages.voice import render_voice
 from src.admin.adapters.discord.panel import PAGES
-from src.ai import DeviceLogin, ModelChoice, ModelInfo, ModelSettings, RateLimits, RateWindow, RuntimeStatus
+from src.ai import ModelChoice, ModelInfo, ModelSettings, RateLimits, RateWindow, RuntimeStatus
 from src.ai.adapters.discord.help import help_view
 from src.ai.adapters.sqlite.store import AI_ENABLED
 from src.core.adapters.discord.brand import ICONS, WHITE, notice_view
@@ -150,9 +150,11 @@ class LayoutBudgetTest(unittest.IsolatedAsyncioTestCase):
                 self.assertLessEqual(fits(f"{render.__name__} switched off", view), counts[render.__name__])
             for switch in (AI_ENABLED, VOICE_ENABLED, STEAM_ENABLED):
                 put_setting(db, switch, True)
-            readings, login = view.state(AiReadings), view.state(CodexLogin)
-            login.login = DeviceLogin("login-1", "https://auth.openai.com/codex/device", "ABCD-1234")
+            readings = view.state(AiReadings)
+            await admin.logins.start()
+            self.addAsyncCleanup(admin.logins.close, deadline=asyncio.get_running_loop().time() + 5)
             render_ai(view, ("warn", "註" * 60))
+            self.assertIn("輸入代碼 `ABCD-1234`", testing.text(view))
             fits("render_ai with device code", view)
             readings.codex_status = RuntimeStatus(reason="ready", authenticated=True, plan="plus", last_error="timeout")
             render_ai(view, ("warn", "註" * 60))

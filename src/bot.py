@@ -10,11 +10,12 @@ import discord
 from discord.ext import commands
 
 from src.admin.adapters.discord.cog import AdminCog
+from src.admin.adapters.discord.logins import CodexLogins
 from src.admin.adapters.discord.ports import AdminServices
 from src.admin.adapters.discord.sessions import PanelSessionRegistry
 from src.admin.adapters.discord.status import admin_actions
 from src.ai import AiAccess, AiSettings, AiText
-from src.ai.adapters.codex.service import CodexService
+from src.ai.adapters.codex.service import LOGIN_SECONDS, CodexService
 from src.ai.adapters.discord.actions import ai_actions
 from src.ai.adapters.discord.cog import AiCog
 from src.ai.adapters.discord.errors import codex_error_text
@@ -98,6 +99,7 @@ def compose(bot: HoroBot, codex: CodexService, db: sqlite3.Connection, guild_id:
     games_cog = GamesCog(bot, play, lobby, game_tables, game_presenter, game_players, live,
                          supervisor.group("games.cog", SCHEDULED))
     panels = PanelSessionRegistry(supervisor.group("admin", PRESENTATION), supervisor.group("admin", WORK))
+    logins = CodexLogins(codex, supervisor.group("admin", WORK), seconds=LOGIN_SECONDS)
     registry = ActionRegistry()
     receipts = DiscordReceipts(operations, live, bot, registry)
     kinds = EffectRegistry()
@@ -122,14 +124,14 @@ def compose(bot: HoroBot, codex: CodexService, db: sqlite3.Connection, guild_id:
                           tips=ai_store, cleanups=supervisor.group("ai", PRESENTATION), confirmations=confirmations)
     ai_cog = AiCog(bot, live, ai_settings, codex, messages, requests=supervisor.group("ai", REQUEST))
     admin = AdminServices(
-        live=live, panels=panels, codex=codex, ai=ai_settings, access=access, voice=voice, steam=steam,
+        live=live, panels=panels, codex=codex, logins=logins, ai=ai_settings, access=access, voice=voice, steam=steam,
         games=lobby, effects=effects, codex_error=codex_error_text, hub_link=game_presenter.hub_link,
         offer_summary=offer_summary, last_backup=backups.last,
     )
     shutdown = Shutdown(
         supervisor,
         (
-            (("access", access), ("codex", codex)),
+            (("access", access), ("codex login", logins), ("codex", codex)),
             (("actions", actions),),
             (("steam", steam),),
             (("voice", voice),),

@@ -8,6 +8,7 @@ from typing import Any
 
 import discord
 
+from src.admin.adapters.discord.codex_login import follow_logins
 from src.admin.adapters.discord.pages.ai import load_ai, render_ai, render_ai_access, render_ai_tech
 from src.admin.adapters.discord.pages.ai_models import leave_models, load_models, render_ai_models
 from src.admin.adapters.discord.pages.common import IDLE_TIMEOUT_SECONDS, PendingConfirm, Proceed
@@ -110,6 +111,7 @@ class AdminPanelView(ErrorNotice, discord.ui.LayoutView):
         self._desired_children: tuple[discord.ui.Item, ...] | None = None
         self._published_children: tuple[discord.ui.Item, ...] | None = None
         self._pending: PendingConfirm | None = None
+        self._unfollow_logins: Callable[[], None] = lambda: None
 
     async def open_panel(self, interaction: discord.Interaction) -> None:
         published = False
@@ -117,6 +119,7 @@ class AdminPanelView(ErrorNotice, discord.ui.LayoutView):
         try:
             await interaction.response.defer(ephemeral=True)
             self.bind_interaction(interaction)
+            self._unfollow_logins = follow_logins(self, lambda note: render_ai(self, note))
             self._panel_registry.attach_view(self._panel_session, self)
             home = PAGES["overview"]
             if not self.alive or not await home.load(self, self._begin_operation()):
@@ -394,6 +397,7 @@ class AdminPanelView(ErrorNotice, discord.ui.LayoutView):
 
     def retire_session(self) -> None:
         self._operation += 1
+        self._unfollow_logins()
         self.stop()
         current = asyncio.current_task()
         for task in tuple(self._panel_session.tasks):

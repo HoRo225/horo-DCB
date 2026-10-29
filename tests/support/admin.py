@@ -10,6 +10,7 @@ from unittest.mock import AsyncMock, MagicMock
 import discord
 
 from src.admin.adapters.discord.cog import AdminCog
+from src.admin.adapters.discord.logins import CodexLogins
 from src.admin.adapters.discord.panel import AdminPanelView
 from src.admin.adapters.discord.ports import AdminServices
 from src.admin.adapters.discord.sessions import PanelSessionRegistry
@@ -88,7 +89,8 @@ class FakeCodex(FakeModel):
     async def wait_login(self, login_id: str, *, timeout: float = 900) -> bool:
         if self.login_finished.cancelled():
             self.login_finished = asyncio.get_running_loop().create_future()
-        return await self.login_finished
+        async with asyncio.timeout(timeout):
+            return await self.login_finished
 
 
 def admin_guild() -> tuple[MagicMock, dict[int, object]]:
@@ -128,9 +130,10 @@ class Admin:
                        self.receipts.effect_kind())
         self.effects = EffectResolver(self.operations, kinds, live, client)
         self.panels = PanelSessionRegistry(supervisor.group("admin", PRESENTATION), supervisor.group("admin", WORK))
+        self.logins = CodexLogins(self.codex, supervisor.group("admin", WORK), seconds=900)
         self.last_backup: int | None = None
         self.services = AdminServices(
-            live=live, panels=self.panels, codex=self.codex, ai=self.ai, access=self.access, voice=self.voice,
+            live=live, panels=self.panels, codex=self.codex, logins=self.logins, ai=self.ai, access=self.access, voice=self.voice,
             steam=self.steam, games=self.games, effects=self.effects, codex_error=codex_error_text,
             hub_link=DiscordTables(client, live, self.games).hub_link, offer_summary=offer_summary,
             last_backup=lambda: self.last_backup,
@@ -175,8 +178,8 @@ class PanelDriver(unittest.IsolatedAsyncioTestCase):
         fake.followup.send = AsyncMock()
         return fake
 
-    async def open_panel(self) -> MagicMock:
-        opened = self.interaction()
+    async def open_panel(self, user_id: int = OWNER) -> MagicMock:
+        opened = self.interaction(user_id)
         await self.command.callback(self.binding, opened)
         self.view = opened.edit_original_response.await_args.kwargs["view"]
         return opened
@@ -227,18 +230,18 @@ class PanelDriver(unittest.IsolatedAsyncioTestCase):
         item._values = list(values)
         return await self.click(item)
 
-    async def go(self, label: str) -> MagicMock:
+    async def go(self, label: str, user_id: int = OWNER) -> MagicMock:
         try:
-            return await self.click(self.button(label))
+            return await self.click(self.button(label), self.interaction(user_id))
         except StopIteration:
             pass
         if self.view.page != "overview":
-            await self.click(self.button("返回總覽"))
+            await self.click(self.button("返回總覽"), self.interaction(user_id))
         row = next(
             item for item in self.view.walk_children()
             if isinstance(item, discord.ui.Section) and any(f"{label}**" in child.content for child in item.children)
         )
-        return await self.click(row.accessory)
+        return await self.click(row.accessory, self.interaction(user_id))
 
     async def settle(self) -> None:
         for _ in range(20):
@@ -257,3 +260,4 @@ class PanelCase(PanelDriver):
 
     async def asyncTearDown(self) -> None:
         await self.admin.panels.close(deadline=asyncio.get_running_loop().time() + 5)
+        await self.admin.logins.close(deadline=asyncio.get_running_loop().time() + 5)

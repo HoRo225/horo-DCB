@@ -6,6 +6,7 @@ from typing import Protocol
 
 import discord
 
+from src.admin.adapters.discord.logins import CodexLogins
 from src.admin.adapters.discord.sessions import PanelSessionRegistry
 from src.ai import AiAccess, AiSettings, DeviceLogin, ModelInfo, RateLimits, RuntimeStatus
 from src.core.adapters.discord.effects import EffectResolver
@@ -31,6 +32,7 @@ class AdminServices:
     live: LiveGuild
     panels: PanelSessionRegistry
     codex: CodexAccount
+    logins: CodexLogins
     ai: AiSettings
     access: AiAccess
     voice: Voice
