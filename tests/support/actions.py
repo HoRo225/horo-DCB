@@ -27,6 +27,7 @@ from src.games.adapters.sqlite.store import SqliteGameStore
 from src.voice.adapters.discord.actions import voice_actions
 
 GUILD, CHANNEL, ACTOR, ROLE, RECEIPT = 5, 10, 1, 7, 3000
+REQUEST_ID = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
 
 
 class ActionHarness:
@@ -69,9 +70,6 @@ class ActionHarness:
         self.play = Play(store, Tables(), self.games, DiscordPlayers(self.live),
                          DiscordTables(self.client, self.live, self.games), AsyncMock(), tasks)
         self.access = AiAccess(self.ai, self.model, TaskGroup("test.access", WORK))
-        self.restart()
-
-    def restart(self) -> None:
         registry = ActionRegistry()
         registry.register(
             *game_actions(self.play, self.games, self.live),
@@ -101,20 +99,17 @@ class ActionHarness:
 
     def rows(self) -> dict[str, list[tuple]]:
         tables = {
-            "requests": "SELECT request_id, message_id, actor_id, guild_id, channel_id, plan, status FROM requests "
-                        "ORDER BY rowid",
             "operations": "SELECT operation_id, kind, inputs, status, result, resource_id FROM operations "
                           "ORDER BY rowid",
             "effects": "SELECT effect_id, operation_id, kind, status, channel_id, message_id, nonce, payload, error "
                        "FROM discord_effects ORDER BY rowid",
         }
-        names = [request_id for (request_id,) in self.db.execute("SELECT request_id FROM requests ORDER BY rowid")]
+        names: dict[str, str] = {}
 
         def normal(value: object) -> object:
             if not isinstance(value, str):
                 return value
-            for index, request_id in enumerate(names):
-                value = value.replace(request_id, f"<req{index}>")
+            value = REQUEST_ID.sub(lambda match: names.setdefault(match[0], f"<req{len(names)}>"), value)
             value = re.sub(r'"private_ref":"[A-Za-z0-9_-]+"', '"private_ref":"<ref>"', value)
             value = re.sub(r'"state_token":"[0-9a-f]{32}"', '"state_token":"<token>"', value)
             return re.sub(r"^[0-9a-f]{24}$", "<nonce>", value)

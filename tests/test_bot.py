@@ -6,7 +6,6 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import discord
 
 from src.bot import HoroBot, main
-from src.core.adapters.sqlite.operations import OperationStore
 from src.core.app.supervisor import WORK
 from src.games.adapters.discord.views import lobby_view
 from src.games.domain.catalog import GAMES
@@ -98,12 +97,6 @@ class StartupTests(unittest.IsolatedAsyncioTestCase):
         with patch.object(self.bot, "process_commands", AsyncMock()) as process_commands:
             await self.bot.on_message(message)
         process_commands.assert_not_awaited()
-
-    def test_requests_left_accepted_by_a_crash_are_interrupted_on_start(self) -> None:
-        operations = OperationStore(self.db)
-        operations.register_request(10, 1, 2, 3, [])
-        HoroBot(fake_codex(), guild_id=G, db=self.db)
-        self.assertEqual(operations.get_request(10).status, "interrupted")
 
 
 class ShutdownTests(unittest.IsolatedAsyncioTestCase):

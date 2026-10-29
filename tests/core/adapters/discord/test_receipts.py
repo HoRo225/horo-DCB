@@ -78,8 +78,6 @@ class PublishTests(ReceiptTests):
         effect = self.effect()
         self.assertEqual((effect.kind, effect.status, effect.message_id, effect.nonce), ("action.receipt", "done", SENT, sent["nonce"]))
         self.assertEqual(effect.payload, {"results": results, "source_message_id": 1000})
-        self.assertTrue(await self.receipts.publish(self.source, "req", results))
-        self.channel.send.assert_awaited_once()
 
     async def test_receipt_replies_only_with_read_message_history(self) -> None:
         self.permissions = discord.Permissions(view_channel=True, send_messages=True, read_message_history=True)
@@ -97,7 +95,6 @@ class PublishTests(ReceiptTests):
         with self.assertLogs(level="ERROR"):
             self.assertTrue(await self.receipts.publish(self.source, "req", [DONE]))
         self.assertEqual(self.effect().status, "unknown")
-        self.assertTrue(await self.receipts.publish(self.source, "req", [DONE]))
         await self.receipts.explain(self.source, "說明", lambda: True)
         self.channel.send.assert_awaited_once()
         self.posted.edit.assert_not_awaited()
@@ -106,8 +103,7 @@ class PublishTests(ReceiptTests):
 class ExplainTests(ReceiptTests):
     async def test_explanation_uses_the_stored_results(self) -> None:
         results = [self.query()]
-        request = self.operations.register_request(1000, USER, G, CHANNEL, {"decision": {}})
-        await self.receipts.publish(self.source, request.request_id, results)
+        await self.receipts.publish(self.source, "req", results)
         results[0]["text"] = "洩漏私人內容 9876"
         await self.receipts.explain(self.source, "完成", lambda: False)
         self.posted.edit.assert_not_awaited()

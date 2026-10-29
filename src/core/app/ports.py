@@ -6,7 +6,7 @@ from dataclasses import dataclass, field
 from typing import Protocol
 
 from src.core.domain.actions import Target
-from src.core.domain.records import OperationRecord, RequestRecord
+from src.core.domain.records import OperationRecord
 
 
 class Owner(Protocol):
@@ -68,14 +68,6 @@ class Presence(Protocol):
 
 class OperationLog(Protocol):
     def atomic(self) -> AbstractContextManager[None]: ...
-
-    def get_request(self, message_id: int) -> RequestRecord | None: ...
-
-    def register_request(
-        self, message_id: int, actor_id: int, guild_id: int, channel_id: int, plan: object,
-    ) -> RequestRecord: ...
-
-    def finish_request(self, request_id: str, status: str) -> None: ...
 
     def get(self, operation_id: str | None) -> OperationRecord | None: ...
 

@@ -16,7 +16,7 @@ from src.voice.adapters.sqlite.store import VOICE_ENABLED, VOICE_ENTRY_CHANNEL_I
 
 LATEST = 14 + len(MIGRATIONS)
 TABLES = {
-    "requests", "operations", "discord_effects", "settings", "game_tables",
+    "operations", "discord_effects", "settings", "game_tables",
     "voice_rooms", "steam_posted", "codex_threads", "codex_pending_archives",
 }
 LIVE_SETTINGS = {setting.key for setting in (
@@ -83,15 +83,13 @@ class UpgradeTests(unittest.TestCase):
         self.addCleanup(db.close)
         return db
 
-    def snapshot(self) -> tuple:
+    def contents(self) -> tuple:
         raw = sqlite3.connect(self.path)
         try:
-            return (
-                raw.execute("PRAGMA user_version").fetchone(),
-                raw.execute("SELECT type, name, sql FROM sqlite_master ORDER BY name").fetchall(),
-                raw.execute("SELECT * FROM settings").fetchall(),
-                raw.execute("SELECT * FROM voice_rooms").fetchall(),
-            )
+            schema = raw.execute("SELECT type, name, tbl_name, sql FROM sqlite_master ORDER BY name").fetchall()
+            rows = {name: raw.execute(f"SELECT * FROM {name}").fetchall() for kind, name, _table, _sql in schema
+                    if kind == "table"}
+            return raw.execute("PRAGMA user_version").fetchone(), schema, rows
         finally:
             raw.close()
 
@@ -99,10 +97,10 @@ class UpgradeTests(unittest.TestCase):
         db = open_db(self.path)
         db.executescript("INSERT INTO settings VALUES ('feature.ai', 'true'); INSERT INTO voice_rooms VALUES (50, 7);")
         db.close()
-        before = self.snapshot()
+        before = self.contents()
         self.assertEqual(before[0], (LATEST,))
         self.open().close()
-        self.assertEqual(self.snapshot(), before)
+        self.assertEqual(self.contents(), before)
 
     def test_increments_continue_from_the_stored_version(self) -> None:
         v15 = "CREATE TABLE extra (n INTEGER);"
@@ -119,7 +117,24 @@ class UpgradeTests(unittest.TestCase):
         self.assertEqual(db.execute("PRAGMA user_version").fetchone(), (16,))
         self.assertEqual(db.execute("SELECT n FROM extra").fetchall(), [(16,)])
         tables = {name for (name,) in db.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
-        self.assertEqual(tables, TABLES | {"extra"})
+        self.assertEqual(tables, TABLES | {"requests", "extra"})
+
+    def test_v16_drops_requests_and_keeps_every_other_table(self) -> None:
+        db = open_db(self.path, MIGRATIONS[:1])
+        db.executescript(
+            "INSERT INTO settings VALUES ('feature.ai', 'true'); INSERT INTO voice_rooms VALUES (50, 7);"
+            "INSERT INTO operations (operation_id, kind, inputs, status, result) VALUES ('op', 'k', '{}', 'done', '{}');"
+            "INSERT INTO requests (request_id, message_id, actor_id, guild_id, channel_id, plan) "
+            "VALUES ('r', 1, 2, 3, 4, '{}');"
+        )
+        db.close()
+        version, schema, rows = self.contents()
+        self.assertEqual((version, len(rows["requests"])), ((15,), 1))
+        self.open(MIGRATIONS[:2]).close()
+        self.assertEqual(self.contents(), (
+            (16,), [entry for entry in schema if entry[2] != "requests"],
+            {name: table for name, table in rows.items() if name != "requests"},
+        ))
 
     def test_versions_before_the_baseline_are_refused(self) -> None:
         raw = self.raw()

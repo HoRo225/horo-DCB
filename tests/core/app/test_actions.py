@@ -101,6 +101,10 @@ class Engine(unittest.IsolatedAsyncioTestCase):
             self.flags.append((step.operation_id, params["channel_id"]))
             return None
 
+        async def tag(step: Step, params):
+            self.flags.append((step.operation_id, params["ids"]))
+            return None
+
         async def render(actor):
             return {"view": None}
 
@@ -119,7 +123,7 @@ class Engine(unittest.IsolatedAsyncioTestCase):
                            effect=Configure(bind, stale="設定已過期。"), validate=self.validate),
                 ActionSpec("sync", {}, admin=True, effect=Network(self.network)),
                 ActionSpec("tag", {"ids": Param("ids", target=Target("roles"))}, admin=True,
-                           effect=Configure(set_flag)),
+                           effect=Configure(tag)),
                 ActionSpec("resolve", {"item": Param("text", target=Target("quoted"))}, admin=True,
                            effect=Configure(set_flag)),
             )),
@@ -138,8 +142,8 @@ class Engine(unittest.IsolatedAsyncioTestCase):
                                             deadline=deadline, grant=lambda actor: self.granted)
         return outcome.results
 
-    def request(self, message_id: int = MESSAGE):
-        return self.operations.get_request(message_id)
+    def request_id(self) -> str:
+        return self.receipts.published[-1][0]
 
 
 class CatalogueTests(Engine):
@@ -176,13 +180,29 @@ class ContextTests(Engine):
 
 
 class ExecutionTests(Engine):
-    async def test_query_issues_a_private_result_and_replay_runs_once(self) -> None:
-        first = await self.execute(("lookup", {}))
-        self.assertEqual(first, [{"ok": True, "code": "done", "text": "已查詢說明。", "private_ref": "ref1"}])
-        self.assertEqual(await self.execute(("lookup", {})), first)
-        self.assertEqual(self.receipts.issued, 1)
-        self.assertEqual(len(self.receipts.published), 2)
-        self.assertEqual(self.request().status, "done")
+    async def test_query_issues_a_private_result_and_records_it(self) -> None:
+        results = await self.execute(("lookup", {}))
+        self.assertEqual(results, [{"ok": True, "code": "done", "text": "已查詢說明。", "private_ref": "ref1"}])
+        self.assertEqual(self.receipts.published, [(self.request_id(), results)])
+        self.assertEqual(self.operations.get(f"{self.request_id()}:0").result, results[0])
+
+    async def test_concurrent_entries_of_one_message_share_a_single_run(self) -> None:
+        admitted, release = asyncio.Event(), asyncio.Event()
+
+        async def slow(step, params):
+            admitted.set()
+            await release.wait()
+            return {"ok": True, "code": "done", "text": "已移動。"}
+
+        self.moves.side_effect = slow
+        first = asyncio.create_task(self.execute(("move", {})))
+        await admitted.wait()
+        second = asyncio.create_task(self.execute(("move", {})))
+        await asyncio.sleep(0)
+        release.set()
+        self.assertEqual(await first, await second)
+        self.moves.assert_awaited_once()
+        self.assertEqual(len(self.receipts.published), 1)
 
     async def test_failure_stops_later_steps_and_keeps_earlier_commits(self) -> None:
         self.presence.current = ADMIN
@@ -190,28 +210,23 @@ class ExecutionTests(Engine):
         plan = (("set_flag", {"value": False}), ("sync", {}), ("set_flag", {"value": True}))
         results = await self.execute(*plan)
         self.assertEqual(results, [DONE, {"ok": False, "code": "effect", "text": "這個項目已完成或不存在。"}, SKIPPED])
-        request = self.request()
-        self.assertEqual(self.flags, [(f"{request.request_id}:0", False)])
-        self.assertEqual(self.operations.get(f"{request.request_id}:1").status, "failed")
-        self.assertEqual(await self.execute(*plan), results)
+        self.assertEqual(self.flags, [(f"{self.request_id()}:0", False)])
+        self.assertEqual(self.operations.get(f"{self.request_id()}:1").status, "failed")
         self.network.assert_awaited_once()
-        self.assertEqual(self.request().status, "failed")
 
     async def test_network_success_and_crash_are_recorded(self) -> None:
         self.presence.current = ADMIN
         self.assertEqual(await self.execute(("sync", {})), [DONE])
-        request = self.request()
-        self.assertEqual(self.operations.get(f"{request.request_id}:0").result, {"ok": True})
+        self.assertEqual(self.operations.get(f"{self.request_id()}:0").result, {"ok": True})
         self.network.side_effect = RuntimeError("socket closed")
         with self.assertLogs(level="ERROR"):
             [result] = await self.execute(("sync", {}), message_id=MESSAGE + 1)
         self.assertEqual((result["code"], result["text"]), ("unknown", "這項操作未能確認完成，請查看私人結果或請管理員核對待處理項目。"))
-        self.assertEqual(self.operations.get(f"{self.request(MESSAGE + 1).request_id}:0").status, "running")
+        self.assertEqual(self.operations.get(f"{self.request_id()}:0").status, "running")
 
     async def test_member_plan_with_an_admin_step_is_rejected_before_any_commit(self) -> None:
         self.assertEqual(await self.execute(("lookup", {}), ("set_flag", {"value": False})),
                          [{"ok": False, "code": "forbidden", "text": ADMIN_ONLY}])
-        self.assertIsNone(self.request())
         self.assertEqual(self.receipts.published, [])
 
     async def test_revoked_ai_access_and_presence_problems_reject_the_plan(self) -> None:
@@ -223,7 +238,7 @@ class ExecutionTests(Engine):
         self.presence.fetch.side_effect = None
         self.presence.fetch.return_value = None
         self.assertEqual((await self.execute(("lookup", {})))[0]["code"], "invalid_plan")
-        self.assertIsNone(self.request())
+        self.assertEqual(self.receipts.published, [])
 
     async def test_forged_plans_and_missing_snapshots_are_invalid(self) -> None:
         for actions, received in (
@@ -234,30 +249,26 @@ class ExecutionTests(Engine):
         ):
             with self.subTest(actions=actions):
                 self.assertEqual((await self.execute(*actions, received=received))[0]["code"], "invalid_plan")
-        self.assertIsNone(self.request())
+        self.assertEqual(self.receipts.published, [])
 
     async def test_busy_board_at_receipt_cannot_play_later(self) -> None:
         self.board["busy"] = True
         self.assertEqual(await self.execute(("move", {})), [{"ok": False, "code": "busy", "text": "棋盤忙碌中。"}])
-        self.assertIsNone(self.request())
+        self.assertEqual(self.receipts.published, [])
 
     async def test_play_gets_the_stored_snapshot_and_returns_only_safe_fields(self) -> None:
         [result] = await self.execute(("move", {"to": None}))
         self.assertEqual(result, {"ok": True, "code": "done", "text": "已移動。"})
         step, params = self.moves.await_args.args
         self.assertEqual((step.received, params, step.actor), ({"board": self.board}, {}, MEMBER))
-        self.assertEqual(step.operation_id, f"{self.request().request_id}:0")
+        self.assertEqual(step.operation_id, f"{self.request_id()}:0")
         self.assertTrue(step.still_current())
-        self.assertEqual(self.request().plan, {
-            "decision": {"kind": "plan", "actions": [{"name": "move", "params": {}}], "question": ""},
-            "board": self.board,
-        })
 
     async def test_unavailable_group_rejects_the_whole_plan_or_the_later_step(self) -> None:
         self.blocked = "請到遊戲頻道。"
         self.assertEqual(await self.execute(("lookup", {}), ("move", {})),
                          [{"ok": False, "code": "forbidden", "text": "請到遊戲頻道。"}])
-        self.assertIsNone(self.request())
+        self.assertEqual(self.receipts.published, [])
         self.blocked = None
         self.presence.current = ADMIN
         self.after_flag = lambda: setattr(self, "blocked", "你沒有使用這個功能的身分組。")
@@ -279,7 +290,7 @@ class ExecutionTests(Engine):
         self.presence.targets[str(CHANNEL)] = "頻道不能用。"
         self.assertEqual((await self.execute(("bind", {"channel_id": CHANNEL})))[0]["text"], "頻道不能用。（預檢）")
         self.assertEqual(self.flags, [])
-        self.assertIsNone(self.request())
+        self.assertEqual(self.receipts.published, [])
         self.assertEqual(
             (await self.execute(("resolve", {"item": "voice.delete:9"}), message_id=MESSAGE + 9, content="略過 voice.delete:9"))[0]["ok"],
             True)
@@ -300,7 +311,7 @@ class ExecutionTests(Engine):
         self.validate.side_effect = ValueError("model unavailable")
         self.assertEqual(await self.execute(("bind", {"channel_id": CHANNEL})),
                          [{"ok": False, "code": "invalid_plan", "text": "無法確認完整操作清單，未執行任何操作。"}])
-        self.assertIsNone(self.request())
+        self.assertEqual(self.receipts.published, [])
 
     async def test_configure_without_an_operation_record_is_stale(self) -> None:
         self.presence.current = ADMIN
@@ -335,7 +346,7 @@ class ExecutionTests(Engine):
         self.presence.fetch.return_value = ADMIN
         release.set()
         await caller
-        self.assertEqual(self.request().plan["decision"]["actions"][0]["params"]["ids"], [7])
+        self.assertEqual(self.flags, [(f"{self.request_id()}:0", [7])])
 
 
 class CancellationTests(Engine):
@@ -356,8 +367,7 @@ class CancellationTests(Engine):
         release.set()
         [outcome] = await asyncio.gather(*self.tasks.pending())
         self.assertTrue(outcome.results[0]["ok"])
-        self.assertEqual(self.request().status, "interrupted")
-        self.assertEqual(len(self.receipts.published), 1)
+        self.assertEqual(self.receipts.published, [(self.request_id(), outcome.results)])
 
     async def test_cancelled_caller_permanently_stops_remaining_steps(self) -> None:
         admitted, release = asyncio.Event(), asyncio.Event()
@@ -381,7 +391,6 @@ class CancellationTests(Engine):
         [outcome] = await asyncio.gather(*self.tasks.pending())
         self.assertEqual([row["ok"] for row in outcome.results], [True, True, False])
         self.assertEqual(outcome.results[2]["code"], "not_executed")
-        self.assertEqual(await self.execute(*plan), outcome.results)
         self.assertEqual(len(entered), 1)
 
     async def test_cancelled_preflight_keeps_its_reason_and_registers_nothing(self) -> None:
@@ -401,7 +410,7 @@ class CancellationTests(Engine):
         release.set()
         [outcome] = await asyncio.gather(*self.tasks.pending())
         self.assertEqual(outcome.results, [{"ok": False, "code": "forbidden", "text": ADMIN_ONLY}])
-        self.assertIsNone(self.request())
+        self.assertEqual(self.receipts.published, [])
 
 
 class ExplainTests(Engine):

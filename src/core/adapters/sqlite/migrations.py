@@ -70,4 +70,7 @@ INSERT OR IGNORE INTO codex_pending_archives (thread_id)
 SELECT thread_id FROM codex_threads WHERE conversation_key GLOB 'guild:*:thread:*' AND parent_channel_id IS NULL;
 DELETE FROM codex_threads WHERE conversation_key GLOB 'guild:*:thread:*' AND parent_channel_id IS NULL;
 """,
+    """
+DROP TABLE requests;
+""",
 )

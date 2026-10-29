@@ -52,7 +52,7 @@ class DiscordReceipts:
         self._client = client
         self._registry = registry
         self.private_results = PrivateResults(self._authorize, self._render, self._label)
-        self._sent: OrderedDict[int, object | None] = OrderedDict()
+        self._sent: OrderedDict[int, tuple[str, object | None]] = OrderedDict()
         self._lock = asyncio.Lock()
 
     def effect_kind(self) -> EffectKind:
@@ -83,18 +83,12 @@ class DiscordReceipts:
             return False
         channel = live.channel(source.channel_id)
         effect_id = f"request:{request_id}:receipt"
-        if (existing := operations.get_effect(effect_id)) is not None:
-            self._sent[source.message_id] = (
-                self._client.get_partial_messageable(existing.channel_id).get_partial_message(existing.message_id)
-                if existing.message_id else None
-            )
-            return True
         nonce = uuid.uuid4().hex[:24]
         with transaction(operations.db):
             operations.create_effect(effect_id, RECEIPT, channel.id,
                                      {"results": results, "source_message_id": source.message_id}, nonce=nonce)
             operations.update_effect(effect_id, "unknown")
-        self._sent[source.message_id] = None
+        self._sent[source.message_id] = (effect_id, None)
         while len(self._sent) > REMEMBERED:
             self._sent.popitem(last=False)
         try:
@@ -104,7 +98,7 @@ class DiscordReceipts:
         except discord.HTTPException:
             logging.exception("Action receipt delivery is unknown; not resending.")
             return True
-        self._sent[source.message_id] = message
+        self._sent[source.message_id] = (effect_id, message)
         self._bind(results, message.id)
         with transaction(operations.db):
             operations.update_effect(effect_id, "done", message_id=message.id)
@@ -112,13 +106,10 @@ class DiscordReceipts:
 
     async def explain(self, source: Source, text: str, still_current: Callable[[], bool]) -> None:
         async with self._lock:
-            message = self._sent.get(source.message_id)
+            effect_id, message = self._sent.get(source.message_id, ("", None))
             if message is None or not still_current():
                 return
-            request = self._operations.get_request(source.message_id)
-            effect = self._operations.get_effect(f"request:{request.request_id}:receipt") if request is not None else None
-            if effect is None:
-                return
+            effect = self._operations.get_effect(effect_id)
             try:
                 await message.edit(view=self._view(effect.payload["results"], text),
                                    allowed_mentions=discord.AllowedMentions.none())
@@ -160,7 +151,7 @@ class DiscordReceipts:
         self._bind(results, message.id)
         with transaction(operations.db):
             operations.update_effect(effect_id, "done", message_id=message.id)
-        self._sent[source_message_id] = message
+        self._sent[source_message_id] = (effect_id, message)
         return True
 
     def _query(self, kind: str) -> tuple[ActionSpec, Query] | None:

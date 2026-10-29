@@ -2,13 +2,12 @@ from __future__ import annotations
 
 import json
 import sqlite3
-import uuid
 from contextlib import AbstractContextManager
 from typing import Any
 
 from src.core.adapters.sqlite.db import transaction
 from src.core.domain.json import json_value
-from src.core.domain.records import DiscordEffect, OperationRecord, RequestRecord
+from src.core.domain.records import DiscordEffect, OperationRecord
 
 
 class OperationStore:
@@ -22,47 +21,7 @@ class OperationStore:
         if not self.db.in_transaction:
             raise RuntimeError("operation writes must run inside transaction()")
 
-    def get_request(self, message_id: int) -> RequestRecord | None:
-        row = self.db.execute(
-            "SELECT request_id, message_id, actor_id, guild_id, channel_id, plan, status "
-            "FROM requests WHERE message_id = ?", (message_id,),
-        ).fetchone()
-        return RequestRecord(*row[:5], json.loads(row[5]), row[6]) if row else None
-
-    def register_request(
-        self, message_id: int, actor_id: int, guild_id: int, channel_id: int, plan: object,
-    ) -> RequestRecord:
-        encoded = json_value(plan)
-        with transaction(self.db):
-            if prior := self.get_request(message_id):
-                if (prior.actor_id, prior.guild_id, prior.channel_id, json_value(prior.plan)) != (
-                    actor_id, guild_id, channel_id, encoded,
-                ):
-                    raise ValueError("source message already has a different request")
-                return prior
-            request_id = str(uuid.uuid4())
-            self.db.execute(
-                "INSERT INTO requests (request_id, message_id, actor_id, guild_id, channel_id, plan) "
-                "VALUES (?, ?, ?, ?, ?, ?)", (request_id, message_id, actor_id, guild_id, channel_id, encoded),
-            )
-        return RequestRecord(request_id, message_id, actor_id, guild_id, channel_id, json.loads(encoded), "accepted")
-
-    def finish_request(self, request_id: str, status: str) -> None:
-        if status not in {"done", "failed", "interrupted"}:
-            raise ValueError("invalid request status")
-        with transaction(self.db):
-            changed = self.db.execute(
-                "UPDATE requests SET status = ? WHERE request_id = ? AND status IN ('accepted', ?)",
-                (status, request_id, status),
-            ).rowcount
-            if changed != 1:
-                raise ValueError("request is missing or already finished differently")
-
-    def interrupt_requests(self) -> int:
-        with transaction(self.db):
-            return self.db.execute("UPDATE requests SET status = 'interrupted' WHERE status = 'accepted'").rowcount
-
-    def prune(self, now: int, days: int = 30) -> tuple[int, int, int]:
+    def prune(self, now: int, days: int = 30) -> tuple[int, int]:
         cutoff = now - days * 86400
         with transaction(self.db):
             effects = self.db.execute(
@@ -73,10 +32,7 @@ class OperationStore:
                 "(SELECT operation_id FROM discord_effects WHERE status IN ('pending', 'unknown', 'failed') "
                 "AND operation_id IS NOT NULL)", (cutoff,),
             ).rowcount
-            requests = self.db.execute(
-                "DELETE FROM requests WHERE status IN ('done', 'failed', 'interrupted') AND created_at < ?", (cutoff,),
-            ).rowcount
-        return effects, operations, requests
+        return effects, operations
 
     def get(self, operation_id: str | None) -> OperationRecord | None:
         if operation_id is None:

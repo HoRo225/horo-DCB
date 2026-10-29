@@ -76,7 +76,6 @@ def compose(bot: HoroBot, codex: CodexService, db: sqlite3.Connection, guild_id:
     live = LiveGuild(bot, guild_id, lambda: supervisor.closing)
     operations = OperationStore(db)
     maintenance = Maintenance(operations, supervisor.group("maintenance", SCHEDULED))
-    maintenance.recover()
     ai_settings = AiSettings(SqliteAiStore(db), codex, guild_id)
 
     def member_roles(user_id: int) -> frozenset[int] | None:

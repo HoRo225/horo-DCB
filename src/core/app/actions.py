@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import uuid
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Protocol
@@ -11,13 +12,11 @@ from src.core.app.ports import Actor, Mentions, OperationLog, Presence, Source
 from src.core.app.supervisor import TaskGroup, cancel_all, wait_until
 from src.core.domain.actions import Action, Catalogue, Entry, Param, Plan, failure
 from src.core.domain.json import json_value
-from src.core.domain.records import RequestRecord
 
 SAFE_KEYS = frozenset({"ok", "code", "text", "resource_id", "message_url", "private_ref"})
 STOPPED = "Bot 正在重新啟動，未接納新的操作。"
 INVALID_PLAN = "操作清單不完整或包含多個牌局動作，請拆開並明確指定。"
 UNCHECKED_PLAN = "無法確認完整操作清單，未執行任何操作。"
-OTHER_PLAN = "這則訊息已綁定另一份操作清單，未執行任何操作。"
 ADMIN_ONLY = "此操作僅限伺服器管理員使用。"
 NO_AI = "你目前沒有執行 AI 操作的權限。"
 UNMENTIONED_CHANNEL = "請在本則訊息明確提及設定頻道，未執行任何操作。"
@@ -28,9 +27,6 @@ DEADLINE = "操作期限已到，這項操作未執行。"
 INTERRUPTED = "操作已停止，已提交的結果保留；未完成項目不會自動接續。"
 UNCONFIRMED = "這項操作未能確認完成，請查看私人結果或請管理員核對待處理項目。"
 SKIPPED = "前面的操作未完成，這項操作未執行。"
-RECORDED = "這項操作已有完成紀錄，請重新查詢目前狀態。"
-PENDING = "這項操作的結果待查；不會自動重試。"
-RETRY_BY_MESSAGE = "這項操作未執行；請用新訊息重新要求。"
 NETWORK_PENDING = "操作結果待查，不會自動重試。"
 
 
@@ -186,15 +182,6 @@ class ActionEngine:
         self._stop_remaining: dict[int, asyncio.Event] = {}
         self._closed = False
 
-    def has_request(self, message_id: int) -> bool:
-        return self._operations.get_request(message_id) is not None
-
-    def prior(self, message_id: int) -> tuple[Plan, dict[str, object]] | None:
-        request = self._operations.get_request(message_id)
-        if request is None:
-            return None
-        return self.catalogue.parse_plan(request.plan["decision"]["actions"]), self._received(request)
-
     def context(self, source: Source) -> dict[str, object]:
         presence = self._presence
         actor = None if presence.unavailable_reason(source.guild_id) else presence.actor(source.channel_id, source.actor_id)
@@ -267,9 +254,6 @@ class ActionEngine:
                 groups.append(group)
         return groups
 
-    def _received(self, request: RequestRecord) -> dict[str, object]:
-        return {key: value for key, value in request.plan.items() if key != "decision"}
-
     def _admission(self, source: Source, actor: Actor, spec: ActionSpec, grant: Grant) -> str | None:
         if problem := self._presence.act_problem(source.guild_id, source.channel_id, actor):
             return problem
@@ -312,49 +296,21 @@ class ActionEngine:
                 await spec.validate(source, action.params)
         return None
 
-    def _previous_results(self, request: RequestRecord, plan: Plan) -> list[dict[str, object]]:
-        results = []
-        for index in range(len(plan.actions)):
-            operation_id = f"{request.request_id}:{index}"
-            public = self._operations.get(f"{operation_id}:public")
-            owner = self._operations.get(operation_id)
-            if public:
-                results.append(_safe(public.result))
-            elif owner and owner.status == "done":
-                results.append({"ok": True, "code": "recorded", "text": RECORDED})
-            elif owner:
-                results.append(failure("unknown", PENDING))
-            else:
-                results.append(failure("not_executed", RETRY_BY_MESSAGE))
-        return results
-
     async def _run_plan(
         self, source: Source, plan: Plan, received: dict[str, object], deadline: float | None, grant: Grant,
         stop_remaining: asyncio.Event,
     ) -> Outcome:
-        operations = self._operations
-        decision = {"kind": "plan", "actions": plan.to_payload(), "question": ""}
-        if (existing := operations.get_request(source.message_id)) is not None:
-            if (existing.actor_id, existing.guild_id, existing.channel_id, existing.plan["decision"]) != (
-                source.actor_id, source.guild_id, source.channel_id, decision,
-            ):
-                return Outcome([failure("source", OTHER_PLAN)], False)
-            results = self._previous_results(existing, plan)
-            return Outcome(results, await self._receipts.publish(source, existing.request_id, results))
         try:
             if problem := await self._preflight(source, plan, grant):
                 return Outcome([failure("forbidden", problem)], False)
         except ValueError:
             return Outcome([failure("invalid_plan", UNCHECKED_PLAN)], False)
-        request = operations.register_request(source.message_id, source.actor_id, source.guild_id, source.channel_id,
-                                              {"decision": decision, **received})
-        plan = self.catalogue.parse_plan(request.plan["decision"]["actions"])
-        received = self._received(request)
+        request_id = str(uuid.uuid4())
         loop = asyncio.get_running_loop()
         expired = lambda: deadline is not None and loop.time() >= deadline
         results: list[dict[str, object]] = []
         for index, action in enumerate(plan.actions):
-            operation_id = f"{request.request_id}:{index}"
+            operation_id = f"{request_id}:{index}"
             spec, group = self._registry.spec(action.name), self._registry.group(action.name)
             try:
                 if stop_remaining.is_set():
@@ -378,27 +334,18 @@ class ActionEngine:
                     else:
                         step = self._step(source, actor, spec, action, operation_id, received, grant, expired)
                         result = _safe(await self._run(spec, action, step))
-                with operations.atomic():
-                    operations.complete(f"{operation_id}:public", "action.public", action.to_payload(), result)
             except asyncio.CancelledError:
                 stop_remaining.set()
                 result = failure("interrupted", INTERRUPTED)
             except Exception:
                 logging.exception("Action %s failed; remaining actions will not run.", action.name)
-                owner = operations.get(operation_id)
+                owner = self._operations.get(operation_id)
                 result = failure("unknown" if owner and owner.status == "running" else "failed", UNCONFIRMED)
             results.append(result)
             if not result.get("ok"):
                 results.extend(failure("not_executed", SKIPPED) for _remaining in plan.actions[index + 1:])
                 break
-        with operations.atomic():
-            for index, result in enumerate(results):
-                public_id = f"{request.request_id}:{index}:public"
-                if operations.get(public_id) is None:
-                    operations.complete(public_id, "action.public", plan.actions[index].to_payload(), result)
-        status = "interrupted" if stop_remaining.is_set() else "done" if all(item.get("ok") for item in results) else "failed"
-        operations.finish_request(request.request_id, status)
-        return Outcome(results, await self._receipts.publish(source, request.request_id, results))
+        return Outcome(results, await self._receipts.publish(source, request_id, results))
 
     def _step(
         self, source: Source, actor: Actor, spec: ActionSpec, action: Action, operation_id: str,

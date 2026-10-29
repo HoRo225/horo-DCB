@@ -16,8 +16,6 @@ from src.ai.domain.conversation import conversation_key
 from src.ai.domain.intent import Intent
 from src.ai.domain.prompts import SUMMARY_INSTRUCTIONS, intent_instructions
 from src.core.adapters.discord.live import LiveGuild
-from src.core.adapters.sqlite.db import open_db
-from src.core.adapters.sqlite.operations import OperationStore
 from src.core.app.actions import Outcome
 from src.core.app.supervisor import PRESENTATION
 from src.core.domain.actions import Action, Catalogue, Plan
@@ -86,15 +84,14 @@ class FakeMessage:
 
 
 class FakeActions:
-    def __init__(self, db):
-        self.records = OperationStore(db)
+    def __init__(self):
         self.catalogue = Catalogue([], ["hint"])
         self.guilds, self.messages = {}, {}
         self.client = SimpleNamespace(get_guild=self.guilds.get)
         self.game = {"state_token": "received-token", "game": "blackjack", "legal_actions": ["hit"], "busy": False}
         self.snapshot_calls, self.mutation_count, self.seen_game = 0, 0, []
         self.results = [{"ok": True, "code": "done", "text": "操作已完成，請查看私人結果。", "private_ref": "PRIVATE_REF_TOKEN"}]
-        self.completed, self.receipts = {}, {}
+        self.receipts = {}
         self.execute = AsyncMock(side_effect=self._execute)
         self.explain = AsyncMock(side_effect=self._explain)
 
@@ -104,16 +101,6 @@ class FakeActions:
         live.channels.setdefault(message.channel.id, message.channel)
         live.members.setdefault(message.author.id, message.author)
 
-    def has_request(self, message_id):
-        return self.records.get_request(message_id) is not None
-
-    def prior(self, message_id):
-        request = self.records.get_request(message_id)
-        if request is None:
-            return None
-        actions = tuple(Action(item["name"], item["params"]) for item in request.plan["decision"]["actions"])
-        return Plan(actions), {"game": request.plan["game"]}
-
     def context(self, source):
         self.snapshot_calls += 1
         return {"actor_id": source.actor_id, "guild_id": source.guild_id, "channel_id": source.channel_id,
@@ -121,14 +108,7 @@ class FakeActions:
 
     async def _execute(self, source, plan, *, received, deadline, grant):
         self.seen_game.append(copy.deepcopy(received.get("game")))
-        if self.records.get_request(source.message_id) is not None:
-            return Outcome(copy.deepcopy(self.completed[source.message_id]), source.message_id in self.receipts)
-        decision = {"kind": "plan", "actions": plan.to_payload(), "question": ""}
-        request = self.records.register_request(source.message_id, source.actor_id, source.guild_id, source.channel_id,
-                                                {"decision": decision, "game": received.get("game")})
         self.mutation_count += 1
-        self.completed[source.message_id] = copy.deepcopy(self.results)
-        self.records.finish_request(request.request_id, "done")
         self.receipts[source.message_id] = await self.messages[source.message_id].channel.send("確定操作回執")
         return Outcome(copy.deepcopy(self.results), True)
 
@@ -138,9 +118,7 @@ class FakeActions:
 
 class FrontendIntentTest(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
-        self.db = open_db(":memory:")
-        self.addCleanup(self.db.close)
-        self.model, self.actions = FakeModel(), FakeActions(self.db)
+        self.model, self.actions = FakeModel(), FakeActions()
         self.model.deadline_seconds, self.model.work_seconds = 10, 8
         self.store = MemoryAiStore(channel_ids=(CHANNEL_A, CHANNEL_B), role_ids=(ROLE,))
         self.settings = AiSettings(self.store, self.model, GUILD)
@@ -276,7 +254,6 @@ class FrontendIntentTest(unittest.IsolatedAsyncioTestCase):
         await self.handle(message)
         self.actions.execute.assert_not_awaited()
         self.model.chat.assert_not_awaited()
-        self.assertIsNone(self.actions.records.get_request(message.id))
         card = text(message.channel.send.await_args.kwargs["view"])
         self.assertIn("<#99>", card)
         self.assertIn("HoRo 能幫你做的事", card)
@@ -378,23 +355,6 @@ class FrontendIntentTest(unittest.IsolatedAsyncioTestCase):
         self.assertGreaterEqual(ms["chat"], 40)
         self.assertEqual(ms["summary"], 0)
         self.assertAlmostEqual(ms["sdk"], ms["intent"] + ms["chat"], delta=1)
-
-    async def test_duplicate_source_replays_saved_plan_and_original_game_without_new_intent(self):
-        message = FakeMessage()
-        self.model.structured.return_value = PLAN
-        self.model.try_start_request.side_effect = [True, False]
-        await self.handle(message)
-        original = self.actions.records.get_request(message.id)
-        self.actions.game["state_token"] = "a-new-table"
-        self.model.structured.side_effect = AssertionError("duplicate source must not be reinterpreted")
-        await self.handle(message)
-        self.model.structured.assert_awaited_once()
-        self.model.summarize.assert_awaited_once()
-        self.assertEqual(self.actions.mutation_count, 1)
-        self.assertEqual(self.actions.records.get_request(message.id), original)
-        self.assertEqual(self.actions.seen_game[1]["state_token"], "received-token")
-        self.model.try_start_request.assert_called_once_with(USER)
-        message.channel.send.assert_awaited_once()
 
     async def test_raw_direct_input_limit_blocks_intent_operations_and_media(self):
         message = FakeMessage(content="<@799> " + "問" * 4001)

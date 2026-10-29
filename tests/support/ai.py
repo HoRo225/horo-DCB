@@ -96,9 +96,7 @@ class FakeModel:
 class FakeActions:
     def __init__(self) -> None:
         self.catalogue = Catalogue([], [])
-        self.has_request = MagicMock(return_value=False)
         self.context = MagicMock(return_value={})
-        self.prior = MagicMock(return_value=None)
         self.execute = AsyncMock()
         self.explain = AsyncMock()
 

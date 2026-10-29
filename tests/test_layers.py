@@ -147,7 +147,7 @@ class LayerTests(unittest.TestCase):
                                                                "from src.core.app.supervisor import TaskGroup"), [])
         for path, sample in (
             (voice / "adapters" / "discord" / "x.py", "QUERY = 'SELECT 1 FROM voice_rooms'"),
-            (SRC / "core" / "adapters" / "discord" / "x.py", "db.execute('UPDATE requests SET status = 1')"),
+            (SRC / "core" / "adapters" / "discord" / "x.py", "db.execute('UPDATE operations SET status = 1')"),
             (SRC / "ai" / "adapters" / "codex" / "rpc.py", "import sqlite3"),
             (SRC / "ai" / "adapters" / "codex" / "conversations.py", "Q = 'SELECT 1 FROM codex_threads'"),
         ):

@@ -147,14 +147,6 @@ class EntryTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("你發問得太快了", harness.sent())
         harness.model.chat.assert_not_awaited()
 
-    async def test_replayed_message_skips_the_cooldown(self) -> None:
-        harness = Harness(make_message())
-        harness.model.try_start_request.return_value = False
-        harness.actions.has_request.return_value = True
-        await harness.send()
-        harness.model.try_start_request.assert_not_called()
-        harness.model.chat.assert_awaited_once()
-
     async def test_help_words_reply_the_help_card_without_ai(self) -> None:
         for words in ("說明", "你會什麼？", "你會什麼?"):
             harness = Harness(make_message(f"<@{BOT}>  {words} "))

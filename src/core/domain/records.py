@@ -5,17 +5,6 @@ from typing import Any
 
 
 @dataclass(frozen=True)
-class RequestRecord:
-    request_id: str
-    message_id: int
-    actor_id: int
-    guild_id: int
-    channel_id: int
-    plan: Any
-    status: str
-
-
-@dataclass(frozen=True)
 class OperationRecord:
     operation_id: str
     kind: str

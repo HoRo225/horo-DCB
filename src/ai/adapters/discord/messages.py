@@ -79,7 +79,7 @@ class AiMessages:
             except discord.HTTPException:
                 logging.exception("Failed to send the help card.")
             return
-        if not actions.has_request(message.id) and not services.model.try_start_request(message.author.id):
+        if not services.model.try_start_request(message.author.id):
             await reply_notice(message, THROTTLED)
             return
 

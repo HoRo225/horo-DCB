@@ -10,29 +10,6 @@ class OperationStoreTests(unittest.TestCase):
         self.addCleanup(self.db.close)
         self.operations = OperationStore(self.db)
 
-    def test_message_is_bound_to_one_immutable_plan_and_source(self) -> None:
-        plan = [{"kind": "game.deal", "inputs": {}}]
-        first = self.operations.register_request(10, 1, 2, 3, plan)
-        self.assertEqual(first, self.operations.register_request(10, 1, 2, 3, plan))
-        plan.append({"kind": "other"})
-        for actor, supplied in ((4, first.plan), (1, plan)):
-            with self.assertRaises(ValueError):
-                self.operations.register_request(10, actor, 2, 3, supplied)
-        self.assertEqual(len(self.operations.get_request(10).plan), 1)
-        self.assertEqual(self.operations.interrupt_requests(), 1)
-        self.assertEqual(self.operations.get_request(10).status, "interrupted")
-
-    def test_finishing_a_request_is_one_way(self) -> None:
-        request = self.operations.register_request(10, 1, 2, 3, [])
-        self.operations.finish_request(request.request_id, "done")
-        self.operations.finish_request(request.request_id, "done")
-        with self.assertRaises(ValueError):
-            self.operations.finish_request(request.request_id, "failed")
-        with self.assertRaises(ValueError):
-            self.operations.finish_request(request.request_id, "accepted")
-        self.assertEqual(self.operations.interrupt_requests(), 0)
-        self.assertEqual(self.operations.get_request(10).status, "done")
-
     def test_results_share_the_callers_transaction_and_are_immutable(self) -> None:
         with self.assertRaises(RuntimeError):
             self.operations.complete("a", "credit", {}, None)
@@ -132,21 +109,13 @@ class OperationStoreTests(unittest.TestCase):
                 if status in {"done", "failed"}:
                     self.operations.update_effect(identifier, status)
                 self.db.execute("UPDATE discord_effects SET updated_at = ? WHERE effect_id = ?", (age, identifier))
-        for message_id, status, age in ((1, "done", old), (2, "failed", old), (3, "interrupted", old),
-                                        (4, "accepted", old), (5, "done", recent)):
-            request = self.operations.register_request(message_id, 1, 2, 3, [])
-            if status != "accepted":
-                self.operations.finish_request(request.request_id, status)
-            with transaction(self.db):
-                self.db.execute("UPDATE requests SET created_at = ? WHERE message_id = ?", (age, message_id))
 
-        self.assertEqual(self.operations.prune(now), (2, 3, 3))
+        self.assertEqual(self.operations.prune(now), (2, 3))
         self.assertEqual([row[0] for row in self.db.execute("SELECT effect_id FROM discord_effects ORDER BY effect_id")],
                          ["e-failed", "e-orphan", "e-pending", "e-recent", "e-unknown"])
         self.assertEqual([row[0] for row in self.db.execute("SELECT operation_id FROM operations ORDER BY operation_id")],
                          ["op-failed", "op-recent", "op-running", "ref-failed", "ref-pending", "ref-unknown"])
-        self.assertEqual([row[0] for row in self.db.execute("SELECT message_id FROM requests ORDER BY message_id")], [4, 5])
-        self.assertEqual(self.operations.prune(now), (0, 0, 0))
+        self.assertEqual(self.operations.prune(now), (0, 0))
 
 
 if __name__ == "__main__":
