@@ -92,14 +92,15 @@ class DiscordAnnouncerTest(unittest.IsolatedAsyncioTestCase):
         self.channel.get_partial_message.assert_called_once_with(555)
         self.assertIn("限免已結束", text(message.edit.await_args.kwargs["view"]))
 
-    async def test_ended_card_gives_up_only_when_the_message_is_gone(self) -> None:
+    async def test_ended_card_gives_up_when_discord_rejects_the_edit(self) -> None:
         message = SimpleNamespace(edit=AsyncMock())
         self.channel.get_partial_message.return_value = message
         guild = self.announcer.guild()
         self.assertEqual(await guild.end(PostedCard(CH + 1, 555, offer(7))), "gone")
         for error, result in (
             (discord.NotFound(SimpleNamespace(status=404, reason="error"), "error"), "gone"),
-            (http_error(403), "failed"),
+            (http_error(403), "gone"),
+            (http_error(429), "failed"),
             (http_error(503), "failed"),
             (TimeoutError(), "failed"),
             (aiohttp.ClientError(), "failed"),

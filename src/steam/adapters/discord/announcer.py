@@ -75,9 +75,9 @@ class GuildAnnouncer:
             return "gone"
         try:
             await channel.get_partial_message(card.message_id).edit(view=build_ended_view(card.offer))
-        except discord.NotFound:
-            return "gone"
-        except (discord.HTTPException, TimeoutError, aiohttp.ClientError):
+        except (discord.HTTPException, TimeoutError, aiohttp.ClientError) as error:
+            if isinstance(error, discord.HTTPException) and 400 <= error.status < 500 and error.status != 429:
+                return "gone"
             logging.exception("Ended Steam free games notification could not be updated: %s", card.offer.app_id)
             return "failed"
         return "ended"
