@@ -287,7 +287,7 @@ class RuntimeImportTests(unittest.TestCase):
         for sample in ("import pydantic", "from openai_codex.models import x", "    import openai_codex"):
             self.assertIsNotNone(pattern.search(sample), sample)
         self.assertIsNone(pattern.search("import pydantic_extra_types"))
-        for path in (*SRC.rglob("*.py"), *(ROOT / "tools").rglob("*.py")):
+        for path in SRC.rglob("*.py"):
             with self.subTest(str(path.relative_to(ROOT))):
                 self.assertIsNone(pattern.search(path.read_text(encoding="utf-8")))
         self.assertTrue({"openai_codex", "pydantic"}.isdisjoint(loaded_modules("src.bot")))

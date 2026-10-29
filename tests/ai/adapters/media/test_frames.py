@@ -1,6 +1,5 @@
 import asyncio
 import io
-import json
 import os
 import sys
 import tempfile
@@ -92,22 +91,8 @@ class ExtractFramesTest(unittest.IsolatedAsyncioTestCase):
                 self.assertGreater(last[2], 200)
                 self.assertLess(last[0], 100)
 
-    async def test_lottie(self) -> None:
-        transform = {
-            key: {"a": 0, "k": value}
-            for key, value in (("o", 100), ("r", 0), ("p", [50, 50, 0]), ("a", [50, 50, 0]), ("s", [100, 100, 100]))
-        }
-        solid = {"ty": 1, "ind": 1, "ip": 0, "op": 30, "st": 0, "sw": 100, "sh": 100}
-        animation = {
-            "v": "5.5.2", "fr": 30, "ip": 0, "op": 30, "w": 100, "h": 100,
-            "layers": [solid | {"sc": "#ff0000", "ks": transform}],
-        }
-        frames = await self.frames.extract("lottie", json.dumps(animation).encode())
-        self.assertJpegs(frames, 4)
-        self.assertGreater(Image.open(io.BytesIO(frames[0])).getpixel((50, 50))[0], 200)
-
     async def test_invalid_data_yields_no_frames(self) -> None:
-        for kind in ("image", "video", "lottie"):
+        for kind in ("image", "video"):
             with self.subTest(kind):
                 self.assertEqual(await self.frames.extract(kind, b"not media"), [])
 

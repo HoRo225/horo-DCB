@@ -96,15 +96,6 @@ def _animated_frames(source: Path) -> list:
         return [_rgba(frame) for index, frame in decoded if index in wanted]
 
 
-def _lottie_frames(source: Path) -> list:
-    from rlottie_python import LottieAnimation
-
-    with LottieAnimation.from_data(source.read_text("utf-8")) as animation:
-        _check_pixels(*animation.lottie_animation_get_size())
-        total = max(1, animation.lottie_animation_get_totalframe())
-        return [animation.render_pillow_frame(index) for index in _sample_indices(total)]
-
-
 def _save_frames(frames: list, out: Path) -> None:
     from PIL import Image
 
@@ -144,8 +135,6 @@ def main(argv: list[str]) -> int:
     try:
         if kind == "video":
             frames = _video_frames(source)
-        elif kind == "lottie":
-            frames = _lottie_frames(source)
         else:
             frames = _animated_frames(source)
         _save_frames(frames, out)

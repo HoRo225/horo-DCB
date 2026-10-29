@@ -186,7 +186,7 @@ def select_message_media(
             raw_url = getattr(sticker, "url", None)
             sticker_id = getattr(sticker, "id", None)
             add(
-                "lottie" if format_name == "lottie" else "media",
+                "broken" if format_name == "lottie" else "media",
                 str(raw_url) if raw_url is not None else None,
                 f"sticker:{sticker_id}" if sticker_id is not None else None,
             )

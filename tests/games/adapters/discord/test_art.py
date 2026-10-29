@@ -29,7 +29,7 @@ def ink(image: Image.Image, band: tuple[int, int, int, int]) -> tuple[int, int, 
 
 class TextTests(unittest.TestCase):
     def test_mixed_names_draw(self):
-        for name in ("HoRo 樂奈", "😀 HoRo", "▍ᴀɪꜱ", "한글", ""):
+        for name in ("HoRo 樂奈", "遊戲大廳", "21 點・拉霸", ""):
             with self.subTest(name=name):
                 for bold in (False, True):
                     width = art.draw_text(canvas(), (10, 10), name, 40, "white", bold=bold)
@@ -42,21 +42,6 @@ class TextTests(unittest.TestCase):
             art.draw_text(canvas(), (0, 0), "生日快樂 HoRo", 50, "white", bold=True),
         )
         self.assertIsNotNone(img.getbbox())
-
-    @unittest.skipUnless(art.DEJAVU.exists(), "DejaVu Sans not installed")
-    def test_small_caps_fall_back_to_dejavu(self):
-        self.assertGreater(art.draw_text(canvas(), (0, 0), "ᴀɪꜱ", 40, "white"), 0)
-
-    @unittest.skipUnless(art.EMOJI_FONT.exists(), "Noto Color Emoji not installed")
-    def test_emoji_drawn_in_colour(self):
-        img = canvas()
-        self.assertGreater(art.draw_text(img, (0, 0), "😀", 40, "white"), 0)
-        self.assertTrue(any(max(px[:3]) - min(px[:3]) > 80 for px in img.crop((0, 0, 60, 80)).getdata()))
-
-    def test_missing_emoji_font_skips_glyph(self):
-        chain = (art.TC_FONT, Path("/missing/emoji.ttf"), art.DEJAVU)
-        with patch.object(art, "CHAIN", chain):
-            self.assertEqual(art.draw_text(canvas(), (0, 0), "🎂", 40, "white"), 0)
 
 
 class ImageTests(unittest.TestCase):

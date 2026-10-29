@@ -59,16 +59,16 @@ class ReadMediaTest(unittest.IsolatedAsyncioTestCase):
         sampler.extract.assert_not_awaited()
         self.assertEqual(budget.images_left, 9)
 
-    async def test_animations_videos_and_stickers_are_sampled(self) -> None:
+    async def test_animations_and_videos_are_sampled(self) -> None:
         payloads = {
             "gif": GIF, "apng": encode(("red", "blue"), "PNG"), "awebp": encode(("red", "blue"), "WEBP"),
-            "video": b"\0" * 16, "lottie": b"{}",
+            "video": b"\0" * 16,
         }
-        sources = [("media", "gif"), ("media", "apng"), ("media", "awebp"), ("video", "video"), ("lottie", "lottie")]
+        sources = [("media", "gif"), ("media", "apng"), ("media", "awebp"), ("video", "video")]
         items, _budget, sampler = await self.read(sources, payloads)
-        self.assertEqual([label for label, _images in items], ["動畫", "動畫", "動畫", "影片", "Lottie 貼圖"])
+        self.assertEqual([label for label, _images in items], ["動畫", "動畫", "動畫", "影片"])
         self.assertEqual([call.args[0] for call in sampler.extract.await_args_list],
-                         ["image", "image", "image", "video", "lottie"])
+                         ["image", "image", "image", "video"])
         self.assertTrue(all(images[0].startswith("data:image/jpeg;base64,") for _label, images in items))
 
     async def test_still_png_and_webp_are_not_sampled(self) -> None:

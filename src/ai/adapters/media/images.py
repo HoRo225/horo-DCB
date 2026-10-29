@@ -15,7 +15,7 @@ from src.ai.domain.conversation import (
     is_discord_media_url,
 )
 
-_LABELS = {"video": "影片", "lottie": "Lottie 貼圖"}
+_LABELS = {"video": "影片"}
 MEDIA_CHUNK_BYTES = 64 * 1024
 HTTP_TIMEOUT = aiohttp.ClientTimeout(total=15, connect=3, sock_read=10)
 SUPPORTED_IMAGE_TYPES = {

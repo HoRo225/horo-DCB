@@ -57,7 +57,7 @@ class SelectMessageMediaTest(unittest.TestCase):
                 ("video", f"{CDN}/v.mp4"),
                 ("media", f"{CDN}/stickers/21.png"),
                 ("media", f"{CDN}/stickers/22.png"),
-                ("lottie", f"{CDN}/stickers/23.json"),
+                ("broken", f"{CDN}/stickers/23.json"),
             ],
         )
         self.assertEqual(select_message_media([source], seen=seen), [])
