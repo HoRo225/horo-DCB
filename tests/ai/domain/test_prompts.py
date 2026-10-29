@@ -6,6 +6,7 @@ from unittest.mock import MagicMock, patch
 from src.ai.domain.conversation import MAX_PROMPT_CHARACTERS
 from src.ai.domain.intent import envelope_schema
 from src.ai.domain.prompts import (
+    CHAIN_NOTE,
     DATA_RULE,
     ONCE_INSTRUCTIONS,
     ROUND_LINE,
@@ -89,7 +90,7 @@ class ChatPromptTests(unittest.TestCase):
         chain = [Quote("小明", "要玩什麼？"), Quote("霍蘿", "21 點啊"), Quote("小明", "好")]
         self.assertEqual(
             chat_prompt("開始吧", chain),
-            "【回覆鏈 1】小明：\n要玩什麼？\n\n【回覆鏈 2】霍蘿：\n21 點啊\n\n"
+            f"{CHAIN_NOTE}\n\n【回覆鏈 1】小明：\n要玩什麼？\n\n【回覆鏈 2】霍蘿：\n21 點啊\n\n"
             "【被回覆的訊息】小明：\n好\n\n【本次問題】\n開始吧",
         )
 
@@ -105,7 +106,7 @@ class ChatPromptTests(unittest.TestCase):
         prompt = chat_prompt("問", chain)
         self.assertEqual(
             prompt,
-            f"【回覆鏈 2】乙：\n{'b' * 1500}\n\n【回覆鏈 3】丙：\n{'c' * 900}\n\n"
+            f"{CHAIN_NOTE}\n\n【回覆鏈 2】乙：\n{'b' * 1500}\n\n【回覆鏈 3】丙：\n{'c' * 900}\n\n"
             f"【被回覆的訊息】丁：\n{'d' * 100}\n\n【本次問題】\n問",
         )
 
@@ -113,7 +114,7 @@ class ChatPromptTests(unittest.TestCase):
         base = len(chat_prompt("問", [Quote("甲", ""), Quote("乙", "b")]))
         room = MAX_PROMPT_CHARACTERS - base
         fits = chat_prompt("問", [Quote("甲", "a" * room), Quote("乙", "b")])
-        self.assertEqual((len(fits), fits.startswith("【回覆鏈 1】甲：")), (MAX_PROMPT_CHARACTERS, True))
+        self.assertEqual((len(fits), fits.startswith(f"{CHAIN_NOTE}\n\n【回覆鏈 1】甲：")), (MAX_PROMPT_CHARACTERS, True))
         self.assertEqual(chat_prompt("問", [Quote("甲", "a" * (room + 1)), Quote("乙", "b")]),
                          "【被回覆的訊息】乙：\nb\n\n【本次問題】\n問")
 

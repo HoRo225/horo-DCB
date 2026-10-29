@@ -13,7 +13,7 @@ from src.ai.adapters.media.frames import Frames
 from src.ai.adapters.media.images import MediaReader
 from src.ai.adapters.sqlite.store import SqliteAiStore
 from src.ai.domain.conversation import MAX_PROMPT_CHARACTERS
-from src.ai.domain.prompts import chat_instructions
+from src.ai.domain.prompts import CHAIN_NOTE, chat_instructions
 from src.core.adapters.discord.live import LiveGuild
 from src.core.adapters.sqlite.db import open_db
 from src.core.app.supervisor import PRESENTATION
@@ -318,7 +318,7 @@ class ReplyChainTests(unittest.IsolatedAsyncioTestCase):
         await harness.send()
         self.assertEqual(
             harness.prompt(),
-            "【回覆鏈 1】小明：\n第 3 則\n\n【回覆鏈 2】霍蘿：\n第 4 則\n\n【回覆鏈 3】小明：\n第 5 則\n\n"
+            f"{CHAIN_NOTE}\n\n【回覆鏈 1】小明：\n第 3 則\n\n【回覆鏈 2】霍蘿：\n第 4 則\n\n【回覆鏈 3】小明：\n第 5 則\n\n"
             "【回覆鏈 4】霍蘿：\n第 6 則\n\n【被回覆的訊息】小明：\n第 7 則\n\n【本次問題】\n然後呢",
         )
         self.assertEqual([call.args[0] for call in harness.message.channel.fetch_message.await_args_list],
@@ -342,7 +342,7 @@ class ReplyChainTests(unittest.IsolatedAsyncioTestCase):
                 await harness.send()
                 self.assertEqual(
                     harness.prompt(),
-                    "【回覆鏈 1】霍蘿：\n第 2 則\n\n【被回覆的訊息】小明：\n第 3 則\n\n【本次問題】\n然後呢",
+                    f"{CHAIN_NOTE}\n\n【回覆鏈 1】霍蘿：\n第 2 則\n\n【被回覆的訊息】小明：\n第 3 則\n\n【本次問題】\n然後呢",
                 )
                 self.assertTrue(harness.answered().endswith("最終答案"))
                 harness.message.progress.edit.assert_not_awaited()
@@ -357,7 +357,7 @@ class ReplyChainTests(unittest.IsolatedAsyncioTestCase):
         with patch("src.ai.adapters.discord.request.CONTEXT_TIMEOUT_SECONDS", 0.05):
             await harness.send()
         self.assertLess(loop.time() - started, 1)
-        self.assertTrue(harness.prompt().startswith("【回覆鏈 1】霍蘿：\n第 2 則\n\n【被回覆的訊息】小明：\n第 3 則"))
+        self.assertTrue(harness.prompt().startswith(f"{CHAIN_NOTE}\n\n【回覆鏈 1】霍蘿：\n第 2 則\n\n【被回覆的訊息】小明：\n第 3 則"))
         self.assertLess(harness.media.read.await_args.kwargs["deadline"], started + 1)
 
     async def test_long_reply_ends_the_chain_without_more_reads(self) -> None:
