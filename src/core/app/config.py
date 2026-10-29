@@ -6,6 +6,7 @@ from pathlib import Path
 
 DATA_DIR = Path("/app/data")
 CODEX_URL = "ws://codex:8765"
+DISCORD_TOKEN_FILE = Path("/run/secrets/discord_token")
 CODEX_TOKEN_FILE = Path("/run/secrets/codex_ws_token")
 CODEX_WORKSPACE = "/workspace"
 
@@ -24,14 +25,14 @@ def guild_id_env() -> int:
     return int(raw)
 
 
-def codex_token(path: Path = CODEX_TOKEN_FILE) -> str:
+def read_secret(path: Path) -> str:
     try:
-        token = path.read_text(encoding="utf-8").strip()
+        secret = path.read_text(encoding="utf-8").strip()
     except OSError:
-        raise RuntimeError(f"Missing Codex WebSocket token file: {path}") from None
-    if not token:
-        raise RuntimeError(f"Codex WebSocket token file is empty: {path}")
-    return token
+        raise RuntimeError(f"Missing secret file: {path}") from None
+    if not secret:
+        raise RuntimeError(f"Secret file is empty: {path}")
+    return secret
 
 
 @dataclass(frozen=True, slots=True)
@@ -43,7 +44,7 @@ class AppConfig:
     @classmethod
     def from_env(cls) -> AppConfig:
         return cls(
-            discord_token=required_env("DISCORD_TOKEN"),
-            codex_token=codex_token(),
+            discord_token=read_secret(DISCORD_TOKEN_FILE),
+            codex_token=read_secret(CODEX_TOKEN_FILE),
             guild_id=guild_id_env(),
         )

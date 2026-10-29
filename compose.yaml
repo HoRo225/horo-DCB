@@ -46,10 +46,12 @@ services:
     image: horo-dcb-bot:latest
     logging:
       driver: local
-    env_file: .env
+    environment:
+      DISCORD_GUILD_ID: "361503107168862210"
     volumes:
       - data:/app/data
     secrets:
+      - discord_token
       - codex_ws_token
     depends_on:
       codex:
@@ -58,6 +60,8 @@ services:
     restart: unless-stopped
 
 secrets:
+  discord_token:
+    file: ./secrets/discord_token
   codex_ws_token:
     file: ./secrets/codex_ws_token
 
