@@ -40,6 +40,16 @@ def announced_app(payload: Mapping[str, Any]) -> int:
 
 
 @dataclass(frozen=True, slots=True)
+class PostedCard:
+    channel_id: int
+    message_id: int
+    offer: SteamOffer
+
+    def ended(self, active_app_ids: frozenset[int], now: float) -> bool:
+        return self.offer.app_id not in active_app_ids or (self.offer.ends_at is not None and self.offer.ends_at <= now)
+
+
+@dataclass(frozen=True, slots=True)
 class SteamFetchResult:
     active_app_ids: frozenset[int]
     offers: tuple[SteamOffer, ...]

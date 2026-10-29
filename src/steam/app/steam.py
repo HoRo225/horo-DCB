@@ -20,6 +20,7 @@ from src.steam.domain.offers import (
 POLL_INTERVAL_SECONDS = 15 * 60
 CLOSING = "Bot 正在關閉，無法修改 Steam 通知設定。"
 GUILD_PENDING = "目前無法確認最新的伺服器狀態，通知仍保留待處理。"
+END_FAILED = "已結束的 Steam 公告無法更新，下次檢查會重試。"
 PICK_TEXT = "只能選擇目前伺服器的文字頻道。"
 WAITING = ("pending", "unknown", "failed")
 
@@ -251,6 +252,18 @@ class Steam:
             if effect.status != "skipped" or effect.error != OFFER_ENDED
         }
 
+    async def _end_cards(self, guild: Guild, active_app_ids: frozenset[int]) -> None:
+        now = time.time()
+        for card in self._store.cards():
+            if self._closing or not self.enabled:
+                return
+            if not card.ended(active_app_ids, now):
+                continue
+            if await guild.end(card) == "failed":
+                self.last_error = END_FAILED
+                continue
+            self._store.forget_card(card.offer.app_id)
+
     async def check_once(self) -> None:
         if self._closing:
             return
@@ -281,6 +294,9 @@ class Steam:
                 return
 
             role_ids = self._notification_roles(guild, channel_id)
+            if not self._store.baselined():
+                self._store.baseline(result.active_app_ids)
+            await self._end_cards(guild, result.active_app_ids)
             posted = self._store.posted()
             self._store.retire(result.active_app_ids)
             blocking = self._blocking()

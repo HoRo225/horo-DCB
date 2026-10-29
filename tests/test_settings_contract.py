@@ -22,6 +22,7 @@ PERSISTED = {
     "voice.entry_channel_id": None,
     "steam.channel_id": None,
     "steam.role_ids": [],
+    "steam.baselined": False,
     "games.channel_id": None,
     "games.role_ids": [],
     "games.hub_message": None,

@@ -16,7 +16,7 @@ from src.steam import Steam
 from src.steam.adapters.discord.announcer import DiscordAnnouncer
 from src.steam.adapters.discord.effects import steam_effect_kinds
 from src.steam.adapters.sqlite.store import SqliteSteamStore
-from src.steam.domain.offers import ANNOUNCE, Announcement
+from src.steam.domain.offers import ANNOUNCE, Announcement, PostedCard
 from tests.support.discord import Client, Guild, member
 from tests.support.steam import FakeSource, fetched, offer
 
@@ -43,6 +43,8 @@ class SteamEffectKindTest(unittest.IsolatedAsyncioTestCase):
         store = SqliteSteamStore(self.db)
         store.set_enabled(True, operation_id=None)
         store.bind_channel(CHANNEL, operation_id=None)
+        store.baseline(frozenset())
+        self.store = store
         self.source = FakeSource()
         self.steam = Steam(store, self.source, DiscordAnnouncer(self.client, live), TaskGroup("steam", SCHEDULED))
         kinds = EffectRegistry()
@@ -82,6 +84,7 @@ class SteamEffectKindTest(unittest.IsolatedAsyncioTestCase):
         self.channel.fetch_message.return_value = self.message(effect, "https://store.steampowered.com/app/13/")
         self.assertIsNone(await self.resolve("confirmed", message_id=501))
         self.assertEqual(self.state(), ("done", [(13,)]))
+        self.assertEqual(self.store.cards(), [PostedCard(CHANNEL, 501, offer(13))])
 
     async def test_suppression_and_confirmation_commit_together(self) -> None:
         effect = self.effect()
@@ -95,6 +98,7 @@ class SteamEffectKindTest(unittest.IsolatedAsyncioTestCase):
         self.effect(status="failed")
         self.assertIsNone(await self.resolve("skip"))
         self.assertEqual(self.state(), ("skipped", [(13,)]))
+        self.assertEqual(self.store.cards(), [])
 
     async def test_retry_sends_once_and_stops_when_revoked_while_queued(self) -> None:
         self.effect()

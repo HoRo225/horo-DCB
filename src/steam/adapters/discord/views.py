@@ -4,7 +4,7 @@ from collections.abc import Iterable
 
 import discord
 
-from src.core.adapters.discord.brand import BRAND_COLOUR, ICONS, card_title
+from src.core.adapters.discord.brand import BRAND_COLOUR, ICONS, NEUTRAL_COLOUR, card_title
 from src.steam.domain.offers import SteamOffer
 
 
@@ -38,6 +38,22 @@ def offer_summary(offer: SteamOffer) -> discord.ui.Item:
     return discord.ui.TextDisplay(text)
 
 
+def _card(offer: SteamOffer, subtitle: str, *body: discord.ui.Item, colour: discord.Colour) -> discord.ui.Container:
+    children: list[discord.ui.Item] = []
+    if offer.header_image:
+        children.append(discord.ui.MediaGallery(
+            discord.MediaGalleryItem(media=offer.header_image, description=f"{offer.name} Steam 商店圖片")
+        ))
+    children += [card_title(f"{ICONS['steam']} {discord.utils.escape_markdown(offer.name)}", subtitle), *body]
+    return discord.ui.Container(*children, accent_colour=colour)
+
+
+def build_ended_view(offer: SteamOffer) -> discord.ui.LayoutView:
+    view = discord.ui.LayoutView(timeout=None)
+    view.add_item(_card(offer, "限免已結束", colour=NEUTRAL_COLOUR))
+    return view
+
+
 def build_offer_view(offer: SteamOffer, roles: Iterable[discord.Role] = ()) -> discord.ui.LayoutView:
     view = discord.ui.LayoutView(timeout=None)
     if role_mentions := " ".join(role.mention for role in roles):
@@ -50,16 +66,7 @@ def build_offer_view(offer: SteamOffer, roles: Iterable[discord.Role] = ()) -> d
         small.append(f"~~{discord.utils.escape_markdown(offer.old_price)}~~")
     if offer.ends_at is not None:
         small.append(f"<t:{offer.ends_at}:f> 截止（<t:{offer.ends_at}:R>）")
-    children: list[discord.ui.Item] = []
-    if offer.header_image:
-        children.append(discord.ui.MediaGallery(
-            discord.MediaGalleryItem(media=offer.header_image, description=f"{offer.name} Steam 商店圖片")
-        ))
-    children += [
-        card_title(f"{ICONS['steam']} {discord.utils.escape_markdown(offer.name)}", " · ".join(small)),
-        description,
-    ]
-    view.add_item(discord.ui.Container(*children, accent_colour=BRAND_COLOUR))
+    view.add_item(_card(offer, " · ".join(small), description, colour=BRAND_COLOUR))
     view.add_item(discord.ui.ActionRow(discord.ui.Button(label="前往 Steam 領取", emoji=ICONS["gift"], url=offer.store_url)))
     if view.content_length() > 4000:
         notice = "\n\n說明已截短，完整內容請前往 Steam 查看。"

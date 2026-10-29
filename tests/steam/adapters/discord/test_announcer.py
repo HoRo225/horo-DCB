@@ -8,6 +8,7 @@ import discord
 from src.core.adapters.discord.live import LiveGuild
 from src.steam.adapters.discord.announcer import DiscordAnnouncer
 from src.steam.app.ports import DeliveryError
+from src.steam.domain.offers import PostedCard
 from tests.support.steam import offer
 from tests.support.testing import text
 
@@ -82,6 +83,34 @@ class DiscordAnnouncerTest(unittest.IsolatedAsyncioTestCase):
                 with self.assertRaises(DeliveryError) as caught:
                     await self.announcer.guild().announce(CH, offer(7), (), None)
                 self.assertEqual((caught.exception.reason, caught.exception.rejected), (name, rejected))
+
+    async def test_ended_card_replaces_the_posted_message(self) -> None:
+        message = SimpleNamespace(edit=AsyncMock())
+        self.channel.get_partial_message.return_value = message
+        result = await self.announcer.guild().end(PostedCard(CH, 555, offer(7)))
+        self.assertEqual(result, "ended")
+        self.channel.get_partial_message.assert_called_once_with(555)
+        self.assertIn("限免已結束", text(message.edit.await_args.kwargs["view"]))
+
+    async def test_ended_card_gives_up_only_when_the_message_is_gone(self) -> None:
+        message = SimpleNamespace(edit=AsyncMock())
+        self.channel.get_partial_message.return_value = message
+        guild = self.announcer.guild()
+        self.assertEqual(await guild.end(PostedCard(CH + 1, 555, offer(7))), "gone")
+        for error, result in (
+            (discord.NotFound(SimpleNamespace(status=404, reason="error"), "error"), "gone"),
+            (http_error(403), "failed"),
+            (http_error(503), "failed"),
+            (TimeoutError(), "failed"),
+            (aiohttp.ClientError(), "failed"),
+        ):
+            with self.subTest(error=type(error).__name__, result=result):
+                message.edit.side_effect = error
+                if result == "failed":
+                    with self.assertLogs(level="ERROR"):
+                        self.assertEqual(await guild.end(PostedCard(CH, 555, offer(7))), result)
+                else:
+                    self.assertEqual(await guild.end(PostedCard(CH, 555, offer(7))), result)
 
     def test_role_states(self) -> None:
         self.role(1)

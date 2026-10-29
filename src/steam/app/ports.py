@@ -4,9 +4,10 @@ from collections.abc import Mapping, Sequence
 from typing import Literal, Protocol
 
 from src.core.domain.records import DiscordEffect
-from src.steam.domain.offers import SteamFetchResult, SteamOffer
+from src.steam.domain.offers import PostedCard, SteamFetchResult, SteamOffer
 
 type RoleState = Literal["missing", "default", "muted", "usable"]
+type EndResult = Literal["ended", "gone", "failed"]
 
 
 class StoreError(Exception):
@@ -36,6 +37,14 @@ class SteamStore(Protocol):
     def keep_roles(self, role_ids: list[int]) -> None: ...
 
     def posted(self) -> set[int]: ...
+
+    def baselined(self) -> bool: ...
+
+    def baseline(self, app_ids: frozenset[int]) -> None: ...
+
+    def cards(self) -> list[PostedCard]: ...
+
+    def forget_card(self, app_id: int) -> None: ...
 
     def announcements(self, *statuses: str) -> list[DiscordEffect]: ...
 
@@ -70,6 +79,8 @@ class Guild(Protocol):
     async def announce(
         self, channel_id: int, offer: SteamOffer, role_ids: Sequence[int], nonce: str | None,
     ) -> int | None: ...
+
+    async def end(self, card: PostedCard) -> EndResult: ...
 
 
 class Announcer(Protocol):

@@ -6,7 +6,7 @@ from src.core.adapters.sqlite.db import open_db, transaction
 from src.core.adapters.sqlite.operations import OperationStore
 from src.steam.adapters.sqlite.store import SqliteSteamStore
 from src.steam.app.ports import StoreError
-from src.steam.domain.offers import ANNOUNCE, OFFER_ENDED, Announcement
+from src.steam.domain.offers import ANNOUNCE, OFFER_ENDED, Announcement, PostedCard
 from tests.support.steam import offer
 
 CH = 10
@@ -134,6 +134,49 @@ class SqliteSteamStoreTest(unittest.TestCase):
             "failed": ("skipped", OFFER_ENDED), "skipped": ("skipped", OFFER_ENDED), "unknown": ("unknown", None),
             "active": ("pending", None),
         })
+
+    def deliver(self, effect_id: str, app_id: int, message_id: int) -> None:
+        self.queue(effect_id, app_id)
+        effect = self.store.announcement(effect_id)
+        self.store.begin_delivery(effect)
+        self.store.finish_delivery(effect, message_id)
+
+    def test_delivered_announcement_keeps_its_message_and_offer(self) -> None:
+        self.deliver("e", 7, 555)
+        self.assertEqual(self.store.cards(), [PostedCard(CH, 555, offer(7))])
+
+    def test_settling_without_a_message_only_suppresses_the_offer(self) -> None:
+        self.queue("e", 7, status="failed")
+        with transaction(self.db):
+            self.store.settle(self.store.announcement("e"))
+        self.assertEqual((self.store.posted(), self.store.cards()), ({7}, []))
+
+    def test_confirmed_message_is_kept_even_when_the_offer_was_already_suppressed(self) -> None:
+        self.store.baseline(frozenset({7}))
+        self.deliver("e", 7, 555)
+        self.queue("skipped", 7, status="unknown")
+        with transaction(self.db):
+            self.records.update_effect("skipped", "skipped", error="explicitly_skipped")
+            self.store.settle(self.store.announcement("skipped"))
+        self.assertEqual(self.store.cards(), [PostedCard(CH, 555, offer(7))])
+
+    def test_forgotten_card_keeps_suppressing_until_the_offer_retires(self) -> None:
+        self.deliver("e", 7, 555)
+        self.store.retire(frozenset())
+        self.assertEqual(self.store.posted(), {7})
+        self.store.forget_card(7)
+        self.store.retire(frozenset({7}))
+        self.assertEqual((self.store.posted(), self.store.cards()), ({7}, []))
+        self.store.retire(frozenset())
+        self.assertEqual(self.store.posted(), set())
+
+    def test_baseline_suppresses_current_offers_once(self) -> None:
+        self.assertFalse(self.store.baselined())
+        self.deliver("e", 7, 555)
+        self.store.baseline(frozenset({7, 8}))
+        self.assertTrue(self.store.baselined())
+        self.assertEqual((self.store.posted(), self.store.cards()), ({7, 8}, [PostedCard(CH, 555, offer(7))]))
+        self.assertTrue(SqliteSteamStore(self.db).baselined())
 
     def test_retire_leaves_already_ended_announcements_untouched(self) -> None:
         self.queue("e", 1, status="failed")

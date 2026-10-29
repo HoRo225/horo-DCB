@@ -11,7 +11,7 @@ from src.core.adapters.sqlite.operations import OperationStore
 from src.core.adapters.sqlite.settings import SettingsStore
 from src.core.domain.settings import Setting
 from src.games.adapters.sqlite.store import GAMES_CHANNEL_ID, GAMES_HUB_MESSAGE, GAMES_ROLE_IDS
-from src.steam.adapters.sqlite.store import STEAM_CHANNEL_ID, STEAM_ENABLED, STEAM_ROLE_IDS
+from src.steam.adapters.sqlite.store import STEAM_CHANNEL_ID, STEAM_ENABLED, STEAM_ROLE_IDS, SqliteSteamStore
 from src.voice.adapters.sqlite.store import VOICE_ENABLED, VOICE_ENTRY_CHANNEL_ID
 
 LATEST = 14 + len(MIGRATIONS)
@@ -149,6 +149,35 @@ class UpgradeTests(unittest.TestCase):
             (version, [entry for entry in upgraded if entry[2] != "ai_tipped"], upgraded_rows),
             ((17,), schema, rows | {"ai_tipped": []}),
         )
+
+    def test_v18_adds_empty_post_locations_and_keeps_every_other_row(self) -> None:
+        db = open_db(self.path, MIGRATIONS[:3])
+        db.executescript("INSERT INTO settings VALUES ('feature.ai', 'true'); INSERT INTO voice_rooms VALUES (50, 7);")
+        db.close()
+        version, schema, rows = self.contents()
+        self.assertEqual(version, (17,))
+        self.open(MIGRATIONS[:4]).close()
+        version, upgraded, upgraded_rows = self.contents()
+        self.assertEqual((version, [entry for entry in upgraded if entry[1] != "steam_posted"], upgraded_rows),
+                         ((18,), [entry for entry in schema if entry[1] != "steam_posted"], rows))
+        columns = [name for (_cid, name, *_rest) in self.raw().execute("PRAGMA table_info(steam_posted)")]
+        self.assertEqual(columns, ["app_id", "channel_id", "message_id", "offer"])
+
+    def test_v18_skips_the_silent_baseline_only_where_steam_was_never_used(self) -> None:
+        for name, setup, baselined in (
+            ("功能已開啟", "INSERT INTO settings VALUES ('feature.steam_free_games', 'true');", True),
+            ("已有公告紀錄", "INSERT INTO settings VALUES ('feature.steam_free_games', 'false');"
+                             "INSERT INTO steam_posted (app_id) VALUES (10);", True),
+            ("從未使用", "INSERT INTO settings VALUES ('feature.steam_free_games', 'false');", False),
+        ):
+            with self.subTest(name):
+                self.path.unlink(missing_ok=True)
+                db = open_db(self.path, MIGRATIONS[:3])
+                db.executescript(setup)
+                db.close()
+                db = self.open(MIGRATIONS[:4])
+                self.assertEqual(SqliteSteamStore(db).baselined(), baselined)
+                db.close()
 
     def test_versions_before_the_baseline_are_refused(self) -> None:
         raw = self.raw()

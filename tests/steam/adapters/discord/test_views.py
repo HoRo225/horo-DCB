@@ -3,8 +3,8 @@ from types import SimpleNamespace
 
 import discord
 
-from src.core.adapters.discord.brand import BRAND_COLOUR, ICONS
-from src.steam.adapters.discord.views import build_offer_view, offer_summary
+from src.core.adapters.discord.brand import BRAND_COLOUR, ICONS, NEUTRAL_COLOUR
+from src.steam.adapters.discord.views import build_ended_view, build_offer_view, offer_summary
 from tests.support.steam import offer
 from tests.support.testing import text
 
@@ -27,6 +27,15 @@ class OfferViewTest(unittest.TestCase):
         buttons = [item for item in card.walk_children() if isinstance(item, discord.ui.Button)]
         self.assertEqual([(b.label, b.url) for b in buttons], [("前往 Steam 領取", "https://store.steampowered.com/app/1/")])
         self.assertEqual(card.children[-1].children, buttons)
+
+    def test_ended_card_keeps_banner_and_title_in_grey_without_blurb_link_or_mentions(self) -> None:
+        card = build_ended_view(DATED)
+        self.assertEqual(text(card).split("\n"), [rf"## {ICONS['steam']} \*\*g\*\*", "-# 限免已結束"])
+        (container,) = card.children
+        self.assertEqual(container.accent_colour, NEUTRAL_COLOUR)
+        self.assertEqual(container.children[0].items[0].media.url, "https://cdn.example.com/h.jpg")
+        self.assertFalse(any(isinstance(item, discord.ui.Button) for item in card.walk_children()))
+        self.assertEqual(text(build_ended_view(offer(1, name="g"))), f"## {ICONS['steam']} g\n-# 限免已結束")
 
     def test_deadline_shows_only_when_known(self) -> None:
         self.assertIn("⏰ <t:1792083600:f> 截止（<t:1792083600:R>）", offer_summary(DATED).children[0].content)

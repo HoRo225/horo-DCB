@@ -75,4 +75,13 @@ DROP TABLE requests;
     """
 CREATE TABLE ai_tipped (user_id INTEGER PRIMARY KEY);
 """,
+    """
+ALTER TABLE steam_posted ADD COLUMN channel_id INTEGER;
+ALTER TABLE steam_posted ADD COLUMN message_id INTEGER;
+ALTER TABLE steam_posted ADD COLUMN offer TEXT;
+INSERT OR IGNORE INTO settings (key, value)
+SELECT 'steam.baselined', 'true'
+WHERE EXISTS (SELECT 1 FROM settings WHERE key = 'feature.steam_free_games' AND value = 'true')
+   OR EXISTS (SELECT 1 FROM steam_posted);
+""",
 )

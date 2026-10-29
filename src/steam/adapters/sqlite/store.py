@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import sqlite3
 from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
@@ -7,14 +8,16 @@ from contextlib import contextmanager
 from src.core.adapters.sqlite.db import transaction
 from src.core.adapters.sqlite.operations import OperationStore
 from src.core.adapters.sqlite.settings import SettingsStore
+from src.core.domain.json import json_value
 from src.core.domain.records import DiscordEffect
 from src.core.domain.settings import Setting
 from src.steam.app.ports import StoreError
-from src.steam.domain.offers import ANNOUNCE, OFFER_ENDED, announced_app
+from src.steam.domain.offers import ANNOUNCE, OFFER_ENDED, PostedCard, SteamOffer, announced_app
 
 STEAM_ENABLED = Setting("feature.steam_free_games", False)
 STEAM_CHANNEL_ID: Setting[int | None] = Setting("steam.channel_id", None)
 STEAM_ROLE_IDS: Setting[list[int]] = Setting("steam.role_ids", [])
+STEAM_BASELINED = Setting("steam.baselined", False)
 
 
 class StorageFailure(StoreError, sqlite3.Error):
@@ -76,6 +79,28 @@ class SqliteSteamStore:
         with self._saving():
             return {app_id for (app_id,) in self._db.execute("SELECT app_id FROM steam_posted")}
 
+    def baselined(self) -> bool:
+        with self._saving():
+            return self._settings.get(STEAM_BASELINED)
+
+    def baseline(self, app_ids: frozenset[int]) -> None:
+        with self._writing():
+            self._db.executemany("INSERT OR IGNORE INTO steam_posted (app_id) VALUES (?)", [(app_id,) for app_id in app_ids])
+            self._settings.put({STEAM_BASELINED: True})
+
+    def cards(self) -> list[PostedCard]:
+        with self._saving():
+            rows = self._db.execute(
+                "SELECT channel_id, message_id, offer FROM steam_posted WHERE message_id IS NOT NULL ORDER BY app_id"
+            ).fetchall()
+        return [PostedCard(channel_id, message_id, SteamOffer(**json.loads(offer))) for channel_id, message_id, offer in rows]
+
+    def forget_card(self, app_id: int) -> None:
+        with self._writing():
+            self._db.execute(
+                "UPDATE steam_posted SET channel_id = NULL, message_id = NULL, offer = NULL WHERE app_id = ?", (app_id,)
+            )
+
     def announcements(self, *statuses: str) -> list[DiscordEffect]:
         with self._saving():
             return self._operations.effects(status=statuses, kind=ANNOUNCE)
@@ -88,7 +113,7 @@ class SqliteSteamStore:
     def retire(self, active_app_ids: frozenset[int]) -> None:
         with self._writing():
             self._db.executemany(
-                "DELETE FROM steam_posted WHERE app_id = ?",
+                "DELETE FROM steam_posted WHERE app_id = ? AND message_id IS NULL",
                 [(app_id,) for app_id in self.posted() - active_app_ids],
             )
             for effect in self._operations.effects(status=("pending", "failed", "skipped"), kind=ANNOUNCE):
@@ -117,4 +142,12 @@ class SqliteSteamStore:
             self.settle(effect)
 
     def settle(self, effect: DiscordEffect) -> None:
-        self._db.execute("INSERT OR IGNORE INTO steam_posted (app_id) VALUES (?)", (announced_app(effect.payload),))
+        settled = self._operations.get_effect(effect.effect_id)
+        card = (None, None, None) if settled.message_id is None else (
+            settled.channel_id, settled.message_id, json_value(settled.payload["offer"]))
+        self._db.execute(
+            "INSERT INTO steam_posted (app_id, channel_id, message_id, offer) VALUES (?, ?, ?, ?) "
+            "ON CONFLICT (app_id) DO UPDATE SET channel_id = excluded.channel_id, message_id = excluded.message_id, "
+            "offer = excluded.offer WHERE excluded.message_id IS NOT NULL",
+            (announced_app(effect.payload), *card),
+        )

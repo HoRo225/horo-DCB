@@ -29,7 +29,7 @@ from src.games.domain.blackjack import RANKS, SUITS, Card, Round
 from src.games.domain.catalog import GAMES
 from src.games.domain.table import Blackjack, Slots
 from src.steam import SteamFetchResult, SteamOffer
-from src.steam.adapters.discord.views import build_offer_view
+from src.steam.adapters.discord.views import build_ended_view, build_offer_view
 from src.steam.adapters.sqlite.store import STEAM_ENABLED, STEAM_ROLE_IDS
 from src.voice.adapters.sqlite.store import VOICE_ENABLED
 from tests.support import testing
@@ -213,6 +213,7 @@ class LayoutBudgetTest(unittest.IsolatedAsyncioTestCase):
             roles = [MagicMock(mention=f"<@&{10**18 + n}>") for n in range(25)]
             offer = SteamOffer(1, name, "NT$1,000,000", "說" * 5000, image, ends_at=2**31)
             fits("steam offer", build_offer_view(offer, roles))
+            fits("steam ended", build_ended_view(offer))
             fits("ai help", help_view(10**18, "_" * 32))
             receipt = [{"ok": n % 2 == 0, "text": "果" * 200, "private_ref": f"ref{n}"} for n in range(3)] + [
                 {"ok": True, "text": "果" * 200}]

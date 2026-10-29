@@ -8,9 +8,9 @@ import discord
 
 from src.core.adapters.discord.channels import post_problem, text_channel_problem
 from src.core.adapters.discord.live import LiveGuild
-from src.steam.adapters.discord.views import build_offer_view
-from src.steam.app.ports import DeliveryError, RoleState
-from src.steam.domain.offers import SteamOffer
+from src.steam.adapters.discord.views import build_ended_view, build_offer_view
+from src.steam.app.ports import DeliveryError, EndResult, RoleState
+from src.steam.domain.offers import PostedCard, SteamOffer
 
 
 class DiscordAnnouncer:
@@ -68,3 +68,16 @@ class GuildAnnouncer:
         logging.info("Sent Steam free games notification: %s (%s)", offer.name, offer.app_id)
         message_id = getattr(message, "id", None)
         return message_id if type(message_id) is int else None
+
+    async def end(self, card: PostedCard) -> EndResult:
+        channel = self._guild.get_channel(card.channel_id)
+        if channel is None:
+            return "gone"
+        try:
+            await channel.get_partial_message(card.message_id).edit(view=build_ended_view(card.offer))
+        except discord.NotFound:
+            return "gone"
+        except (discord.HTTPException, TimeoutError, aiohttp.ClientError):
+            logging.exception("Ended Steam free games notification could not be updated: %s", card.offer.app_id)
+            return "failed"
+        return "ended"

@@ -6,8 +6,16 @@ import itertools
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 
 from src.core.domain.records import DiscordEffect
-from src.steam.app.ports import DeliveryError, RoleState
-from src.steam.domain.offers import ANNOUNCE, OFFER_ENDED, Announcement, SteamFetchResult, SteamOffer, announced_app
+from src.steam.app.ports import DeliveryError, EndResult, RoleState
+from src.steam.domain.offers import (
+    ANNOUNCE,
+    OFFER_ENDED,
+    Announcement,
+    PostedCard,
+    SteamFetchResult,
+    SteamOffer,
+    announced_app,
+)
 
 MISSING_CHANNEL = "找不到已綁定的通知頻道，請在控制台重新選擇。"
 GONE_CHANNEL = "指定通知頻道已不存在，未綁定頻道。"
@@ -29,11 +37,13 @@ def announcement_effect(effect_id: str, app_id: int, *, status: str = "pending",
 
 
 class FakeStore:
-    def __init__(self, *, enabled: bool = True, channel_id: int | None = 10) -> None:
-        self.settings: dict[str, object] = {"enabled": enabled, "channel_id": channel_id, "role_ids": []}
+    def __init__(self, *, enabled: bool = True, channel_id: int | None = 10, baselined: bool = True) -> None:
+        self.settings: dict[str, object] = {"enabled": enabled, "channel_id": channel_id, "role_ids": [],
+                                            "baselined": baselined}
         self.receipts: dict[str, tuple[str, object]] = {}
         self.effects: dict[str, DiscordEffect] = {}
         self.posted_ids: set[int] = set()
+        self.live_cards: dict[int, PostedCard] = {}
         self.failure: Exception | None = None
 
     def _write(self) -> None:
@@ -81,6 +91,21 @@ class FakeStore:
     def posted(self) -> set[int]:
         return set(self.posted_ids)
 
+    def baselined(self) -> bool:
+        return self.settings["baselined"]
+
+    def baseline(self, app_ids: frozenset[int]) -> None:
+        self._write()
+        self.posted_ids |= app_ids
+        self.settings["baselined"] = True
+
+    def cards(self) -> list[PostedCard]:
+        return [self.live_cards[app_id] for app_id in sorted(self.live_cards)]
+
+    def forget_card(self, app_id: int) -> None:
+        self._write()
+        self.live_cards.pop(app_id, None)
+
     def announcements(self, *statuses: str) -> list[DiscordEffect]:
         return [effect for effect in self.effects.values() if effect.status in statuses]
 
@@ -89,7 +114,7 @@ class FakeStore:
 
     def retire(self, active_app_ids: frozenset[int]) -> None:
         self._write()
-        self.posted_ids &= active_app_ids
+        self.posted_ids &= active_app_ids | self.live_cards.keys()
         for effect in self.announcements("pending", "failed", "skipped"):
             ended = effect.status == "skipped" and effect.error == OFFER_ENDED
             if not ended and announced_app(effect.payload) not in active_app_ids:
@@ -111,7 +136,12 @@ class FakeStore:
         self.settle(effect)
 
     def settle(self, effect: DiscordEffect) -> None:
-        self.posted_ids.add(announced_app(effect.payload))
+        settled = self.effects[effect.effect_id]
+        app_id = announced_app(settled.payload)
+        self.posted_ids.add(app_id)
+        if settled.message_id is not None:
+            self.live_cards[app_id] = PostedCard(settled.channel_id, settled.message_id,
+                                                 Announcement.parse(settled.payload).offer)
 
 
 class FakeSource:
@@ -136,6 +166,8 @@ class FakeGuild:
         self.channels: dict[int, str | None] = dict.fromkeys(channel_ids or (10,))
         self.roles: dict[int, RoleState] = {}
         self.sent: list[tuple[int, int, tuple[int, ...], str | None]] = []
+        self.ended: list[PostedCard] = []
+        self.end_result: EndResult = "ended"
         self.failure: DeliveryError | None = None
         self.during: Callable[[], Awaitable[object] | None] | None = None
         self._ids = itertools.count(700)
@@ -156,6 +188,10 @@ class FakeGuild:
         if self.failure is not None:
             raise self.failure
         return next(self._ids)
+
+    async def end(self, card: PostedCard) -> EndResult:
+        self.ended.append(card)
+        return self.end_result
 
 
 class FakeAnnouncer:

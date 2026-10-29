@@ -1,10 +1,11 @@
 import asyncio
+import time
 import unittest
 
 from src.core.app.supervisor import SCHEDULED, TaskGroup
 from src.steam import Steam, SteamConfigurationError
 from src.steam.app.ports import DeliveryError, StoreError
-from src.steam.domain.offers import OFFER_ENDED, Announcement
+from src.steam.domain.offers import OFFER_ENDED, Announcement, PostedCard
 from tests.support.steam import (
     GONE_CHANNEL,
     MISSING_CHANNEL,
@@ -57,6 +58,70 @@ class SteamTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.steam.status().active_app_count, 0)
         await self.check(offer(1))
         self.assertEqual(self.sent_apps(), [1, 1])
+
+    async def test_delivered_announcement_remembers_where_it_was_posted(self) -> None:
+        await self.check(offer(1))
+        self.assertEqual(self.store.cards(), [PostedCard(CH, 700, offer(1))])
+
+    async def test_offer_leaving_the_sale_greys_out_its_card_and_returns_as_a_new_post(self) -> None:
+        await self.check(offer(1), offer(2))
+        await self.check(offer(2))
+        self.assertEqual(self.guild.ended, [PostedCard(CH, 700, offer(1))])
+        self.assertEqual((self.store.cards(), self.store.posted()), ([PostedCard(CH, 701, offer(2))], {2}))
+        await self.check(offer(1), offer(2))
+        self.assertEqual(self.sent_apps(), [1, 2, 1])
+        self.assertEqual(len(self.guild.ended), 1)
+
+    async def test_offer_past_its_deadline_but_still_listed_is_ended_once_and_not_reposted(self) -> None:
+        expired = offer(1, ends_at=1)
+        await self.check(expired)
+        await self.check(expired)
+        await self.check(expired)
+        self.assertEqual(self.sent_apps(), [1])
+        self.assertEqual(self.guild.ended, [PostedCard(CH, 700, expired)])
+        self.assertEqual((self.store.cards(), self.store.posted()), ([], {1}))
+
+    async def test_offer_before_its_deadline_keeps_its_card(self) -> None:
+        await self.check(offer(1, ends_at=int(time.time()) + 3600))
+        await self.check(offer(1))
+        self.assertEqual((self.guild.ended, len(self.store.cards())), ([], 1))
+
+    async def test_failed_card_update_keeps_the_card_and_retries_next_check(self) -> None:
+        await self.check(offer(1))
+        self.guild.end_result = "failed"
+        await self.check()
+        self.assertEqual((len(self.store.cards()), self.store.posted()), (1, {1}))
+        self.assertEqual(self.steam.status().last_error, "已結束的 Steam 公告無法更新，下次檢查會重試。")
+        self.guild.end_result = "ended"
+        await self.check()
+        self.assertEqual((len(self.guild.ended), self.store.cards(), self.store.posted()), (2, [], set()))
+        await self.check(offer(1))
+        self.assertEqual(self.sent_apps(), [1, 1])
+
+    async def test_deleted_message_is_given_up(self) -> None:
+        await self.check(offer(1))
+        self.guild.end_result = "gone"
+        await self.check()
+        await self.check()
+        self.assertEqual((len(self.guild.ended), self.store.cards(), self.store.posted()), (1, [], set()))
+
+    async def test_posts_without_a_saved_message_are_never_edited(self) -> None:
+        self.store.posted_ids = {1, 2}
+        await self.check(offer(2, ends_at=1))
+        self.assertEqual((self.guild.ended, self.guild.sent, self.store.posted()), ([], [], {2}))
+
+    async def test_first_check_records_current_offers_silently_once_the_channel_works(self) -> None:
+        self.store.settings["baselined"] = False
+        self.guild.channels[CH] = "Bot 在通知頻道缺少權限：檢視頻道、傳送訊息。"
+        with self.assertLogs(level="ERROR"):
+            await self.check(offer(1), offer(2))
+        self.assertEqual((self.store.baselined(), self.store.posted()), (False, set()))
+        self.guild.channels[CH] = None
+        await self.check(offer(1), offer(2))
+        self.assertEqual((self.guild.sent, self.store.posted(), self.store.cards()), ([], {1, 2}, []))
+        self.assertTrue(self.store.baselined())
+        await self.check(offer(1), offer(2), offer(3))
+        self.assertEqual(self.sent_apps(), [3])
 
     async def test_effect_ids_and_nonces_follow_the_persisted_format(self) -> None:
         await self.check(offer(7))
