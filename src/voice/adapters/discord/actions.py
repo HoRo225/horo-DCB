@@ -20,8 +20,10 @@ def voice_actions(voice: Voice, live: LiveGuild) -> ActionGroup:
             raise LookupError("current guild is unavailable")
         return current
 
-    async def set_enabled(step: Step, params: Mapping[str, object]) -> None:
-        voice.set_enabled(params["enabled"], operation_id=step.operation_id)
+    async def set_enabled(step: Step, params: Mapping[str, object]) -> Mapping[str, object] | None:
+        if problem := await voice.set_enabled(params["enabled"], operation_id=step.operation_id):
+            return failure("sync", f"已開啟臨時語音；{problem}")
+        return None
 
     async def bind_entry(step: Step, params: Mapping[str, object]) -> Mapping[str, object] | None:
         channel = guild().get_channel(params["channel_id"])

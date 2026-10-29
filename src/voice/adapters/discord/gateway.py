@@ -167,7 +167,7 @@ class DiscordVoiceGateway:
             raise GatewayError("move_target_unavailable")
         try:
             await member.move_to(channel, reason=AUDIT_REASON)
-        except discord.HTTPException as error:
+        except TRANSPORT_ERRORS as error:
             raise GatewayError(type(error).__name__) from error
 
     async def delete(self, channel_id: int) -> None:

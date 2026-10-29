@@ -12,6 +12,7 @@ from src.voice.domain.rooms import RoomSpec, VoiceStatus, bot_problem, creation_
 
 CLOSING_CONFIRM = "Bot 正在關閉，未登記待查語音房。"
 CLOSING_RETRY = "Bot 正在關閉，未處理語音清理。"
+SYNC_FAILED = "入口同步失敗，請重新同步。"
 
 type StillCurrent = Callable[[], bool] | None
 
@@ -38,12 +39,21 @@ class Voice:
             return "找不到已綁定的入口頻道，請在控制台重新選擇入口。"
         return bot_problem(self._gateway.bot_missing(entry_id))
 
-    def set_enabled(self, value: bool, *, operation_id: str | None = None) -> bool:
+    async def set_enabled(self, value: bool, *, operation_id: str | None = None) -> str | None:
         if self._closing:
             raise RuntimeError("Bot 正在關閉，未修改臨時語音設定。")
         if type(value) is not bool:
             raise ValueError("invalid feature switch")
-        return self._store.set_enabled(value, operation_id=operation_id)
+        turning_on = value and not self.enabled
+        applied = self._store.set_enabled(value, operation_id=operation_id)
+        if not (applied and turning_on):
+            return None
+        try:
+            await self._own(self._reconcile(self._pinned(None)))
+        except Exception:
+            logging.warning("Temp voice entry sync after enabling failed.")
+            return SYNC_FAILED
+        return None
 
     def stop_new_work(self) -> None:
         self._closing = True
@@ -136,18 +146,15 @@ class Voice:
         if created is None:
             return None
         category_id = spec.shape.category_id
-        if (not self._admits(member_id, entry_id) or not gateway.is_voice(created)
-                or gateway.category_id(entry_id) != category_id or gateway.category_id(created) != category_id):
-            await self._delete_empty(created, "無法刪除已清空的臨時語音頻道。")
-            return None
-        if not gateway.can_join(member_id, created):
-            await self._delete_empty(created, "無法刪除已清空的臨時語音頻道。")
-            return None
-        try:
-            await gateway.move(member_id, created)
-        except GatewayError:
-            logging.exception("Temp voice channel created, but the creator could not be moved.")
-            await self._delete_empty(created, "無法刪除已清空的臨時語音頻道。")
+        if (self._admits(member_id, entry_id) and gateway.is_voice(created)
+                and gateway.category_id(entry_id) == category_id and gateway.category_id(created) == category_id
+                and gateway.can_join(member_id, created)):
+            try:
+                await gateway.move(member_id, created)
+                return None
+            except GatewayError:
+                logging.exception("Temp voice channel created, but the creator could not be moved.")
+        await self._delete_empty(created, "無法刪除已清空的臨時語音頻道。")
         return None
 
     async def _create(self, spec: RoomSpec) -> int | str | None:

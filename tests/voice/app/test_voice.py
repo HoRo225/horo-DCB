@@ -19,7 +19,7 @@ class VoiceTestCase(unittest.IsolatedAsyncioTestCase):
         self.gateway.channel(ENTRY)
         self.tasks = TaskGroup("voice", WORK)
         self.voice = Voice(self.store, self.gateway, self.tasks)
-        self.voice.set_enabled(True)
+        await self.voice.set_enabled(True)
         self.assertIsNone(await self.voice.bind_entry(ENTRY))
 
     async def join(self, member_id: int, before: int | None = None) -> None:
@@ -134,7 +134,7 @@ class EntryTests(VoiceTestCase):
     async def test_leaving_an_owned_room_empty_deletes_it_even_when_disabled(self) -> None:
         await self.join(ALICE)
         (room,) = self.rooms()
-        self.voice.set_enabled(False)
+        await self.voice.set_enabled(False)
         await self.leave(ALICE)
         self.assertEqual((self.gateway.deleted, self.rooms()), ([room], {}))
         await self.join(BOB)
@@ -220,11 +220,15 @@ class RaceTests(VoiceTestCase):
         await self.join(ALICE)
         self.assertEqual((self.gateway.moves, len(self.gateway.deleted), self.rooms()), ([], 1, {}))
 
-    async def test_failed_move_deletes_the_new_room(self) -> None:
-        self.gateway.failures["move"] = GatewayError("HTTPException")
+    async def test_failed_move_deletes_the_new_room_and_its_record(self) -> None:
+        self.gateway.failures["move"] = GatewayError("TimeoutError")
         with self.assertLogs(level="ERROR"):
             await self.join(ALICE)
-        self.assertEqual((len(self.gateway.deleted), self.rooms()), (1, {}))
+        (room,) = self.gateway.deleted
+        self.assertEqual((self.rooms(), self.store.effects[f"voice.delete:{room}"].status), ({}, "done"))
+        del self.gateway.failures["move"]
+        await self.join(ALICE)
+        self.assertEqual((len(self.gateway.created), len(self.rooms())), (2, 1))
 
 
 class RecordTests(VoiceTestCase):
@@ -439,9 +443,34 @@ class SettingsTests(VoiceTestCase):
         await self.voice.handle_channel_delete(room)
         self.assertEqual(self.rooms(), {})
 
+    async def test_turning_on_syncs_members_already_in_the_entry_once(self) -> None:
+        await self.voice.set_enabled(False)
+        self.gateway.member(ALICE, channel=ENTRY)
+        self.assertIsNone(await self.voice.set_enabled(True))
+        (room,) = self.rooms()
+        self.assertEqual(self.gateway.moves, [(ALICE, room)])
+        self.gateway.member(BOB, channel=ENTRY)
+        self.assertIsNone(await self.voice.set_enabled(True))
+        self.assertEqual(self.rooms(), {room: ALICE})
+
+    async def test_turning_off_does_not_sync(self) -> None:
+        await self.join(ALICE)
+        (room,) = self.rooms()
+        self.gateway.members[ALICE].channel = None
+        self.assertIsNone(await self.voice.set_enabled(False))
+        self.assertEqual((self.gateway.deleted, self.rooms()), ([], {room: ALICE}))
+
+    async def test_failed_sync_after_turning_on_is_reported_and_the_switch_stays_on(self) -> None:
+        await self.voice.set_enabled(False)
+        self.gateway.member(ALICE, channel=ENTRY)
+        self.store.failing.add("begin_create")
+        with self.assertLogs(level="WARNING"):
+            self.assertEqual(await self.voice.set_enabled(True), "入口同步失敗，請重新同步。")
+        self.assertEqual((self.voice.enabled, self.gateway.created), (True, []))
+
     async def test_switch_rejects_non_booleans(self) -> None:
         with self.assertRaises(ValueError):
-            self.voice.set_enabled(1)
+            await self.voice.set_enabled(1)
 
 
 class ReconcileTests(VoiceTestCase):
@@ -464,7 +493,7 @@ class ReconcileTests(VoiceTestCase):
     async def test_disabled_reconcile_still_cleans_empty_rooms(self) -> None:
         await self.join(ALICE)
         self.gateway.members[ALICE].channel = None
-        self.voice.set_enabled(False)
+        await self.voice.set_enabled(False)
         await self.voice.reconcile()
         self.assertEqual((len(self.gateway.deleted), self.rooms()), (1, {}))
 
@@ -529,7 +558,7 @@ class ShutdownTests(VoiceTestCase):
         self.assertEqual(await self.voice.confirm("voice.create:x", 5), CLOSING_CONFIRM)
         self.assertEqual(await self.voice.retry("voice.delete:5"), CLOSING_RETRY)
         with self.assertRaises(RuntimeError):
-            self.voice.set_enabled(False)
+            await self.voice.set_enabled(False)
         await self.join(ALICE)
         await self.voice.reconcile()
         self.assertEqual(self.gateway.created, [])

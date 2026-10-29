@@ -2,6 +2,7 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
+import aiohttp
 import discord
 
 from src.core.adapters.discord.brand import WARN_COLOUR
@@ -158,9 +159,12 @@ class RemoteTests(GatewayTestCase):
         room = self.voice(55)
         await self.gateway.move(OWNER, 55)
         self.owner.move_to.assert_awaited_once_with(room, reason=AUDIT_REASON)
-        self.owner.move_to.side_effect = http(discord.HTTPException, 500)
-        with self.assertRaises(GatewayError):
-            await self.gateway.move(OWNER, 55)
+        for error in (http(discord.HTTPException, 500), TimeoutError(), aiohttp.ClientConnectionError()):
+            with self.subTest(error=type(error).__name__):
+                self.owner.move_to.side_effect = error
+                with self.assertRaises(GatewayError) as raised:
+                    await self.gateway.move(OWNER, 55)
+                self.assertEqual(raised.exception.reason, type(error).__name__)
         with self.assertRaises(GatewayError):
             await self.gateway.move(OWNER, 77)
 

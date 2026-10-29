@@ -1,6 +1,6 @@
 import asyncio
 import unittest
-from unittest.mock import patch
+from unittest.mock import PropertyMock, patch
 
 import discord
 
@@ -15,24 +15,34 @@ class VoicePageTests(PanelCase):
         await self.open_panel()
         await self.go("臨時語音")
 
-    async def test_toggle_syncs_only_when_turning_on(self) -> None:
+    async def test_toggle_leaves_the_entry_sync_to_voice(self) -> None:
         voice = self.admin.voice
         with patch.object(voice, "reconcile", wraps=voice.reconcile) as reconcile:
             clicked = await self.click(self.button("開啟臨時語音"))
             self.assertTrue(voice.enabled)
             shown = self.screen(clicked)
             self.assertIn("✅ 已開啟臨時語音。", shown)
+            self.assertNotIn("入口同步失敗", shown)
             self.assertIn("### 目前狀態\n🟢 已開啟\n", shown)
             self.assertNotIn("此功能目前關閉", shown)
-            reconcile.assert_awaited_once()
             self.view.toggled_at.clear()
             clicked = await self.click(self.button("關閉臨時語音"))
             self.assertFalse(voice.enabled)
             shown = self.screen(clicked)
             self.assertIn("✅ 已關閉臨時語音。", shown)
             self.assertIn("⚪ **此功能目前關閉**　按下方的開啟按鈕即可開啟；設定仍可修改。\n### 目前狀態\n⚪ 已關閉\n", shown)
-            reconcile.assert_awaited_once()
+            reconcile.assert_not_awaited()
         self.button("開啟臨時語音")
+
+    async def test_failed_entry_sync_after_turning_on_is_shown(self) -> None:
+        self.channels[500] = entry = voice_channel(500, self.guild)
+        entry.permissions_for.return_value = discord.Permissions.all()
+        await self.admin.voice.bind_entry(500)
+        type(entry).members = PropertyMock(side_effect=RuntimeError("member cache unavailable"))
+        with self.assertLogs(level="ERROR"):
+            clicked = await self.click(self.button("開啟臨時語音"))
+        self.assertTrue(self.admin.voice.enabled)
+        self.assertIn("已開啟臨時語音。 入口同步失敗，請重新同步。", self.screen(clicked))
 
     async def test_double_click_toggle_keeps_state(self) -> None:
         button = self.button("開啟臨時語音")
@@ -67,7 +77,7 @@ class VoicePageTests(PanelCase):
         primary, secondary = discord.ButtonStyle.primary, discord.ButtonStyle.secondary
         sync = self.button("重新同步")
         self.assertEqual((sync.style, sync.disabled), (secondary, True))
-        self.admin.voice.set_enabled(True)
+        await self.admin.voice.set_enabled(True)
         await self.click(self.button("重新整理"))
         self.assertEqual(sync.style, primary)
         self.channels[500] = entry = voice_channel(500, self.guild)

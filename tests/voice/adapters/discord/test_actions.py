@@ -17,9 +17,9 @@ ENTRY, TEXT = 10, 11
 
 class VoiceActionTests(unittest.IsolatedAsyncioTestCase):
     def setUp(self) -> None:
-        self.store, gateway = FakeVoiceStore(), FakeGateway()
-        gateway.channel(ENTRY)
-        self.voice = Voice(self.store, gateway, TaskGroup("voice", WORK))
+        self.store, self.gateway = FakeVoiceStore(), FakeGateway()
+        self.gateway.channel(ENTRY)
+        self.voice = Voice(self.store, self.gateway, TaskGroup("voice", WORK))
         self.channels = {
             ENTRY: MagicMock(spec=discord.VoiceChannel, id=ENTRY, type=discord.ChannelType.voice),
             TEXT: MagicMock(spec=discord.TextChannel, id=TEXT, type=discord.ChannelType.text),
@@ -43,6 +43,21 @@ class VoiceActionTests(unittest.IsolatedAsyncioTestCase):
         await self.run_action("voice_enabled", enabled=True)
         self.assertIsNone(await self.run_action("voice_entry", channel_id=ENTRY))
         self.assertEqual((self.store.switch, self.store.entry), (True, ENTRY))
+
+    async def test_turning_on_syncs_the_entry(self) -> None:
+        self.store.entry = ENTRY
+        self.gateway.member(1, channel=ENTRY)
+        self.assertIsNone(await self.run_action("voice_enabled", enabled=True))
+        self.assertEqual([spec.owner_id for spec in self.gateway.created], [1])
+
+    async def test_turning_on_reports_a_failed_entry_sync(self) -> None:
+        self.store.entry = ENTRY
+        self.gateway.member(1, channel=ENTRY)
+        self.store.failing.add("begin_create")
+        with self.assertLogs(level="WARNING"):
+            result = await self.run_action("voice_enabled", enabled=True)
+        self.assertEqual(result, {"ok": False, "code": "sync", "text": "已開啟臨時語音；入口同步失敗，請重新同步。"})
+        self.assertTrue(self.store.switch)
 
     async def test_entry_must_be_a_voice_channel_of_the_guild(self) -> None:
         for channel_id in (TEXT, 99):

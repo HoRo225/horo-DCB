@@ -113,18 +113,9 @@ def render_voice(view: AdminPanelView, note: tuple[str, str] | None = None) -> N
 
 
 async def _after_voice_toggle(
-    view: AdminPanelView, interaction: discord.Interaction, operation: int, enabled: bool, _changed: object
+    _view: AdminPanelView, _interaction: discord.Interaction, _operation: int, _enabled: bool, problem: str | None
 ) -> tuple[str, str] | None:
-    if not enabled or (guild := view.services.live.guild()) is None:
-        return None
-    try:
-        await view.services.voice.reconcile(
-            still_current=lambda: view.is_current(operation) and view.services.live.guild() is guild,
-        )
-    except Exception:
-        logging.exception("Admin panel temp voice sync after enabling failed.")
-        return ("warn", "入口同步失敗，請按「重新同步」。")
-    return None
+    return None if problem is None else ("warn", problem)
 
 
 async def handle_voice_entry_select(
