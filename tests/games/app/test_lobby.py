@@ -149,13 +149,6 @@ class BindTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(await game.lobby.bind_channel(12, still_current=lambda: False), BIND_STALE)
         self.assertEqual(game.lobby.channel_id, CHANNEL)
 
-    async def test_refresh_redraws_only_a_published_hub(self) -> None:
-        game = GameHarness(self)
-        await game.lobby.refresh()
-        await game.lobby.publish_hub()
-        await game.lobby.refresh()
-        self.assertEqual(game.board.refreshed, [[CHANNEL, 500]])
-
 
 if __name__ == "__main__":
     unittest.main()

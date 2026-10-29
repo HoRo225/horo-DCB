@@ -10,7 +10,7 @@ from uuid import uuid4
 from src.core.app.supervisor import TaskGroup
 from src.core.domain.actions import failure
 from src.games.app.lobby import Lobby
-from src.games.app.ports import GameStore, Player, Players, PresentError, Refused, RemarkWriter, Reply, TableGone, TablePresenter
+from src.games.app.ports import GameStore, Player, Players, PresentError, Refused, RemarkWriter, Reply, TablePresenter
 from src.games.app.tables import LiveTable, Posted, Tables
 from src.games.domain.catalog import GAMES
 from src.games.domain.rules import IDLE_SECONDS
@@ -74,28 +74,16 @@ class Play:
             "busy": self._tables.lock(user_id).locked(),
         }
 
-    def restore(self) -> list[LiveTable]:
-        restored = []
-        for seat in self._store.seats():
-            self._tables.advance(seat.user_id)
-            posted = Posted(seat.channel_id, seat.message_id, self._presenter.url(seat.channel_id, seat.message_id))
-            table = LiveTable(seat.user_id, GAMES[seat.game].start(), self._tables.token(seat.user_id), posted)
-            self._tables.add(table)
-            restored.append(table)
-        return restored
-
-    async def redraw(self, table: LiveTable, avatar_url: str) -> None:
-        table.avatar_url = avatar_url
-        async with self._tables.lock(table.player_id):
-            if table.closed:
-                return
-            try:
-                await self._presenter.edit(table)
-            except TableGone:
-                if self._tables.discard(table.posted.message_id) is table and self._store.close_seat(table.player_id):
-                    self._tables.advance(table.player_id)
-            except PresentError:
-                logging.exception("Game table %s could not be restored.", table.posted.message_id)
+    async def close_leftover_tables(self) -> None:
+        for leftover in self._store.seats():
+            async with self._tables.lock(leftover.user_id):
+                seat = self._store.seat(leftover.user_id)
+                if seat is None or self._tables.at(seat.message_id) is not None:
+                    continue
+                operation_id = f"games.restart:{seat.message_id}"
+                posted = Posted(seat.channel_id, seat.message_id)
+                self._store.close_seat(seat.user_id, operation_id, retire=posted)
+                await self._delete(posted, operation_id)
 
     async def close_idle_tables(self, now: float) -> None:
         cutoff = now - IDLE_SECONDS
@@ -113,11 +101,11 @@ class Play:
                 return
             operation_id = f"games.idle:{message_id}"
             settled = table.state.settle()
-            self._store.close_idle(table.player_id, operation_id, retire=table.posted if settled is None else None)
+            self._store.close_seat(table.player_id, operation_id, retire=table.posted if settled is None else None)
             table.token = self._tables.advance(table.player_id)
             table.closed = True
             if settled is None:
-                await self._delete(table, operation_id)
+                await self._delete(table.posted, operation_id)
             else:
                 table.state, table.farewell = settled, IDLE_FAREWELL
                 try:
@@ -199,12 +187,12 @@ class Play:
                 await reply.notice(result["text"], tone="error" if gone else "warn",
                                    link=result["code"] in {"seat_gone", "no_table"})
             elif table.closed:
-                await self._delete(table, operation_id)
+                await self._delete(table.posted, operation_id)
             else:
                 await self._show(table, operation_id, reply)
         elif result["ok"] and table is not None:
             if table.closed:
-                await self._delete(table, operation_id)
+                await self._delete(table.posted, operation_id)
             else:
                 try:
                     await self._show(table, operation_id, None)
@@ -265,10 +253,10 @@ class Play:
             await self._presenter.edit(table)
         self._store.mark(effect_id, "done")
 
-    async def _delete(self, table: LiveTable, operation_id: str) -> None:
+    async def _delete(self, posted: Posted, operation_id: str) -> None:
         effect_id = f"{operation_id}:table-delete"
         self._store.mark(effect_id, "unknown")
-        if await self._presenter.delete(table.posted.channel_id, table.posted.message_id):
+        if await self._presenter.delete(posted.channel_id, posted.message_id):
             self._store.mark(effect_id, "done")
 
     async def _open(
@@ -318,7 +306,7 @@ class Play:
         self._tables.add(new)
         if replaced is not None:
             if previous is not None:
-                await self._delete(previous, operation_id)
+                await self._delete(previous.posted, operation_id)
             else:
                 await self._presenter.delete(replaced.channel_id, replaced.message_id)
         if reply is not None:

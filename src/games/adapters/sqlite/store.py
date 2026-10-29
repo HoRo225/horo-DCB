@@ -66,10 +66,6 @@ class SqliteGameStore:
     def seats(self) -> list[Seat]:
         return [Seat(*row) for row in self._db.execute("SELECT user_id, game, channel_id, message_id FROM game_tables")]
 
-    def close_seat(self, user_id: int) -> bool:
-        with transaction(self._db):
-            return self._leave(user_id)
-
     def prior(self, operation_id: str, inputs: Mapping[str, object]) -> Mapping[str, object] | None:
         try:
             record = self._operations.replay(operation_id, GAME_ACTION, dict(inputs))
@@ -141,7 +137,7 @@ class SqliteGameStore:
             if retire is not None:
                 self._present(seat.user_id, operation_id, "delete", retire)
 
-    def close_idle(self, user_id: int, operation_id: str, *, retire: Posted | None) -> None:
+    def close_seat(self, user_id: int, operation_id: str, *, retire: Posted | None) -> None:
         with transaction(self._db):
             if retire is not None:
                 self._present(user_id, operation_id, "delete", retire)

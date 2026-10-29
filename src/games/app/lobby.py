@@ -58,10 +58,6 @@ class Lobby:
         hub = self.hub_message
         return HUB_MISSING if hub is None or hub[0] != self.channel_id else None
 
-    async def refresh(self) -> None:
-        if hub := self.hub_message:
-            await self._board.refresh(hub)
-
     async def bind_channel(
         self, channel_id: int, *, operation_id: str | None = None, still_current: Callable[[], bool] | None = None,
     ) -> str | None:

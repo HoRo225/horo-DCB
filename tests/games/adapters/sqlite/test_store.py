@@ -38,9 +38,6 @@ class StoreTests(unittest.TestCase):
         self.opened(Seat(2, "slots", 10, 40), "other")
         self.assertEqual(self.store.seat(1), Seat(1, "blackjack", 10, 30))
         self.assertEqual(self.store.seats(), [Seat(1, "blackjack", 10, 30), Seat(2, "slots", 10, 40)])
-        self.assertTrue(self.store.close_seat(1))
-        self.assertFalse(self.store.close_seat(1))
-        self.assertIsNone(self.store.seat(1))
 
     def test_finishing_an_open_records_the_receipt_and_retires_the_old_table(self) -> None:
         self.opened(Seat(1, "slots", 10, 20))
@@ -89,13 +86,15 @@ class StoreTests(unittest.TestCase):
         self.assertEqual(self.store.hub_message(), [10, 50])
         self.assertTrue(self.store.begin_hub("b:game-hub", 10, operation_id="b"))
 
-    def test_idle_close_removes_the_seat_with_an_optional_cleanup(self) -> None:
+    def test_closing_a_seat_removes_it_with_an_optional_cleanup(self) -> None:
         self.opened(Seat(1, "slots", 10, 20))
-        self.store.close_idle(1, "games.idle:20", retire=Posted(10, 20))
+        self.store.close_seat(1, "games.restart:20", retire=Posted(10, 20))
         self.assertIsNone(self.store.seat(1))
-        self.assertEqual(self.records.get_effect("games.idle:20:table-delete").channel_id, 10)
+        retired = self.records.get_effect("games.restart:20:table-delete")
+        self.assertEqual((retired.kind, retired.channel_id, retired.payload), ("game_table_delete", 10, {"user_id": 1, "message_id": 20}))
         self.opened(Seat(2, "blackjack", 10, 30), "other")
-        self.store.close_idle(2, "games.idle:30", retire=None)
+        self.store.close_seat(2, "games.idle:30", retire=None)
+        self.assertIsNone(self.store.seat(2))
         self.assertIsNone(self.records.get_effect("games.idle:30:table-delete"))
 
     def test_marking_ignores_effects_that_were_never_recorded(self) -> None:

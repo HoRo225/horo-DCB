@@ -59,14 +59,11 @@ class LiveGuildTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(name_text("「{name}」 @{name} {name}。", "HoRo"), "「HoRo」 @HoRo HoRo。")
         self.assertEqual(name_text("沒有名字", "HoRo"), "沒有名字")
 
-    def test_admin_and_avatar_follow_the_cached_member(self) -> None:
+    def test_admin_follows_the_cached_member(self) -> None:
         self.assertFalse(self.live.admin(USER))
         self.guild.add(member(2, admin=True))
         self.assertTrue(self.live.admin(2))
         self.assertFalse(self.live.admin(3))
-        self.assertEqual(self.live.avatar_url(USER), f"https://cdn.example.com/{USER}.png")
-        stranger = 175928847299117063
-        self.assertEqual(self.live.avatar_url(stranger), "https://cdn.discordapp.com/embed/avatars/2.png")
 
     def test_actor_describes_the_cached_member_in_a_live_channel(self) -> None:
         self.assertEqual(

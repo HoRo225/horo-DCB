@@ -14,7 +14,7 @@ from src.games.app.play import (
     OWNER_ONLY,
     SEAT_GONE,
 )
-from src.games.app.ports import PresentError, TableGone
+from src.games.app.ports import PresentError
 from src.games.domain.rules import IDLE_SECONDS
 from src.games.domain.slots import evaluate
 from src.games.domain.table import Blackjack
@@ -196,7 +196,7 @@ class MoveTests(unittest.IsolatedAsyncioTestCase):
     async def test_round_on_a_deleted_seat_is_not_settled(self) -> None:
         game = GameHarness(self)
         table = await game.dealt("10", "10", "8", "8")
-        game.store.close_seat(PLAYER)
+        game.store.close_seat(PLAYER, "gone", retire=None)
         result, reply = await game.click("stand", table)
         self.assertEqual(result["code"], "seat_gone")
         self.assertEqual(reply.answers(), [("notice", SEAT_GONE, "error", True)])
@@ -494,50 +494,18 @@ class IdleTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual([table.player_id for table in game.tables.live()], [2, 3])
 
 
-class RestoreTests(unittest.IsolatedAsyncioTestCase):
-    async def seated(self, *games: str) -> GameHarness:
+class LeftoverTests(unittest.IsolatedAsyncioTestCase):
+    async def test_a_refused_delete_still_frees_the_seat_and_waits_for_review(self) -> None:
         game = GameHarness(self)
-        game.enrol(2)
-        for user_id, kind in zip((PLAYER, 2), games):
-            await game.ai("open_table", game=kind, user_id=user_id, token=game.token(user_id))
+        message_id = (await game.open("slots")).posted.message_id
         game.restart()
-        return game
-
-    async def test_seated_tables_are_registered(self) -> None:
-        game = await self.seated("slots", "blackjack")
-        self.assertEqual(len(game.play.restore()), 2)
-        table = game.tables.at(101)
-        self.assertEqual((table.state, table.posted.url), (Blackjack(), f"https://discord.com/channels/@me/{CHANNEL}/101"))
-        self.assertEqual(table.token, game.token(2))
-        self.assertEqual(game.presenter.edits, [])
-
-    async def test_restart_voids_old_state_tokens(self) -> None:
-        game = GameHarness(self)
-        await game.open("slots")
-        token = game.token()
-        game.restart()
-        [table] = game.play.restore()
-        self.assertNotEqual(table.token, token)
-        self.assertEqual((await game.ai("deal", token=token))["code"], "stale")
-
-    async def test_redraw_shows_the_avatar_and_drops_deleted_messages(self) -> None:
-        game = await self.seated("slots", "slots")
-        first, second = game.play.restore()
-        await game.play.redraw(first, "https://cdn.example.com/a.png")
-        self.assertEqual((first.avatar_url, game.presenter.edits[-1].message_id), ("https://cdn.example.com/a.png", 100))
-        game.presenter.edit_error = TableGone("gone")
-        await game.play.redraw(second, "avatar")
-        self.assertIsNone(game.store.seat(2))
-        self.assertIsNone(game.tables.at(101))
-
-    async def test_redraw_of_a_replaced_seat_keeps_the_new_table(self) -> None:
-        game = await self.seated("slots")
-        [restored] = game.play.restore()
-        await game.ai("open_table", game="slots")
-        game.presenter.edit_error = TableGone("gone")
-        await game.play.redraw(restored, "avatar")
-        self.assertEqual(game.store.seat(PLAYER).message_id, 101)
-        self.assertIsNotNone(game.tables.at(101))
+        game.presenter.delete_ok = False
+        await game.play.close_leftover_tables()
+        self.assertIsNone(game.store.seat(PLAYER))
+        self.assertEqual(game.presenter.deleted, [(CHANNEL, message_id)])
+        [waiting] = game.records.effects(status=WAITING)
+        self.assertEqual((waiting.effect_id, waiting.kind), (f"games.restart:{message_id}:table-delete", "game_table_delete"))
+        self.assertTrue((await game.ai("open_table", game="slots"))["ok"])
 
 
 if __name__ == "__main__":

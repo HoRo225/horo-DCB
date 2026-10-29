@@ -14,7 +14,7 @@ from src.games.adapters.discord.format import slot_symbol
 from src.games.adapters.discord.tables import SeatView, seat_view
 from src.games.adapters.discord.views import lobby_view
 from src.games.app.lobby import Lobby
-from src.games.app.ports import PresentError, TableGone
+from src.games.app.ports import PresentError
 from src.games.app.tables import LiveTable, Posted
 
 
@@ -66,10 +66,6 @@ class DiscordTables:
     def _message(self, posted: Posted) -> discord.PartialMessage:
         return self._client.get_partial_messageable(posted.channel_id).get_partial_message(posted.message_id)
 
-    def url(self, channel_id: int, message_id: int) -> str | None:
-        url = self._message(Posted(channel_id, message_id)).jump_url
-        return url if isinstance(url, str) else None
-
     async def post(self, channel_id: int, table: LiveTable) -> Posted:
         channel = self._live.channel(channel_id)
         if channel is None:
@@ -84,8 +80,6 @@ class DiscordTables:
     async def edit(self, table: LiveTable) -> None:
         try:
             await self._message(table.posted).edit(view=self.view(table))
-        except discord.NotFound as error:
-            raise TableGone(str(error)) from error
         except discord.HTTPException as error:
             raise PresentError(str(error)) from error
 
@@ -184,16 +178,3 @@ class DiscordLobbyBoard:
             pass
         except discord.HTTPException:
             logging.warning("Previous game hub message could not be deleted.")
-
-    async def refresh(self, hub: list[int]) -> None:
-        message = self._client.get_partial_messageable(hub[0]).get_partial_message(hub[1])
-        try:
-            if file := await self._banner():
-                try:
-                    await message.edit(view=lobby_view(self._live.bot_name()), attachments=[file])
-                    return
-                except discord.Forbidden:
-                    logging.warning("Game lobby banner was refused; refreshing without it.")
-            await message.edit(view=lobby_view(self._live.bot_name(), banner=False), attachments=[])
-        except discord.HTTPException:
-            logging.warning("Published game lobby could not be refreshed.")

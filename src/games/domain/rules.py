@@ -17,7 +17,7 @@ OUTCOMES = {
 }
 TABLE_RULES = (
     "- 每人一張賭桌，開新桌會刪掉舊桌。\n"
-    "- Bot 重新啟動時，進行中的那局作廢。\n"
+    "- Bot 重新啟動時會收掉所有賭桌，請重新開桌。\n"
 )
 BLACKJACK_BRIEF = (
     "玩法　叫牌或停牌，比{name}更接近 21 點就贏\n"
@@ -48,7 +48,7 @@ def slot_rules(symbol: Callable[[str], str]) -> list[tuple[str, str]]:
                    + f"\n- 前兩格是 {symbol('cherry')}{symbol('cherry')}、第三格不是：×{slots.CHERRY_PAIR}"
                    "（橫線、斜線從左數，直線從上數）"),
         ("連線", f"- 3×3 盤面共 {len(slots.LINES)} 條線：3 橫、3 直、2 斜，各線倍數相加。"),
-        ("賭桌", f"- 每人一張賭桌，開新桌會刪掉舊桌。\n- 閒置 {IDLE_SECONDS // 60} 分鐘會自動關桌。"),
+        ("賭桌", TABLE_RULES + f"- 閒置 {IDLE_SECONDS // 60} 分鐘會自動關桌。"),
     ]
 
 

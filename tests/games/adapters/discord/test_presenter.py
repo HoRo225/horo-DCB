@@ -8,7 +8,7 @@ import discord
 from src.core.adapters.discord.brand import ICONS
 from src.core.adapters.discord.live import LiveGuild
 from src.games.adapters.discord.presenter import DiscordLobbyBoard, DiscordTables, draw_banner
-from src.games.app.ports import PresentError, TableGone
+from src.games.app.ports import PresentError
 from src.games.app.tables import LiveTable, Posted
 from src.games.domain.table import Slots
 from tests.support import testing
@@ -27,7 +27,7 @@ def galleries(view: discord.ui.LayoutView) -> int:
 
 class Messages:
     def __init__(self) -> None:
-        self.message = MagicMock(edit=AsyncMock(), delete=AsyncMock(), jump_url=f"https://discord.com/channels/@me/{CHANNEL}/20")
+        self.message = MagicMock(edit=AsyncMock(), delete=AsyncMock())
         self.lookups: list[tuple[int, int]] = []
 
     def get_partial_messageable(self, channel_id: int) -> SimpleNamespace:
@@ -95,17 +95,14 @@ class TableMessageTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(PresentError):
             await self.presenter.post(CHANNEL + 1, self.table)
 
-    async def test_editing_redraws_and_names_a_deleted_message(self) -> None:
+    async def test_editing_redraws_and_reports_failures(self) -> None:
         await self.presenter.edit(self.table)
         self.assertEqual(self.messages.lookups, [(CHANNEL, 20)])
         self.assertEqual(self.messages.message.edit.await_args.kwargs["view"].table, self.table)
-        self.messages.message.edit.side_effect = http(discord.NotFound, 404)
-        with self.assertRaises(TableGone):
-            await self.presenter.edit(self.table)
-        self.messages.message.edit.side_effect = http(discord.HTTPException, 500)
-        with self.assertRaises(PresentError) as raised:
-            await self.presenter.edit(self.table)
-        self.assertNotIsInstance(raised.exception, TableGone)
+        for error in (http(discord.NotFound, 404), http(discord.HTTPException, 500)):
+            self.messages.message.edit.side_effect = error
+            with self.assertRaises(PresentError):
+                await self.presenter.edit(self.table)
 
     async def test_deleting_treats_a_missing_message_as_gone(self) -> None:
         self.assertTrue(await self.presenter.delete(CHANNEL, 20))
@@ -125,9 +122,6 @@ class TableMessageTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("**睦**　再來", testing.text(tables.view(self.table)))
         content = await tables.lobby_message(self.picked(fetched=SimpleNamespace(attachments=[]), attach=False))
         self.assertIn("和睦玩一局", testing.text(content["view"]))
-
-    def test_restored_tables_link_to_their_message(self) -> None:
-        self.assertEqual(self.presenter.url(CHANNEL, 20), f"https://discord.com/channels/@me/{CHANNEL}/20")
 
     async def test_idle_closed_table_is_edited_into_a_card_without_controls(self) -> None:
         self.table.farewell = "已閒置結束"
@@ -256,16 +250,6 @@ class LobbyBoardTests(unittest.IsolatedAsyncioTestCase):
         self.old.delete.side_effect = http(discord.HTTPException, 500)
         with self.assertLogs(level="WARNING"):
             await self.board.clear([CHANNEL, 40])
-
-    async def test_refresh_reuploads_the_banner_or_drops_it_when_refused(self) -> None:
-        edit = self.messages.message.edit
-        await self.board.refresh([CHANNEL, 40])
-        [file] = edit.await_args.kwargs["attachments"]
-        self.assertEqual((file.filename, galleries(edit.await_args.kwargs["view"])), ("hub.png", 1))
-        edit.side_effect = [http(discord.Forbidden, 403), None]
-        with self.assertLogs(level="WARNING"):
-            await self.board.refresh([CHANNEL, 40])
-        self.assertEqual((edit.await_args.kwargs["attachments"], galleries(edit.await_args.kwargs["view"])), ([], 0))
 
     def test_channel_problem_needs_a_known_guild(self) -> None:
         self.assertIsNone(self.board.channel_problem(CHANNEL))

@@ -11,6 +11,7 @@ from src.games.adapters.discord.cog import HUB_QUIET_SECONDS, SWEEP_SECONDS, Gam
 from src.games.adapters.discord.presenter import DiscordTables
 from src.games.app.play import OWNER_ONLY
 from src.games.domain.rules import IDLE_SECONDS
+from src.games.domain.table import Seat
 from tests.support import testing
 from tests.support.discord import Client, Guild
 from tests.support.games import CHANNEL, GUILD, PLAYER, GameHarness, deck
@@ -227,34 +228,66 @@ class LobbyBumpTests(unittest.IsolatedAsyncioTestCase):
 
 
 class LifecycleTests(unittest.IsolatedAsyncioTestCase):
-    async def test_load_registers_items_redraws_tables_and_refreshes_the_lobby(self) -> None:
+    async def seated(self, harness: CogHarness) -> None:
+        game = harness.game
+        game.enrol(2)
+        for user_id in (PLAYER, 2):
+            await game.ai("open_table", game="slots", user_id=user_id, token=game.token(user_id))
+        harness.clock.sleep = AsyncMock(side_effect=asyncio.CancelledError)
+
+    async def test_load_deletes_every_leftover_table_even_when_its_message_is_gone(self) -> None:
         harness = CogHarness(self)
         game = harness.game
         await game.lobby.publish_hub()
-        await game.open("slots")
+        await self.seated(harness)
+        gone = discord.NotFound(MagicMock(status=404), "unknown message")
+        deletes = {(CHANNEL, 100): AsyncMock(), (CHANNEL, 101): AsyncMock(side_effect=gone)}
+        harness.client.get_partial_messageable = lambda channel_id: SimpleNamespace(
+            get_partial_message=lambda message_id: SimpleNamespace(delete=deletes[channel_id, message_id]))
+        game.presenter = harness.presenter
         game.restart()
-        harness.clock.sleep = AsyncMock(side_effect=asyncio.CancelledError)
         cog = harness.build()
         await cog.cog_load()
         harness.bot.add_dynamic_items.assert_called_once_with(cog.pick, cog.rules)
         await asyncio.gather(*harness.tasks.pending(), return_exceptions=True)
-        [table] = game.tables.live()
-        self.assertEqual(table.avatar_url, "https://cdn.discordapp.com/embed/avatars/0.png")
-        self.assertEqual(game.presenter.edits[-1].message_id, table.posted.message_id)
-        self.assertEqual(game.board.refreshed, [[CHANNEL, 500]])
+        self.assertEqual(game.store.seats(), [])
+        for message_id in (100, 101):
+            deletes[CHANNEL, message_id].assert_awaited_once()
+            effect = game.records.get_effect(f"games.restart:{message_id}:table-delete")
+            self.assertEqual((effect.kind, effect.status), ("game_table_delete", "done"))
+        self.assertEqual((game.board.sent, game.lobby.hub_message), ([(CHANNEL, 500)], [CHANNEL, 500]))
 
-    async def test_lobby_is_refreshed_only_once_the_bot_knows_its_server_name(self) -> None:
+    async def test_shutdown_before_ready_leaves_the_tables_for_the_next_start(self) -> None:
         harness = CogHarness(self)
-        await harness.game.lobby.publish_hub()
+        game = harness.game
+        await self.seated(harness)
+        game.restart()
         ready = asyncio.Event()
         harness.bot.wait_until_ready = ready.wait
-        harness.clock.sleep = AsyncMock(side_effect=asyncio.CancelledError)
         await harness.build().cog_load()
         await asyncio.sleep(0)
-        self.assertEqual(harness.game.board.refreshed, [])
+        self.assertEqual(game.presenter.deleted, [])
+        await harness.stop()
+        ready.set()
+        for _ in range(3):
+            await asyncio.sleep(0)
+        self.assertEqual(len(game.store.seats()), 2)
+        self.assertEqual(game.presenter.deleted, [])
+
+    async def test_a_table_opened_before_ready_is_kept(self) -> None:
+        harness = CogHarness(self)
+        game = harness.game
+        await self.seated(harness)
+        game.restart()
+        ready = asyncio.Event()
+        harness.bot.wait_until_ready = ready.wait
+        await harness.build().cog_load()
+        reopened = await game.open("blackjack")
         ready.set()
         await asyncio.gather(*harness.tasks.pending(), return_exceptions=True)
-        self.assertEqual(harness.game.board.refreshed, [[CHANNEL, 500]])
+        self.assertEqual(game.store.seats(), [Seat(PLAYER, "blackjack", CHANNEL, reopened.posted.message_id)])
+        self.assertEqual(game.presenter.deleted, [(CHANNEL, 100), (CHANNEL, 101)])
+        self.assertIs(game.table(), reopened)
 
     async def test_sweep_closes_idle_tables_every_minute(self) -> None:
         harness = CogHarness(self)

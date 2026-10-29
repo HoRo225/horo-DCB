@@ -24,6 +24,10 @@ class RuleTextTests(unittest.TestCase):
     def test_blackjack_rules_name_the_idle_settlement(self) -> None:
         self.assertIn("閒置 10 分鐘會自動關桌，進行中的那局以停牌結算。", dict(BLACKJACK_SECTIONS)["賭桌"])
 
+    def test_both_games_say_a_restart_closes_every_table(self) -> None:
+        for sections in (dict(BLACKJACK_SECTIONS), dict(slot_rules(str))):
+            self.assertIn("- Bot 重新啟動時會收掉所有賭桌，請重新開桌。\n", sections["賭桌"])
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -101,9 +101,6 @@ class FakePresenter:
     def symbol(self, name: str) -> str:
         return f"<{name}>"
 
-    def url(self, channel_id: int, message_id: int) -> str | None:
-        return f"https://discord.com/channels/@me/{channel_id}/{message_id}"
-
     async def post(self, channel_id: int, table: LiveTable) -> Posted:
         if self.on_post is not None:
             self.on_post()
@@ -170,7 +167,6 @@ class FakeBoard:
         self.sent: list[tuple[int, int]] = []
         self.withdrawn: list[tuple[int, int]] = []
         self.cleared: list[list[int] | None] = []
-        self.refreshed: list[list[int]] = []
         self.post_error: BaseException | None = None
         self.withdraw_ok = True
         self.drawing: Callable[[], Awaitable[object]] | None = None
@@ -201,9 +197,6 @@ class FakeBoard:
 
     async def clear(self, hub: list[int] | None) -> None:
         self.cleared.append(hub)
-
-    async def refresh(self, hub: list[int]) -> None:
-        self.refreshed.append(hub)
 
 
 class GameHarness:

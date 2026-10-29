@@ -29,10 +29,6 @@ def can_send(channel: discord.abc.GuildChannel | discord.Thread, member: discord
     return bool(permissions.view_channel and sending)
 
 
-def default_avatar_url(user_id: int) -> str:
-    return f"https://cdn.discordapp.com/embed/avatars/{(user_id >> 22) % 6}.png"
-
-
 def message_source(message: discord.Message) -> Source:
     return Source(
         message_id=message.id,
@@ -98,10 +94,6 @@ class LiveGuild:
     def admin(self, user_id: int) -> bool:
         member = self.member(user_id)
         return member is not None and bool(member.guild_permissions.administrator)
-
-    def avatar_url(self, user_id: int) -> str:
-        member = self.member(user_id)
-        return member.display_avatar.url if member is not None else default_avatar_url(user_id)
 
     async def fetch_member(self, user_id: int) -> discord.Member:
         for _ in range(2):

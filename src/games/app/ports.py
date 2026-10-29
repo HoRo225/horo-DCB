@@ -13,10 +13,6 @@ class PresentError(Exception):
     pass
 
 
-class TableGone(PresentError):
-    pass
-
-
 class Refused(Exception):
     def __init__(self, text: str) -> None:
         super().__init__(text)
@@ -52,8 +48,6 @@ class GameStore(Protocol):
 
     def seats(self) -> list[Seat]: ...
 
-    def close_seat(self, user_id: int) -> bool: ...
-
     def prior(self, operation_id: str, inputs: Mapping[str, object]) -> Mapping[str, object] | None: ...
 
     def remember(
@@ -86,7 +80,7 @@ class GameStore(Protocol):
         result: Mapping[str, object], *, retire: Posted | None,
     ) -> None: ...
 
-    def close_idle(self, user_id: int, operation_id: str, *, retire: Posted | None) -> None: ...
+    def close_seat(self, user_id: int, operation_id: str, *, retire: Posted | None) -> None: ...
 
 
 class Players(Protocol):
@@ -95,8 +89,6 @@ class Players(Protocol):
 
 class TablePresenter(Protocol):
     def symbol(self, name: str) -> str: ...
-
-    def url(self, channel_id: int, message_id: int) -> str | None: ...
 
     async def post(self, channel_id: int, table: LiveTable) -> Posted: ...
 
@@ -125,8 +117,6 @@ class LobbyBoard(Protocol):
     async def withdraw(self, channel_id: int, message_id: int) -> bool: ...
 
     async def clear(self, hub: list[int] | None) -> None: ...
-
-    async def refresh(self, hub: list[int]) -> None: ...
 
 
 class RemarkWriter(Protocol):
