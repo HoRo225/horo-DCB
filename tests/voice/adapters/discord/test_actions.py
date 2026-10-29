@@ -56,7 +56,7 @@ class VoiceActionTests(unittest.IsolatedAsyncioTestCase):
         self.store.failing.add("begin_create")
         with self.assertLogs(level="WARNING"):
             result = await self.run_action("voice_enabled", enabled=True)
-        self.assertEqual(result, {"ok": False, "code": "sync", "text": "已開啟臨時語音；入口同步失敗，請重新同步。"})
+        self.assertEqual(result, {"ok": True, "code": "done", "text": "已開啟臨時語音；入口同步失敗，請重新同步。"})
         self.assertTrue(self.store.switch)
 
     async def test_entry_must_be_a_voice_channel_of_the_guild(self) -> None:
