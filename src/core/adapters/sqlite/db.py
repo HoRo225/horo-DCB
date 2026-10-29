@@ -7,7 +7,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import IO
 
-from src.core.adapters.sqlite.migrations import MIGRATIONS
+from src.core.adapters.sqlite.migrations import BASELINE, BASELINE_VERSION, MIGRATIONS
 from src.core.app.config import DATA_DIR
 
 DB_PATH = DATA_DIR / "horo.db"
@@ -19,11 +19,21 @@ def open_db(path: Path | str, migrations: Sequence[str] = MIGRATIONS) -> sqlite3
         Path(path).parent.mkdir(parents=True, exist_ok=True)
     db = sqlite3.connect(path, isolation_level=None)
     (version,) = db.execute("PRAGMA user_version").fetchone()
-    if version > len(migrations):
+    latest = BASELINE_VERSION + len(migrations)
+    if 0 < version < BASELINE_VERSION:
         db.close()
-        raise RuntimeError(f"{path} is schema v{version}, newer than this code (v{len(migrations)})")
+        raise RuntimeError(
+            f"{path} is schema v{version}, which this code no longer upgrades; "
+            f"upgrade it to v{BASELINE_VERSION} with an older release first"
+        )
+    if version > latest:
+        db.close()
+        raise RuntimeError(f"{path} is schema v{version}, newer than this code (v{latest})")
+    steps = [(BASELINE_VERSION, BASELINE)] if version == 0 else []
+    start = max(version, BASELINE_VERSION)
+    steps += enumerate(migrations[start - BASELINE_VERSION:], start + 1)
     try:
-        for n, sql in enumerate(migrations[version:], version + 1):
+        for n, sql in steps:
             try:
                 db.executescript(f"BEGIN; {sql}\nPRAGMA user_version = {n}; COMMIT;")
             finally:
