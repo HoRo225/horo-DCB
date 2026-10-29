@@ -10,5 +10,3 @@ multidict==6.9.1
 propcache==0.5.4
 yarl==1.25.1
 Pillow==12.3.0
-packaging==26.3
-typing-extensions==4.16.0

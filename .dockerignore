@@ -1,6 +1,8 @@
-.env
 .git
 **/__pycache__
 *.md
 secrets
 docker
+.venv
+.audit
+tests
