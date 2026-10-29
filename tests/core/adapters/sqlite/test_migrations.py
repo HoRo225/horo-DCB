@@ -179,6 +179,28 @@ class UpgradeTests(unittest.TestCase):
                 self.assertEqual(SqliteSteamStore(db).baselined(), baselined)
                 db.close()
 
+    def test_v19_queues_every_conversation_for_archive_and_keeps_other_rows(self) -> None:
+        db = open_db(self.path, MIGRATIONS[:4])
+        db.executescript(
+            "INSERT INTO settings VALUES ('feature.ai', 'true'); INSERT INTO voice_rooms VALUES (50, 7);"
+            "INSERT INTO codex_threads VALUES ('guild:1:channel:2:user:3', 't-channel', NULL);"
+            "INSERT INTO codex_threads VALUES ('guild:1:thread:4', 't-thread', 2);"
+            "INSERT INTO codex_pending_archives VALUES ('t-thread');"
+        )
+        db.close()
+        version, schema, rows = self.contents()
+        self.assertEqual(version, (18,))
+        self.open(MIGRATIONS[:5]).close()
+        version, upgraded, upgraded_rows = self.contents()
+        self.assertEqual(
+            (version, upgraded, upgraded_rows["codex_threads"], sorted(upgraded_rows["codex_pending_archives"])),
+            ((19,), schema, [], [("t-channel",), ("t-thread",)]),
+        )
+        self.assertEqual(
+            {name: table for name, table in upgraded_rows.items() if not name.startswith("codex_")},
+            {name: table for name, table in rows.items() if not name.startswith("codex_")},
+        )
+
     def test_versions_before_the_baseline_are_refused(self) -> None:
         raw = self.raw()
         for version in (1, 13):

@@ -84,4 +84,8 @@ SELECT 'steam.baselined', 'true'
 WHERE EXISTS (SELECT 1 FROM settings WHERE key = 'feature.steam_free_games' AND value = 'true')
    OR EXISTS (SELECT 1 FROM steam_posted);
 """,
+    """
+INSERT OR IGNORE INTO codex_pending_archives (thread_id) SELECT thread_id FROM codex_threads;
+DELETE FROM codex_threads;
+""",
 )
