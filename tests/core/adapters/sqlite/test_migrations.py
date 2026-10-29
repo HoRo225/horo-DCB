@@ -173,8 +173,6 @@ class CleanupTests(unittest.TestCase):
         raw.execute(f"PRAGMA user_version = {BASELINE_VERSION}")
         raw.executemany("INSERT INTO settings (key, value) VALUES (?, 'null')",
                         [(key,) for key in [*LIVE_SETTINGS, "feature.points", "ai.speak_channel_ids"]])
-        raw.execute("INSERT INTO requests (request_id, message_id, actor_id, guild_id, channel_id, plan) "
-                    "VALUES ('r', 1, 2, 3, 4, '{}')")
         operations = ("op-create", "op-delete", "op-done", "op-receipt", "op-table", "op-orphan")
         raw.executemany("INSERT INTO operations (operation_id, kind, inputs, status, result) VALUES (?, 'k', '{}', 'running', '{}')",
                         [(operation_id,) for operation_id in operations])
@@ -206,17 +204,16 @@ class CleanupTests(unittest.TestCase):
     def rows(self, sql: str) -> list:
         return sorted(self.db.execute(sql).fetchall())
 
-    def test_v15_keeps_only_live_settings_and_drops_requests(self) -> None:
+    def test_v15_keeps_only_live_settings(self) -> None:
         self.assertEqual(self.db.execute("PRAGMA user_version").fetchone(), (15,))
         self.assertEqual({key for (key,) in self.db.execute("SELECT key FROM settings")}, LIVE_SETTINGS)
-        self.assertEqual(self.rows("SELECT * FROM requests"), [])
 
     def test_v15_keeps_only_unresolved_voice_effects_and_their_operations(self) -> None:
         self.assertEqual(self.rows("SELECT effect_id FROM discord_effects"), [("create",), ("delete",), ("pending-delete",)])
         self.assertEqual(self.rows("SELECT operation_id FROM operations"), [("op-create",), ("op-delete",)])
 
-    def test_v15_marks_unresolved_steam_announcements_as_posted(self) -> None:
-        self.assertEqual(self.rows("SELECT app_id FROM steam_posted"), [(10,), (11,), (12,), (99,)])
+    def test_v15_marks_possibly_delivered_steam_announcements_as_posted(self) -> None:
+        self.assertEqual(self.rows("SELECT app_id FROM steam_posted"), [(10,), (99,)])
 
     def test_v15_closes_retired_games_and_archives_threads_without_a_parent(self) -> None:
         self.assertEqual(self.rows("SELECT user_id FROM game_tables"), [(1,), (2,)])

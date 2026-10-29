@@ -57,10 +57,9 @@ DELETE FROM settings WHERE key NOT IN (
     'feature.steam_free_games', 'steam.channel_id', 'steam.role_ids',
     'games.channel_id', 'games.role_ids', 'games.hub_message'
 );
-DELETE FROM requests;
 INSERT OR IGNORE INTO steam_posted (app_id)
 SELECT json_extract(payload, '$.offer.app_id') FROM discord_effects
-WHERE kind = 'steam.announce' AND status IN ('pending', 'unknown', 'failed');
+WHERE kind = 'steam.announce' AND status = 'unknown';
 DELETE FROM discord_effects
 WHERE status NOT IN ('pending', 'unknown', 'failed') OR kind NOT IN ('voice.create', 'voice.delete');
 DELETE FROM operations
