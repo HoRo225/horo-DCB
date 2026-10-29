@@ -31,6 +31,7 @@ from src.core.adapters.discord.live import LiveGuild
 from src.core.adapters.discord.receipts import DiscordReceipts
 from src.core.adapters.discord.shutdown import Shutdown
 from src.core.adapters.discord.watchdog import install_stack_dump_signal, run_watchdog
+from src.core.adapters.sqlite.backups import SqliteBackups
 from src.core.adapters.sqlite.db import DB_PATH, hold_lock, open_db
 from src.core.adapters.sqlite.operations import OperationStore
 from src.core.app.actions import ActionEngine, ActionRegistry
@@ -75,7 +76,8 @@ def compose(bot: HoroBot, codex: CodexService, db: sqlite3.Connection, guild_id:
     supervisor = Supervisor()
     live = LiveGuild(bot, guild_id, lambda: supervisor.closing)
     operations = OperationStore(db)
-    maintenance = Maintenance(operations, supervisor.group("maintenance", SCHEDULED))
+    backups = SqliteBackups(db)
+    maintenance = Maintenance(operations, backups, supervisor.group("maintenance", SCHEDULED))
     ai_settings = AiSettings(SqliteAiStore(db), codex, guild_id)
 
     def member_roles(user_id: int) -> frozenset[int] | None:
@@ -118,7 +120,7 @@ def compose(bot: HoroBot, codex: CodexService, db: sqlite3.Connection, guild_id:
     admin = AdminServices(
         live=live, panels=panels, codex=codex, ai=ai_settings, access=access, voice=voice, steam=steam,
         games=lobby, effects=effects, codex_error=codex_error_text, hub_link=game_presenter.hub_link,
-        offer_summary=offer_summary,
+        offer_summary=offer_summary, last_backup=backups.last,
     )
     shutdown = Shutdown(
         supervisor,

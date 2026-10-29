@@ -132,10 +132,12 @@ class Admin:
                        self.receipts.effect_kind())
         self.effects = EffectResolver(self.operations, kinds, live, client)
         self.panels = PanelSessionRegistry(supervisor.group("admin", PRESENTATION), supervisor.group("admin", WORK))
+        self.last_backup: int | None = None
         self.services = AdminServices(
             live=live, panels=self.panels, codex=self.codex, ai=self.ai, access=self.access, voice=self.voice,
             steam=self.steam, games=self.games, effects=self.effects, codex_error=codex_error_text,
             hub_link=DiscordTables(client, live, self.games).hub_link, offer_summary=offer_summary,
+            last_backup=lambda: self.last_backup,
         )
 
     def panel(self, interaction: discord.Interaction) -> AdminPanelView:

@@ -99,6 +99,7 @@ class LayoutBudgetTest(unittest.IsolatedAsyncioTestCase):
                 put_setting(db, switch, True)
             put_setting(db, STEAM_ROLE_IDS, list(range(1, 26)))
             admin = Admin(db)
+            admin.last_backup = int(time.time())
             interaction = testing.interaction()
             interaction.user.id = OWNER
             interaction.guild.id = G

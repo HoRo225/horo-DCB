@@ -41,10 +41,12 @@ def render_overview(view: AdminPanelView) -> None:
         for state in ("需要處理", "停用")
         if (count := sum(row[2] == state for row in rows))
     ]
+    backed_up = view.services.last_backup()
     subtitle = " · ".join(
         (
             f"{len(rows)} 項功能",
             *(counts or ["狀態正常"]),
+            "尚未備份" if backed_up is None else f"上次備份 <t:{backed_up}:R>",
             f"閒置 {IDLE_TIMEOUT_SECONDS / 60:.0f} 分鐘後自動關閉",
         )
     )

@@ -84,11 +84,13 @@ class StartupTests(unittest.IsolatedAsyncioTestCase):
             patch.object(self.bot.tree, "sync", step(order, "sync")),
             patch("src.bot.install_stack_dump_signal"),
             patch("src.bot.run_watchdog", AsyncMock()) as watchdog,
+            patch.object(self.bot.runtime.maintenance, "start") as maintenance,
         ):
             await self.bot.setup_hook()
             await asyncio.sleep(0)
         self.assertEqual(order, ["brand", "emojis", "cogs", "sync"])
         watchdog.assert_awaited_once_with(self.bot)
+        maintenance.assert_called_once_with()
 
     async def test_mentions_never_run_prefix_commands(self) -> None:
         self.bot._connection.user = MagicMock(id=BOT)

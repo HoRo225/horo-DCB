@@ -40,3 +40,4 @@ class AdminServices:
     codex_error: Callable[[str, str], str]
     hub_link: Callable[[], list[discord.ui.Button]]
     offer_summary: Callable[[SteamOffer], discord.ui.Item]
+    last_backup: Callable[[], int | None]
