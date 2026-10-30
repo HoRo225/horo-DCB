@@ -8,7 +8,7 @@ from src.ai.app.ports import StoreError
 from src.core.adapters.sqlite.db import open_db
 from src.core.adapters.sqlite.operations import OperationStore
 
-MODELS = {"primary": {"model": "gpt-b", "effort": "high"}, "fallback": None}
+MODELS = {"primary": {"model": "claude-sonnet-5-5"}, "fallback": None}
 
 
 class SqliteAiStoreTest(unittest.TestCase):

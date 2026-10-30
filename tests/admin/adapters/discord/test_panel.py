@@ -1,5 +1,4 @@
 import asyncio
-import dataclasses
 import unittest
 from unittest.mock import patch
 
@@ -8,18 +7,17 @@ import discord
 from src.core.adapters.discord.brand import BRAND_COLOUR, ICONS, NEUTRAL_COLOUR, WARN_COLOUR
 from src.core.adapters.sqlite.db import transaction
 from src.games.adapters.sqlite.store import GAMES_CHANNEL_ID, GAMES_HUB_MESSAGE
-from tests.support.admin import G, OWNER, READY, PanelCase, limits, text_channel
+from src.ai import RuntimeStatus
+from tests.support.admin import G, OWNER, PanelCase, text_channel
 from tests.support.testing import put_setting, text
 
 
 class OpenTests(PanelCase):
-    async def test_open_publishes_the_overview_with_a_one_line_rate_summary(self) -> None:
+    async def test_open_publishes_the_overview(self) -> None:
         opened = await self.open_panel()
         opened.response.defer.assert_awaited_once()
         self.assertEqual(self.title(opened), "## 🏠 管理控制台")
-        shown = self.screen(opened)
-        self.assertIn("**額度剩餘**　5 小時 80%\n", shown)
-        self.assertNotIn("▰", shown)
+        self.assertNotIn("額度", self.screen(opened))
 
     async def test_only_administrators_may_open_the_panel(self) -> None:
         refused = self.interaction(admin=False)
@@ -54,7 +52,7 @@ class OpenTests(PanelCase):
 
     async def test_overview_counts_pending_effects_and_opens_them(self) -> None:
         with transaction(self.db):
-            self.admin.operations.create_effect("e1", "action.receipt", 700, {})
+            self.admin.operations.create_effect("e1", "voice.create", 700, {})
         shown = self.screen(await self.open_panel())
         self.assertIn("有 1 項送出結果待核對", shown)
         pending = self.button("待處理項目（1）")
@@ -69,7 +67,6 @@ class NavigationTests(PanelCase):
             ("樂奈", "## 🤖 樂奈"),
             ("權限", "## 🔐 樂奈使用權限"),
             ("模型", "## 🎛️ 樂奈模型設定"),
-            ("技術", "## 🛠️ 樂奈技術資訊"),
             ("狀態", "## 🤖 樂奈"),
             ("臨時語音", "## 🎙️ 臨時語音"),
             ("Steam 免費遊戲", "## 🎮 Steam 免費遊戲"),
@@ -84,23 +81,21 @@ class NavigationTests(PanelCase):
         await self.go("樂奈")
         self.assertEqual(self.button("狀態").style, discord.ButtonStyle.primary)
         self.assertEqual(self.button("權限").style, discord.ButtonStyle.secondary)
-        reads = self.codex.get_runtime_status.await_count
+        reads = self.model.get_runtime_status.await_count
         clicked = await self.click(self.button("狀態"))
         clicked.response.defer.assert_awaited_once()
         clicked.response.edit_message.assert_not_awaited()
         clicked.edit_original_response.assert_not_awaited()
-        self.assertEqual(self.codex.get_runtime_status.await_count, reads)
+        self.assertEqual(self.model.get_runtime_status.await_count, reads)
 
     async def test_back_button_reloads_the_overview(self) -> None:
         await self.open_panel()
         await self.go("遊戲大廳")
-        self.codex.get_rate_limits.return_value = limits(50)
         with transaction(self.db):
-            self.admin.operations.create_effect("e1", "action.receipt", 700, {})
+            self.admin.operations.create_effect("e1", "voice.create", 700, {})
         clicked = await self.click(self.button("返回總覽"))
         self.assertEqual(self.title(clicked), "## 🏠 管理控制台")
         shown = self.screen(clicked)
-        self.assertIn("**額度剩餘**　5 小時 50%", shown)
         self.assertIn("有 1 項送出結果待核對", shown)
         clicked.response.edit_message.assert_awaited_once()
         with self.assertRaises(StopIteration):
@@ -116,16 +111,16 @@ class NavigationTests(PanelCase):
             self.menu = item
             return [option.label for option in item.options]
 
-        pages = ["總覽", "AI・狀態", "AI・權限", "AI・模型", "AI・技術", "臨時語音", "Steam 免費遊戲", "遊戲大廳"]
+        pages = ["總覽", "AI・狀態", "AI・權限", "AI・模型", "臨時語音", "Steam 免費遊戲", "遊戲大廳"]
         self.assertEqual(menu(), pages[1:])
         self.assertEqual(self.title(await self.choose(self.menu, "games")), "## 🎲 遊戲大廳")
         self.assertEqual(menu(), [page for page in pages if page != "遊戲大廳"])
         self.assertEqual(self.title(await self.choose(self.menu, "ai_access")), "## 🔐 樂奈使用權限")
         self.assertEqual(menu(), [page for page in pages if page != "AI・權限"])
-        self.assertEqual(self.title(await self.choose(self.menu, "ai_tech")), "## 🛠️ 樂奈技術資訊")
+        self.assertEqual(self.title(await self.choose(self.menu, "ai_models")), "## 🎛️ 樂奈模型設定")
         self.assertEqual(self.title(await self.choose(self.menu, "overview")), "## 🏠 管理控制台")
         with transaction(self.db):
-            self.admin.operations.create_effect("e1", "action.receipt", 700, {})
+            self.admin.operations.create_effect("e1", "voice.create", 700, {})
         await self.click(self.button("重新整理"))
         self.assertEqual(menu(), [*pages[1:], "待處理項目"])
         self.assertEqual(self.title(await self.choose(self.menu, "effects")), f"## {ICONS['warn']} 待處理項目")
@@ -133,16 +128,13 @@ class NavigationTests(PanelCase):
 
     async def test_refresh_redraws_current_page(self) -> None:
         await self.open_panel()
-        self.codex.get_rate_limits.return_value = limits(50)
         clicked = await self.click(self.button("重新整理"))
         self.assertEqual(self.title(clicked), "## 🏠 管理控制台")
-        self.assertIn("**額度剩餘**　5 小時 50%", self.screen(clicked))
         await self.go("樂奈")
-        await self.go("技術")
-        self.codex.get_runtime_status.return_value = dataclasses.replace(READY, thread_count=7)
+        self.model.get_runtime_status.return_value = RuntimeStatus("ready", "v0.13.7")
         clicked = await self.click(self.button("重新整理"))
-        self.assertEqual(self.title(clicked), "## 🛠️ 樂奈技術資訊")
-        self.assertIn("**持久討論串**　7 條", self.screen(clicked))
+        self.assertEqual(self.title(clicked), "## 🤖 樂奈")
+        self.assertIn("clewdr 已連線（v0.13.7）", self.screen(clicked))
 
     async def test_quick_refresh_edits_in_one_reply(self) -> None:
         await self.open_panel()
@@ -153,6 +145,12 @@ class NavigationTests(PanelCase):
 
     async def test_slow_refresh_defers_then_edits(self) -> None:
         await self.open_panel()
+
+        async def slow_status() -> RuntimeStatus:
+            await asyncio.sleep(0.01)
+            return RuntimeStatus("ready", "v0.13.6")
+
+        self.model.get_runtime_status.side_effect = slow_status
         with patch("src.admin.adapters.discord.panel.QUICK_REPLY_SECONDS", 0):
             clicked = await self.click(self.button("重新整理"))
         clicked.response.defer.assert_awaited_once()

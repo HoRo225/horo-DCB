@@ -232,7 +232,7 @@ class LifecycleTests(unittest.IsolatedAsyncioTestCase):
         game = harness.game
         game.enrol(2)
         for user_id in (PLAYER, 2):
-            await game.ai("open_table", game="slots", user_id=user_id, token=game.token(user_id))
+            await game.act("open_table", game="slots", user_id=user_id, token=game.token(user_id))
         harness.clock.sleep = AsyncMock(side_effect=asyncio.CancelledError)
 
     async def test_load_deletes_every_leftover_table_even_when_its_message_is_gone(self) -> None:

@@ -1,6 +1,6 @@
 import unittest
 
-from src.ai.domain.conversation import MAX_REPLY_IMAGES, conversation_key, normalize_reply_image_urls, scope_matches
+from src.ai.domain.conversation import conversation_key, scope_matches
 
 THREAD_KEY = conversation_key(1, 5, 3, is_thread=True)
 USER_KEY = conversation_key(1, 2, 3, is_thread=False)
@@ -31,15 +31,6 @@ class ScopeMatchesTests(unittest.TestCase):
         self.assertTrue(scope_matches(THREAD_KEY, 1, 2, parent_channel_id=2, include_children=True))
         self.assertFalse(scope_matches(THREAD_KEY, 1, 2, parent_channel_id=7, include_children=True))
         self.assertFalse(scope_matches(conversation_key(1, 7, 3, is_thread=False), 1, 2, include_children=True))
-
-
-class ReplyImageTests(unittest.TestCase):
-    def test_keeps_unique_https_urls_up_to_the_limit(self) -> None:
-        urls = [f"https://img.example/{index}.png" for index in range(MAX_REPLY_IMAGES + 2)]
-        rejected = ["http://img.example/a.png", "https://user:pw@img.example/a.png", "https://img.example:8443/a.png",
-                    "https://img.example/a b.png", "", 5]
-        self.assertEqual(normalize_reply_image_urls([*rejected, urls[0], *urls]), tuple(urls[:MAX_REPLY_IMAGES]))
-        self.assertEqual(normalize_reply_image_urls("https://img.example/a.png"), ())
 
 
 if __name__ == "__main__":

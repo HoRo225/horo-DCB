@@ -2,7 +2,6 @@
 **/__pycache__
 *.md
 secrets
-docker
 .venv
 .audit
 tests

@@ -15,11 +15,11 @@ from src.steam.adapters.sqlite.store import STEAM_CHANNEL_ID, STEAM_ENABLED, STE
 from src.voice.adapters.sqlite.store import VOICE_ENABLED, VOICE_ENTRY_CHANNEL_ID
 
 LATEST = 14 + len(MIGRATIONS)
+RETIRED_AI_TABLES = {"codex_threads", "codex_pending_archives"}
 BASELINE_TABLES = {
-    "operations", "discord_effects", "settings", "game_tables", "requests",
-    "voice_rooms", "steam_posted", "codex_threads", "codex_pending_archives",
-}
-TABLES = BASELINE_TABLES - {"requests"} | {"ai_tipped"}
+    "operations", "discord_effects", "settings", "game_tables", "requests", "voice_rooms", "steam_posted",
+} | RETIRED_AI_TABLES
+TABLES = BASELINE_TABLES - {"requests"} - RETIRED_AI_TABLES | {"ai_tipped"}
 LIVE_SETTINGS = {setting.key for setting in (
     AI_ENABLED, AI_CHANNEL_IDS, AI_ROLE_IDS, AI_MODELS, VOICE_ENABLED, VOICE_ENTRY_CHANNEL_ID,
     STEAM_ENABLED, STEAM_CHANNEL_ID, STEAM_ROLE_IDS, GAMES_CHANNEL_ID, GAMES_ROLE_IDS, GAMES_HUB_MESSAGE,
@@ -179,27 +179,29 @@ class UpgradeTests(unittest.TestCase):
                 self.assertEqual(SqliteSteamStore(db).baselined(), baselined)
                 db.close()
 
-    def test_v19_queues_every_conversation_for_archive_and_keeps_other_rows(self) -> None:
-        db = open_db(self.path, MIGRATIONS[:4])
+    def test_v20_drops_retired_ai_tables_and_skips_waiting_receipts(self) -> None:
+        db = open_db(self.path, MIGRATIONS[:5])
         db.executescript(
             "INSERT INTO settings VALUES ('feature.ai', 'true'); INSERT INTO voice_rooms VALUES (50, 7);"
-            "INSERT INTO codex_threads VALUES ('guild:1:channel:2:user:3', 't-channel', NULL);"
             "INSERT INTO codex_threads VALUES ('guild:1:thread:4', 't-thread', 2);"
-            "INSERT INTO codex_pending_archives VALUES ('t-thread');"
+            "INSERT INTO discord_effects (effect_id, kind, status, payload) VALUES"
+            " ('r-pending', 'action.receipt', 'pending', '{}'), ('r-unknown', 'action.receipt', 'unknown', '{}'),"
+            " ('r-failed', 'action.receipt', 'failed', '{}'), ('r-done', 'action.receipt', 'done', '{}'),"
+            " ('v-pending', 'voice.create', 'pending', '{}');"
         )
         db.close()
         version, schema, rows = self.contents()
-        self.assertEqual(version, (18,))
-        self.open(MIGRATIONS[:5]).close()
+        self.assertEqual(version, (19,))
+        self.open(MIGRATIONS[:6]).close()
         version, upgraded, upgraded_rows = self.contents()
-        self.assertEqual(
-            (version, upgraded, upgraded_rows["codex_threads"], sorted(upgraded_rows["codex_pending_archives"])),
-            ((19,), schema, [], [("t-channel",), ("t-thread",)]),
-        )
-        self.assertEqual(
-            {name: table for name, table in upgraded_rows.items() if not name.startswith("codex_")},
-            {name: table for name, table in rows.items() if not name.startswith("codex_")},
-        )
+        self.assertEqual((version, upgraded), ((20,), [entry for entry in schema if entry[2] not in RETIRED_AI_TABLES]))
+        effects = self.raw().execute("SELECT effect_id, status, error FROM discord_effects ORDER BY effect_id").fetchall()
+        self.assertEqual(effects, [
+            ("r-done", "done", None), ("r-failed", "skipped", "kind_removed"), ("r-pending", "skipped", "kind_removed"),
+            ("r-unknown", "skipped", "kind_removed"), ("v-pending", "pending", None),
+        ])
+        unchanged = set(rows) - RETIRED_AI_TABLES - {"discord_effects"}
+        self.assertEqual({name: upgraded_rows[name] for name in unchanged}, {name: rows[name] for name in unchanged})
 
     def test_versions_before_the_baseline_are_refused(self) -> None:
         raw = self.raw()
@@ -259,9 +261,6 @@ class CleanupTests(unittest.TestCase):
         raw.executemany("INSERT INTO steam_posted (app_id) VALUES (?)", [(10,), (99,)])
         raw.executemany("INSERT INTO game_tables (user_id, game, channel_id, message_id) VALUES (?, ?, 5, ?)",
                         [(1, "blackjack", 100), (2, "slots", 101), (3, "dice", 102)])
-        raw.executemany("INSERT INTO codex_threads (conversation_key, thread_id, parent_channel_id) VALUES (?, ?, ?)", [
-            ("guild:1:thread:5", "orphan", None), ("guild:1:thread:6", "child", 4), ("guild:1:channel:2:user:3", "member", None),
-        ])
         raw.close()
         self.db = open_db(self.path, MIGRATIONS[:1])
         self.addCleanup(self.db.close)
@@ -280,10 +279,8 @@ class CleanupTests(unittest.TestCase):
     def test_v15_marks_possibly_delivered_steam_announcements_as_posted(self) -> None:
         self.assertEqual(self.rows("SELECT app_id FROM steam_posted"), [(10,), (99,)])
 
-    def test_v15_closes_retired_games_and_archives_threads_without_a_parent(self) -> None:
+    def test_v15_closes_retired_games(self) -> None:
         self.assertEqual(self.rows("SELECT user_id FROM game_tables"), [(1,), (2,)])
-        self.assertEqual(self.rows("SELECT thread_id FROM codex_threads"), [("child",), ("member",)])
-        self.assertEqual(self.rows("SELECT thread_id FROM codex_pending_archives"), [("orphan",)])
 
 
 if __name__ == "__main__":

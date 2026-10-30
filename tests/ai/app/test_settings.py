@@ -1,6 +1,7 @@
 import unittest
 
-from src.ai import DEFAULT_MODEL_SETTINGS, AiSettings, ModelChoice, ModelError, ModelSettings
+from src.ai import DEFAULT_MODEL_SETTINGS, AiSettings, ModelChoice, ModelSettings
+from src.ai.app.ports import ModelError
 from tests.support.ai import FakeModel, MemoryAiStore
 
 G = 1
@@ -48,15 +49,20 @@ class ModelSettingsTests(unittest.TestCase):
     def test_default_round_trip_and_invalid(self) -> None:
         ai, store, _model = settings()
         self.assertEqual(ai.models, DEFAULT_MODEL_SETTINGS)
-        saved = ModelSettings(ModelChoice("gpt-b", "high"), None)
+        saved = ModelSettings(ModelChoice("claude-sonnet-5-5-thinking"), None)
         self.assertTrue(ai.save_models(saved))
         self.assertEqual(ai.models, saved)
         with self.assertRaises(ValueError):
-            ai.save_models(ModelSettings(ModelChoice("bad model"), None))
+            ai.save_models(ModelSettings(ModelChoice("gpt-6-luna"), None))
         self.assertEqual(ai.models, saved)
-        store.values["models"] = {"primary": "gpt-b"}
-        with self.assertRaises(ValueError):
-            ai.models
+
+    def test_stored_settings_from_the_retired_backend_read_as_defaults(self) -> None:
+        for stored in ({"primary": "gpt-b"},
+                       {"primary": {"model": "gpt-6-luna", "effort": "high"}, "fallback": None},
+                       {"primary": {"model": "claude-haiku-5-5", "effort": None}, "fallback": None}):
+            with self.subTest(stored=stored):
+                ai, _store, _model = settings(models=stored)
+                self.assertEqual(ai.models, DEFAULT_MODEL_SETTINGS)
 
 
 class AllowlistTests(unittest.TestCase):
@@ -80,8 +86,8 @@ class AllowlistTests(unittest.TestCase):
 
     def test_saving_persists_and_only_suspend_invalidates(self) -> None:
         ai, store, _model = settings()
-        ai.set_allowlist(G, frozenset({11, 10}), roles=False, operation_id="op")
-        ai.set_allowlist(G, frozenset({20}), roles=True)
+        ai.set_allowlist(frozenset({11, 10}), roles=False, operation_id="op")
+        ai.set_allowlist(frozenset({20}), roles=True)
         self.assertEqual(store.saved[0], ("channels", [10, 11], "op"))
         self.assertTrue(ai.configured)
         self.assertTrue(ai.is_current(0, 11, 0))
@@ -90,7 +96,7 @@ class AllowlistTests(unittest.TestCase):
         self.assertFalse(ai.is_current(0, 11, 0))
         self.assertTrue(ai.is_current(0, 11, ai.channel_generation(11)))
         self.assertTrue(ai.is_current(0, 10, 0))
-        ai.set_allowlist(G, frozenset({10}), roles=False)
+        ai.set_allowlist(frozenset({10}), roles=False)
         self.assertEqual((ai.channel_ids, ai.role_ids), (frozenset({10}), frozenset({20})))
 
     def test_changes_are_validated(self) -> None:

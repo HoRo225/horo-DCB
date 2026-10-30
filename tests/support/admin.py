@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import asyncio
 import itertools
-import time
 import unittest
 from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock, MagicMock
@@ -10,19 +9,16 @@ from unittest.mock import AsyncMock, MagicMock
 import discord
 
 from src.admin.adapters.discord.cog import AdminCog
-from src.admin.adapters.discord.logins import CodexLogins
 from src.admin.adapters.discord.panel import AdminPanelView
 from src.admin.adapters.discord.ports import AdminServices
 from src.admin.adapters.discord.sessions import PanelSessionRegistry
-from src.ai import AiAccess, AiSettings, DeviceLogin, ModelInfo, RateLimits, RateWindow, RuntimeStatus
-from src.ai.adapters.discord.errors import codex_error_text
+from src.ai import AiAccess, AiSettings, RuntimeStatus
+from src.ai.adapters.discord.errors import ai_error_text
 from src.ai.adapters.sqlite.store import SqliteAiStore
 from src.core.adapters.discord.effects import EffectResolver
 from src.core.adapters.discord.live import LiveGuild
-from src.core.adapters.discord.receipts import DiscordReceipts
 from src.core.adapters.sqlite.db import open_db
 from src.core.adapters.sqlite.operations import OperationStore
-from src.core.app.actions import ActionRegistry
 from src.core.app.effects import EffectRegistry
 from src.core.app.supervisor import PRESENTATION, SCHEDULED, WORK, Supervisor
 from src.games import Lobby
@@ -43,17 +39,7 @@ from tests.support.steam import FakeSource
 from tests.support.testing import text
 
 G, OWNER = 100, 200
-READY = RuntimeStatus(reason="ready", authenticated=True, plan="plus", runtime_version="1.0", thread_count=3)
-LOGGED_OUT = RuntimeStatus(reason="auth_required", runtime_version="1.0")
-LOGIN = DeviceLogin("login-1", "https://auth.openai.com/codex/device", "ABCD-1234")
-MODELS = (
-    ModelInfo("gpt-a", "Model A", "medium", ("low", "medium")),
-    ModelInfo("gpt-b", "Model B", "high", ("high",)),
-)
-
-
-def limits(used: int) -> RateLimits:
-    return RateLimits(int(time.time()), (RateWindow("primary", used, 300, None),), None)
+READY = RuntimeStatus("ready", "v0.13.6")
 
 
 def resolved(channel: object) -> MagicMock:
@@ -75,24 +61,6 @@ def voice_channel(channel_id: int, guild: object) -> MagicMock:
     return channel
 
 
-class FakeCodex(FakeModel):
-    def __init__(self) -> None:
-        super().__init__()
-        self.get_runtime_status = AsyncMock(return_value=READY)
-        self.get_rate_limits = AsyncMock(return_value=limits(20))
-        self.get_models = AsyncMock(return_value=MODELS)
-        self.login_start = AsyncMock(return_value=LOGIN)
-        self.login_cancel = AsyncMock()
-        self.logout = AsyncMock()
-        self.login_finished: asyncio.Future[bool] = asyncio.get_running_loop().create_future()
-
-    async def wait_login(self, login_id: str, *, timeout: float = 900) -> bool:
-        if self.login_finished.cancelled():
-            self.login_finished = asyncio.get_running_loop().create_future()
-        async with asyncio.timeout(timeout):
-            return await self.login_finished
-
-
 def admin_guild() -> tuple[MagicMock, dict[int, object]]:
     guild = MagicMock()
     guild.id, guild.unavailable = G, False
@@ -109,32 +77,30 @@ def admin_guild() -> tuple[MagicMock, dict[int, object]]:
 class Admin:
     def __init__(self, db) -> None:
         self.db = db
-        self.codex = FakeCodex()
+        self.model = FakeModel()
+        self.model.get_runtime_status = AsyncMock(return_value=READY)
         self.guild, self.channels = admin_guild()
         self.client = client = MagicMock()
         client.get_guild.side_effect = lambda guild_id: self.guild if guild_id == G else None
         self.supervisor = supervisor = Supervisor()
         self.live = live = LiveGuild(client, G, lambda: supervisor.closing)
         self.operations = OperationStore(db)
-        self.ai = AiSettings(SqliteAiStore(db), self.codex, G)
-        self.access = AiAccess(self.ai, self.codex, supervisor.group("access", WORK))
+        self.ai = AiSettings(SqliteAiStore(db), self.model, G)
+        self.access = AiAccess(self.ai, self.model, supervisor.group("access", WORK))
         self.voice = Voice(SqliteVoiceStore(db), DiscordVoiceGateway(live), supervisor.group("voice", WORK))
         self.offers = FakeSource()
         steam_store = SqliteSteamStore(db)
         self.steam = Steam(steam_store, self.offers, DiscordAnnouncer(client, live), supervisor.group("steam", SCHEDULED))
         self.games = Lobby(SqliteGameStore(db), DiscordLobbyBoard(client, live), live,
                            supervisor.group("games", WORK))
-        self.receipts = DiscordReceipts(self.operations, live, client, ActionRegistry())
         kinds = EffectRegistry()
-        kinds.register(*voice_effect_kinds(self.voice), *steam_effect_kinds(self.steam, steam_store), *game_effect_kinds(),
-                       self.receipts.effect_kind())
+        kinds.register(*voice_effect_kinds(self.voice), *steam_effect_kinds(self.steam, steam_store), *game_effect_kinds())
         self.effects = EffectResolver(self.operations, kinds, live, client)
         self.panels = PanelSessionRegistry(supervisor.group("admin", PRESENTATION), supervisor.group("admin", WORK))
-        self.logins = CodexLogins(self.codex, supervisor.group("admin", WORK), seconds=900)
         self.last_backup: int | None = None
         self.services = AdminServices(
-            live=live, panels=self.panels, codex=self.codex, logins=self.logins, ai=self.ai, access=self.access, voice=self.voice,
-            steam=self.steam, games=self.games, effects=self.effects, codex_error=codex_error_text,
+            live=live, panels=self.panels, model=self.model, ai=self.ai, access=self.access, voice=self.voice,
+            steam=self.steam, games=self.games, effects=self.effects, ai_error=ai_error_text,
             hub_link=DiscordTables(client, live, self.games).hub_link, offer_summary=offer_summary,
             last_backup=lambda: self.last_backup,
         )
@@ -254,10 +220,9 @@ class PanelCase(PanelDriver):
         self.addCleanup(self.db.close)
         self.admin = Admin(self.db)
         await self.admin.ai.set_enabled(True)
-        self.codex, self.guild, self.channels = self.admin.codex, self.admin.guild, self.admin.channels
+        self.model, self.guild, self.channels = self.admin.model, self.admin.guild, self.admin.channels
         self.binding = AdminCog(self.admin.services)
         self.command = self.binding.control_panel
 
     async def asyncTearDown(self) -> None:
         await self.admin.panels.close(deadline=asyncio.get_running_loop().time() + 5)
-        await self.admin.logins.close(deadline=asyncio.get_running_loop().time() + 5)

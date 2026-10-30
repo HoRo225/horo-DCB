@@ -1,8 +1,6 @@
 from __future__ import annotations
 
-import asyncio
 import logging
-import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
@@ -19,10 +17,9 @@ from src.admin.adapters.discord.pages.common import (
     role_select,
     spacer,
 )
-from src.admin.adapters.discord.codex_login import account_items
-from src.admin.adapters.discord.ports import CodexAccount
-from src.ai import MAX_CODEX_ALLOWED_CHANNELS, RateLimits, RuntimeStatus
-from src.core.adapters.discord.brand import BRAND_COLOUR, ICONS, bar
+from src.admin.adapters.discord.ports import AiRuntime
+from src.ai import MAX_AI_ALLOWED_CHANNELS, RuntimeStatus
+from src.core.adapters.discord.brand import BRAND_COLOUR, ICONS
 from src.core.adapters.discord.channels import (
     VIEW_AND_SEND,
     is_text_channel,
@@ -46,95 +43,36 @@ class _AiState:
 
 @dataclass(slots=True)
 class AiReadings:
-    codex_status: RuntimeStatus = RuntimeStatus()
-    rate_limits: RateLimits = RateLimits()
+    status: RuntimeStatus = RuntimeStatus()
 
 
-def ai_display(view: AdminPanelView) -> tuple[str, str]:
-    status = view.state(AiReadings).codex_status
-    plan = status.plan.replace("_", " ").title() if status.plan else "未提供"
-    runtime = (
-        discord.utils.escape_markdown(status.runtime_version)
-        if status.runtime_version
-        else "未提供"
-    )
-    return plan, runtime
+def connection_text(status: RuntimeStatus) -> str:
+    if status.ready:
+        return f"clewdr 已連線（{discord.utils.escape_markdown(status.version or '版本未提供')}）"
+    return "clewdr 無法連線"
 
 
-def rate_visible(view: AdminPanelView) -> bool:
-    return view.services.ai.enabled
-
-
-async def load_codex_status(client: CodexAccount) -> RuntimeStatus:
+async def load_ai_status(model: AiRuntime) -> RuntimeStatus:
     try:
-        return await client.get_runtime_status()
+        return await model.get_runtime_status()
     except Exception:
-        logging.exception("Admin panel failed to read Codex status.")
+        logging.exception("Admin panel failed to read AI status.")
         return RuntimeStatus()
-
-
-async def load_codex_rate_limits(client: CodexAccount) -> RateLimits:
-    try:
-        return await client.get_rate_limits()
-    except Exception:
-        logging.exception("Admin panel failed to read Codex rate limits.")
-        return RateLimits(error="unavailable")
 
 
 async def load_ai(view: AdminPanelView, operation: int) -> bool:
     if not view.is_current(operation):
         logging.info("Admin panel skipped AI status update before read.")
         return False
-    status = view.spawn(load_codex_status(view.services.codex))
-    limits = view.spawn(load_codex_rate_limits(view.services.codex)) if rate_visible(view) else None
-    await asyncio.gather(*(task for task in (status, limits) if task is not None))
+    status = await load_ai_status(view.services.model)
     if not view.is_current(operation):
         logging.info("Admin panel skipped AI status update after read.")
         return False
-    readings = view.state(AiReadings)
-    readings.codex_status = status.result()
-    if limits is not None:
-        readings.rate_limits = limits.result()
+    view.state(AiReadings).status = status
     return True
 
 
-def rate_period_label(minutes: int | None, slot: str) -> str:
-    if minutes == 300:
-        return "5 小時"
-    if minutes == 10080:
-        return "每週"
-    if minutes == 43200:
-        return "30 天"
-    if minutes is None:
-        return f"週期未提供（{slot}）"
-    return f"{minutes} 分鐘"
-
-
-def rate_text(view: AdminPanelView) -> str:
-    lines = ["### 帳號額度"]
-    limits = view.state(AiReadings).rate_limits
-    if limits.fetched_at is None:
-        lines.extend(("**暫時無法取得**", "上游未提供可驗證的額度快照"))
-    else:
-        for window in limits.windows:
-            remaining = max(0, 100 - window.used_percent)
-            label = rate_period_label(window.window_minutes, window.slot)
-            lines.append(f"**{label}**　{bar(remaining / 100)} 剩餘 {remaining:g}%")
-            if window.resets_at is None:
-                lines.append("**重設時間**　未提供")
-            elif window.resets_at <= time.time():
-                lines.append(f"**重設時間**　<t:{window.resets_at}:f> · 等待上游更新")
-            else:
-                lines.append(f"**重設時間**　<t:{window.resets_at}:f>")
-        lines.append(f"**額度快照**　<t:{limits.fetched_at}:T>")
-    return "\n".join(lines)
-
-
-def rate_item(view: AdminPanelView) -> discord.ui.TextDisplay:
-    return discord.ui.TextDisplay(rate_text(view))
-
-
-def codex_stale_allowlist_counts(view: AdminPanelView) -> tuple[int | None, int | None]:
+def ai_stale_allowlist_counts(view: AdminPanelView) -> tuple[int | None, int | None]:
     access = view.services.ai
     if not access.enabled:
         return None, None
@@ -151,7 +89,7 @@ def codex_stale_allowlist_counts(view: AdminPanelView) -> tuple[int | None, int 
     )
 
 
-def codex_stale_detail(
+def ai_stale_detail(
     counts: tuple[int | None, int | None],
 ) -> str | None:
     stale_channels, stale_roles = counts
@@ -163,7 +101,7 @@ def codex_stale_detail(
     return f"{'；'.join(details)}，請重新選擇。" if details else None
 
 
-def codex_channel_permission_detail(view: AdminPanelView) -> str | None:
+def ai_channel_permission_detail(view: AdminPanelView) -> str | None:
     access = view.services.ai
     if not access.enabled or not access.channel_ids:
         return None
@@ -196,10 +134,10 @@ def codex_channel_permission_detail(view: AdminPanelView) -> str | None:
 
 def ai_state(view: AdminPanelView) -> _AiState:
     access = view.services.ai
-    status = view.state(AiReadings).codex_status
-    stale_counts = codex_stale_allowlist_counts(view)
-    permission_detail = codex_channel_permission_detail(view)
-    allowlist_detail = codex_stale_detail(stale_counts) or permission_detail
+    status = view.state(AiReadings).status
+    stale_counts = ai_stale_allowlist_counts(view)
+    permission_detail = ai_channel_permission_detail(view)
+    allowlist_detail = ai_stale_detail(stale_counts) or permission_detail
     next_step = None
     if not access.enabled:
         label, detail = "停用", "未開啟"
@@ -209,39 +147,24 @@ def ai_state(view: AdminPanelView) -> _AiState:
         label, detail = "需要處理", "白名單身分組尚未設定"
     elif allowlist_detail is not None:
         label, detail = "需要處理", allowlist_detail
-    elif status.reason == "unresponsive":
-        label, detail = "需要處理", "codex 無回應"
-        next_step = "codex 無回應，請手動重啟 codex 容器後再重新整理。"
-    elif status.reason == "unavailable":
-        label, detail = "需要處理", "codex 無法連線"
-        next_step = "請確認 codex 服務正在執行且連線 token 設定正確，再重新整理。"
     elif not status.ready:
-        label, detail = (
-            "需要處理",
-            {
-                "connecting": view.bot_text(after="服務連線中"),
-                "auth_required": "Codex 尚未登入",
-                "draining": view.bot_text(after="服務正在收尾"),
-            }.get(status.reason, view.bot_text(after="服務暫時不可用")),
-        )
+        label, detail = "需要處理", "clewdr 無法連線"
+        next_step = "clewdr 無法連線，請檢查容器與 secrets/clewdr_password。"
     else:
         label, detail = "狀態正常", ""
-    authenticated = "已登入" if status.authenticated else "未登入"
-    summary = detail or f"{ai_display(view)[0]} · {authenticated}"
+    summary = detail or connection_text(status)
     return _AiState(label, summary, next_step or detail, stale_counts, permission_detail)
 
 
 def render_ai(view: AdminPanelView, note: tuple[str, str] | None = None) -> None:
     ai = ai_state(view)
-    status = view.state(AiReadings).codex_status
-    plan = ai_display(view)[0]
-    authenticated = "已登入" if status.authenticated else "未登入"
+    status = view.state(AiReadings).status
     children = view.header(view.bot_name_md, "ai")
     children.append(
         feature_section(
             view,
             "### 目前狀態",
-            f"{status_text(ai.label)} · **{plan} · {authenticated}**",
+            f"{status_text(ai.label)} · **{connection_text(status)}**",
             "ai",
             "{name}",
             owner=view.services.ai,
@@ -257,14 +180,9 @@ def render_ai(view: AdminPanelView, note: tuple[str, str] | None = None) -> None
         children.append(
             discord.ui.TextDisplay(
                 f"### {ICONS['warn']} 最近錯誤\n"
-                f"{view.services.codex_error(code, view.bot_name)}\n**錯誤代碼**　`{code}`"
+                f"{view.services.ai_error(code, view.bot_name)}\n**錯誤代碼**　`{code}`"
             )
         )
-    children.extend((spacer(), *account_items(
-        view, status, lambda note: render_ai(view, note), lambda operation: load_ai(view, operation),
-    )))
-    if rate_visible(view):
-        children.extend((spacer(), rate_item(view)))
     children.extend(
         (
             discord.ui.Separator(),
@@ -296,15 +214,15 @@ def access_note(result: str, roles: bool, count: int) -> tuple[str, str]:
     return "ok", f"已更新 {count} 個白名單{label}。"
 
 
-def codex_channel_select(view: AdminPanelView, channel_ids: frozenset[int]) -> discord.ui.ChannelSelect:
+def ai_channel_select(view: AdminPanelView, channel_ids: frozenset[int]) -> discord.ui.ChannelSelect:
     item = view.control(
-        ("select", "codex_channel"),
+        ("select", "ai_channel"),
         lambda: discord.ui.ChannelSelect(
             channel_types=[discord.ChannelType.text],
             min_values=1,
-            max_values=MAX_CODEX_ALLOWED_CHANNELS,
+            max_values=MAX_AI_ALLOWED_CHANNELS,
         ),
-        lambda item, interaction: handle_codex_allowlist(
+        lambda item, interaction: handle_ai_allowlist(
             view, interaction, tuple(value.resolve() for value in item.values), roles=False
         ),
     )
@@ -313,7 +231,7 @@ def codex_channel_select(view: AdminPanelView, channel_ids: frozenset[int]) -> d
     return item
 
 
-async def handle_codex_allowlist(
+async def handle_ai_allowlist(
     view: AdminPanelView,
     interaction: discord.Interaction,
     items: tuple[object | None, ...],
@@ -362,17 +280,17 @@ async def handle_codex_allowlist(
     await view.run(interaction, work)
 
 
-async def pick_codex_roles(
+async def pick_ai_roles(
     view: AdminPanelView, interaction: discord.Interaction, roles: tuple[discord.Role, ...]
 ) -> None:
     if roles or not view.services.ai.role_ids:
-        await handle_codex_allowlist(view, interaction, roles, roles=True)
+        await handle_ai_allowlist(view, interaction, roles, roles=True)
         return
     await view.ask(interaction, PendingConfirm(
         view.bot_text("確認清空", "白名單身分組"),
         view.bot_text("清空後沒有任何人可以使用", "，直到重新選擇身分組。"),
         "確認清空",
-        lambda i: handle_codex_allowlist(view, i, (), roles=True),
+        lambda i: handle_ai_allowlist(view, i, (), roles=True),
     ))
 
 
@@ -407,7 +325,7 @@ def render_ai_access(view: AdminPanelView, note: tuple[str, str] | None = None) 
                 + (f"{mentions(view, channel_ids)}\n" if channel_ids else "")
                 + channel_detail
             ),
-            discord.ui.ActionRow(codex_channel_select(view, channel_ids)),
+            discord.ui.ActionRow(ai_channel_select(view, channel_ids)),
             spacer(),
             discord.ui.TextDisplay(
                 f"### 白名單身分組 · {len(role_ids)} 個\n"
@@ -418,10 +336,10 @@ def render_ai_access(view: AdminPanelView, note: tuple[str, str] | None = None) 
             discord.ui.ActionRow(
                 role_select(
                     view,
-                    "codex_role",
+                    "ai_role",
                     "選擇白名單身分組（清空即暫停）",
                     role_ids,
-                    lambda i, roles: pick_codex_roles(view, i, roles),
+                    lambda i, roles: pick_ai_roles(view, i, roles),
                     disabled=not channel_ids,
                 )
             ),
@@ -432,27 +350,3 @@ def render_ai_access(view: AdminPanelView, note: tuple[str, str] | None = None) 
     )
     view.set_container(*children, colour=BRAND_COLOUR, note=note)
 
-
-def render_ai_tech(view: AdminPanelView) -> None:
-    plan, runtime = ai_display(view)
-    status = view.state(AiReadings).codex_status
-    bot_active, bot_queued = view.services.codex.request_counts()
-    children = view.header(view.bot_text(after="技術資訊"), "ai_tech")
-    children.extend(
-        (
-            discord.ui.TextDisplay(
-                f"### 執行環境\n**{plan} · Runtime {runtime}**\nWeb Search Live"
-            ),
-            spacer(),
-            discord.ui.TextDisplay(
-                "### 工作與對話\n"
-                f"**持久討論串**　{status.thread_count} 條\n"
-                f"**請求**　執行 {bot_active} · 等待 {bot_queued}"
-            ),
-            spacer(),
-            discord.ui.TextDisplay("### 安全邊界\n唯讀；指令列、MCP、應用程式、外掛、子代理與全域記憶都停用"),
-            discord.ui.Separator(),
-            view.actions(),
-        )
-    )
-    view.set_container(*children, colour=BRAND_COLOUR)

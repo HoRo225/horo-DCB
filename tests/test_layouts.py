@@ -1,4 +1,3 @@
-import asyncio
 import time
 import unittest
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -13,12 +12,10 @@ from src.admin.adapters.discord.pages.games import render_games
 from src.admin.adapters.discord.pages.steam import SteamQuery, render_steam
 from src.admin.adapters.discord.pages.voice import render_voice
 from src.admin.adapters.discord.panel import PAGES
-from src.ai import ModelChoice, ModelInfo, ModelSettings, RateLimits, RateWindow, RuntimeStatus
+from src.ai import ModelChoice, ModelSettings, RuntimeStatus
 from src.ai.adapters.discord.help import help_view
 from src.ai.adapters.sqlite.store import AI_ENABLED
 from src.core.adapters.discord.brand import ICONS, WHITE, notice_view
-from src.core.adapters.discord.confirmations import Confirmations, cancelled_view, confirm_view
-from src.core.adapters.discord.receipts import receipt_view
 from src.core.adapters.sqlite.db import transaction
 from src.games.app.tables import LiveTable
 from src.games.adapters.discord.tables import seat_view
@@ -51,7 +48,7 @@ class LayoutBudgetTest(unittest.IsolatedAsyncioTestCase):
             "warn": "<:lowarn:1234567890123456789>",
             "error": "<:lrerror:1234567890123456789>",
         }
-        names = [f"bar{colour}{part}" for colour in ("gold", "empty") for part in "lmr"] + ["rana"]
+        names = [f"bar{colour}{part}" for colour in ("gold", "empty") for part in "lmr"]
         with (
             patch.dict("src.core.adapters.discord.brand.ICONS", icons),
             patch.dict("src.core.adapters.discord.brand.WHITE", {icon: icon.replace(":lg", ":lw") for icon in icons.values() if ":lg" in icon}),
@@ -110,22 +107,16 @@ class LayoutBudgetTest(unittest.IsolatedAsyncioTestCase):
             interaction.guild.get_role.return_value = None
             admin.client.get_guild.side_effect = lambda guild_id: interaction.guild
             view = admin.panel(interaction)
-            view.state(AiReadings).codex_status = RuntimeStatus(
-                reason="auth_required", plan="plus", runtime_version="1.0", thread_count=3, last_error="auth_required",
-            )
-            view.state(AiReadings).rate_limits = RateLimits(
-                int(time.time()), (RateWindow("primary", 20, 300, None),), None
-            )
+            view.state(AiReadings).status = RuntimeStatus("unavailable", None, "model_configuration_invalid")
             view.state(SteamQuery).result = SteamFetchResult(
                 frozenset(),
                 tuple(SteamOffer(n, name, "NT$1,000,000", "", image) for n in range(10)),
                 failed_app_count=10,
             )
             view.state(SteamQuery).fetched_at = int(time.time())
-            view.state(ModelEditor).catalog = tuple(
-                ModelInfo(f"gpt-{n}", f"Model {n}", "low", ("low",)) for n in range(30)
+            view.state(ModelEditor).draft = ModelSettings(
+                ModelChoice("claude-sonnet-5-5-thinking"), ModelChoice("claude-haiku-5-5-thinking"),
             )
-            view.state(ModelEditor).draft = ModelSettings(ModelChoice("gpt-0"), ModelChoice("gpt-1"))
             view.state(ModelEditor).notice = ("warn", "註" * 60)
             admin.games.set_roles(range(1, 26))
 
@@ -150,15 +141,9 @@ class LayoutBudgetTest(unittest.IsolatedAsyncioTestCase):
                 self.assertLessEqual(fits(f"{render.__name__} switched off", view), counts[render.__name__])
             for switch in (AI_ENABLED, VOICE_ENABLED, STEAM_ENABLED):
                 put_setting(db, switch, True)
-            readings = view.state(AiReadings)
-            await admin.logins.start()
-            self.addAsyncCleanup(admin.logins.close, deadline=asyncio.get_running_loop().time() + 5)
+            view.state(AiReadings).status = RuntimeStatus("ready", "v" + "9" * 100, "timeout")
             render_ai(view, ("warn", "註" * 60))
-            self.assertIn("輸入代碼 `ABCD-1234`", testing.text(view))
-            fits("render_ai with device code", view)
-            readings.codex_status = RuntimeStatus(reason="ready", authenticated=True, plan="plus", last_error="timeout")
-            render_ai(view, ("warn", "註" * 60))
-            fits("render_ai signed in", view)
+            fits("render_ai connected", view)
             view._render_pending(PendingConfirm("標" * 100, "註" * 300, "確認", AsyncMock()))
             fits("pending confirmation", view)
             put_setting(db, GAMES_HUB_MESSAGE, [10**18, 10**18])
@@ -207,17 +192,7 @@ class LayoutBudgetTest(unittest.IsolatedAsyncioTestCase):
             fits("steam offer", build_offer_view(offer, roles))
             fits("steam ended", build_ended_view(offer))
             fits("ai help", help_view(10**18, "_" * 32))
-            receipt = [{"ok": n % 2 == 0, "text": "果" * 200, "private_ref": f"ref{n}"} for n in range(3)] + [
-                {"ok": True, "text": "果" * 200}]
-            for said in ("", "說" * 1500):
-                fits(f"ai receipt explained={bool(said)}", receipt_view(receipt, said, name=host, buttons=admin.receipts.private_results.make_buttons(
-                    item["private_ref"] for item in receipt if "private_ref" in item)))
             fits("notice", notice_view("註" * 2000, title="標" * 100))
-            confirmations, token = Confirmations(MagicMock(), MagicMock(), testing.group()), "t" * 32
-            asked = [("名" * 100, "註" * 300)] * 4
-            fits("action confirmation", confirm_view(asked, (confirmations.item(token, "yes"),
-                                                             confirmations.item(token, "no"))))
-            fits("action confirmation cancelled", cancelled_view(asked))
 
 
 if __name__ == "__main__":

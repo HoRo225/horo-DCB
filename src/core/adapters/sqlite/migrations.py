@@ -88,4 +88,9 @@ WHERE EXISTS (SELECT 1 FROM settings WHERE key = 'feature.steam_free_games' AND 
 INSERT OR IGNORE INTO codex_pending_archives (thread_id) SELECT thread_id FROM codex_threads;
 DELETE FROM codex_threads;
 """,
+    """
+DROP TABLE codex_threads;
+DROP TABLE codex_pending_archives;
+UPDATE discord_effects SET status='skipped', error='kind_removed' WHERE kind='action.receipt' AND status IN ('pending','unknown','failed');
+""",
 )

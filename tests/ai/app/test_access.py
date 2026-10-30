@@ -2,7 +2,8 @@ import asyncio
 import unittest
 from types import SimpleNamespace
 
-from src.ai import AiAccess, AiSettings, ModelError
+from src.ai import AiAccess, AiSettings
+from src.ai.app.ports import ModelError
 from tests.support import testing
 from tests.support.ai import FakeModel, MemoryAiStore
 
@@ -24,7 +25,7 @@ class AiAccessTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(await self.access.change(G, frozenset({10, 11, 12}), roles=False), "updated")
         self.assertEqual(self.settings.channel_ids, frozenset({10, 11, 12}))
         self.model.cancel_revoked.assert_not_awaited()
-        self.model.archive_scope.assert_not_awaited()
+        self.model.forget_scope.assert_not_awaited()
 
     async def test_same_selection_is_unchanged(self) -> None:
         self.assertEqual(await self.access.change(G, frozenset({10, 11}), roles=False), "unchanged")
@@ -41,7 +42,7 @@ class AiAccessTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(seen["during"], ("suspended", frozenset({10, 11})))
         self.assertEqual(self.settings.channel_ids, frozenset({10}))
         self.assertEqual(self.settings.denial_reason(G, 11, ROLE), "channel")
-        self.model.archive_scope.assert_not_awaited()
+        self.model.forget_scope.assert_not_awaited()
         stopped = seen["predicate"]
         self.assertTrue(stopped(job("guild:1:channel:11:user:5")))
         self.assertTrue(stopped(job("guild:1:thread:30", parent=11)))
@@ -58,7 +59,7 @@ class AiAccessTests(unittest.IsolatedAsyncioTestCase):
     async def test_readding_a_channel_continues_old_conversations(self) -> None:
         await self.access.change(G, frozenset({10}), roles=False)
         self.assertEqual(await self.access.change(G, frozenset({10, 11}), roles=False), "updated")
-        self.model.archive_scope.assert_not_awaited()
+        self.model.forget_scope.assert_not_awaited()
         self.assertIsNone(self.settings.denial_reason(G, 11, ROLE))
 
     async def test_removed_channel_does_not_invalidate_retained_channel(self) -> None:
@@ -71,7 +72,7 @@ class AiAccessTests(unittest.IsolatedAsyncioTestCase):
     async def test_removing_a_role_stops_everyone_without_a_lookup(self) -> None:
         self.assertEqual(await self.access.change(G, frozenset({21}), roles=True), "updated")
         self.model.cancel.assert_awaited_once_with(G)
-        self.model.archive_scope.assert_not_awaited()
+        self.model.forget_scope.assert_not_awaited()
 
     async def test_removing_a_role_stops_only_members_who_lost_access(self) -> None:
         roles = {5: frozenset({21}), 6: frozenset({20})}

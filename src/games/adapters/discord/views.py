@@ -65,7 +65,7 @@ def game_pick_item(
                 return
             await interaction.response.defer()
             move = Move("open_table", user_id, interaction.guild_id, interaction.channel_id, interaction.id,
-                        play.snapshot(user_id)["state_token"], game=self.item.values[0])
+                        play.token(user_id), game=self.item.values[0])
             await play.execute(move, tables.reply(interaction))
             try:
                 await interaction.edit_original_response(view=lobby_view(tables.host()))

@@ -6,21 +6,23 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import discord
 
-from src.ai import AiSettings, ModelError, ModelReply
-from src.ai.adapters.discord.errors import codex_error_text
+from src.ai import DEFAULT_MODEL_SETTINGS, AiSettings, StoreError
+from src.ai.adapters.discord.errors import ai_error_text
 from src.ai.adapters.discord.messages import AiMessages
+from src.ai.adapters.discord.request import AiRequest, AiServices
 from src.ai.adapters.media.frames import Frames
 from src.ai.adapters.media.images import MediaReader
 from src.ai.adapters.sqlite.store import SqliteAiStore
-from src.ai.domain.conversation import MAX_PROMPT_CHARACTERS
+from src.ai.app.ports import ModelError, ModelReply
+from src.ai.domain.conversation import MAX_PROMPT_CHARACTERS, conversation_key
 from src.ai.domain.prompts import CHAIN_NOTE, CHAT_INSTRUCTIONS
 from src.core.adapters.discord.live import LiveGuild
 from src.core.adapters.sqlite.db import open_db
 from src.core.app.supervisor import PRESENTATION
 from tests.support import testing
-from tests.support.ai import FakeActions, FakeMedia, FakeModel, Games, MemoryAiStore
+from tests.support.ai import FakeMedia, FakeModel, Games, MemoryAiStore
 
-BOT, GUILD, CHANNEL, USER, ROLE = 10, 20, 30, 40, 50
+BOT, GUILD, CHANNEL, USER, ROLE, OTHER_CHANNEL = 10, 20, 30, 40, 50, 31
 STICKER_URL = "https://cdn.discordapp.com/stickers/7.png"
 TIP = "第一次來？跟我說「說明」看看我能做什麼"
 text = testing.text
@@ -85,12 +87,10 @@ class Harness:
         self.model = FakeModel()
         self.store = MemoryAiStore(**({"channel_ids": (CHANNEL,), "role_ids": (ROLE,)} | store))
         self.settings = AiSettings(self.store, self.model, GUILD)
-        self.actions = FakeActions()
         self.media = FakeMedia()
         live = LiveGuild(SimpleNamespace(get_guild=lambda guild_id: message.guild), GUILD, lambda: False)
-        self.messages = AiMessages(live, self.settings, self.model, self.actions, Games(99), self.media,
-                                   tips=self.store if tips is None else tips, cleanups=testing.group(PRESENTATION),
-                                   confirmations=MagicMock())
+        self.messages = AiMessages(live, self.settings, self.model, Games(99), self.media,
+                                   tips=self.store if tips is None else tips, cleanups=testing.group(PRESENTATION))
 
     def reply_to(self, history: dict[int, object], nearest: int) -> None:
         self.message.reference = SimpleNamespace(message_id=nearest, channel_id=CHANNEL, resolved=None)
@@ -175,7 +175,7 @@ class EntryTests(unittest.IsolatedAsyncioTestCase):
         harness = Harness(make_message())
         harness.settings.suspend(frozenset({CHANNEL}))
         await harness.send()
-        self.assertIn(codex_error_text("busy", "霍蘿"), harness.sent())
+        self.assertIn(ai_error_text("busy", "霍蘿"), harness.sent())
 
     async def test_cooldown_notice(self) -> None:
         harness = Harness(make_message())
@@ -216,14 +216,10 @@ class AnswerTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(discord.AllowedMentions.none().merge(sent.kwargs["allowed_mentions"]).to_dict(),
                          {"parse": [], "replied_user": True})
 
-    async def test_notes_share_one_line_and_the_tip_comes_once(self) -> None:
+    async def test_the_tip_comes_once(self) -> None:
         harness = Harness(make_message())
-        harness.model.chat.return_value = ModelReply("最終答案", restarted=True)
         await harness.send()
-        self.assertEqual(harness.answered(), f"-# ℹ️ 已開始新的對話（先前的無法接續） · {TIP}\n最終答案")
-        await harness.send()
-        self.assertEqual(harness.answered(), "-# ℹ️ 已開始新的對話（先前的無法接續）\n最終答案")
-        harness.model.chat.return_value = ModelReply("最終答案")
+        self.assertEqual(harness.answered(), f"-# ℹ️ {TIP}\n最終答案")
         await harness.send()
         self.assertEqual(harness.answered(), "最終答案")
 
@@ -398,7 +394,7 @@ class FailureTests(unittest.IsolatedAsyncioTestCase):
         harness = Harness(make_message())
         harness.model.admission_error = ModelError("busy")
         await harness.send()
-        self.assertIn(codex_error_text("busy", "霍蘿"), text(harness.message.progress.edit.await_args.kwargs["view"]))
+        self.assertIn(ai_error_text("busy", "霍蘿"), text(harness.message.progress.edit.await_args.kwargs["view"]))
         harness.message.progress.delete.assert_not_awaited()
         harness.model.chat.assert_not_awaited()
 
@@ -418,16 +414,23 @@ class FailureTests(unittest.IsolatedAsyncioTestCase):
         with self.assertLogs(level="ERROR"):
             await harness.send()
         sent = harness.message.channel.send.await_args.kwargs
-        self.assertIn(codex_error_text("busy", "霍蘿"), text(sent["view"]))
+        self.assertIn(ai_error_text("busy", "霍蘿"), text(sent["view"]))
         self.assertFalse(sent["reference"].fail_if_not_exists)
         harness.message.progress.edit.assert_not_awaited()
 
     async def test_unreadable_model_settings_name_the_configuration(self) -> None:
-        harness = Harness(make_message(), models={"primary": "broken"})
+        harness = Harness(make_message())
+        harness.store.models = MagicMock(side_effect=StoreError("down"))
         await harness.send()
-        self.assertIn(codex_error_text("model_configuration_invalid", "霍蘿"),
+        self.assertIn(ai_error_text("model_configuration_invalid", "霍蘿"),
                       text(harness.message.progress.edit.await_args.kwargs["view"]))
         harness.model.chat.assert_not_awaited()
+
+    async def test_stale_model_settings_answer_with_the_defaults(self) -> None:
+        harness = Harness(make_message(), models={"primary": {"model": "gpt-6-luna", "effort": "high"}, "fallback": None})
+        await harness.send()
+        self.assertEqual(harness.model.chat.await_args.kwargs["models"], DEFAULT_MODEL_SETTINGS)
+        self.assertEqual(harness.answered(), f"-# ℹ️ {TIP}\n最終答案")
 
     async def test_revoked_mid_request_deletes_progress_card(self) -> None:
         harness = Harness(make_message())
@@ -446,7 +449,6 @@ class FailureTests(unittest.IsolatedAsyncioTestCase):
         harness = Harness(make_message(f"<@{BOT}> " + "字" * (MAX_PROMPT_CHARACTERS + 1)))
         await harness.send()
         self.assertIn(f"問題最多 {MAX_PROMPT_CHARACTERS:,} 個字元", text(harness.message.progress.edit.await_args.kwargs["view"]))
-        harness.model.structured.assert_not_awaited()
         harness.model.chat.assert_not_awaited()
 
     async def test_cancel_deletes_progress_card_without_raising(self) -> None:
@@ -471,7 +473,7 @@ class FailureTests(unittest.IsolatedAsyncioTestCase):
         with self.assertLogs(level="ERROR") as logs:
             await harness.send()
         self.assertIn("failed unexpectedly", "\n".join(logs.output))
-        self.assertIn(codex_error_text("unavailable", "霍蘿"), text(harness.message.progress.edit.await_args.kwargs["view"]))
+        self.assertIn(ai_error_text("unavailable", "霍蘿"), text(harness.message.progress.edit.await_args.kwargs["view"]))
         harness.message.progress.delete.assert_not_awaited()
         harness.message.channel.send.assert_not_awaited()
 
@@ -492,14 +494,64 @@ class FailureTests(unittest.IsolatedAsyncioTestCase):
         harness.message.attachments = [attachment(1, "a.svg", "image/svg+xml")]
         harness.messages = AiMessages(
             LiveGuild(SimpleNamespace(get_guild=lambda guild_id: harness.message.guild), GUILD, lambda: False),
-            harness.settings, harness.model, harness.actions, Games(99), MediaReader(Frames()),
-            tips=harness.store, cleanups=testing.group(PRESENTATION), confirmations=MagicMock(),
+            harness.settings, harness.model, Games(99), MediaReader(Frames()),
+            tips=harness.store, cleanups=testing.group(PRESENTATION),
         )
         await harness.send()
         _key, prompt, images = harness.model.chat.await_args.args
         self.assertEqual(images, ())
         self.assertIn("另有 1 個媒體無法讀取", prompt)
         self.assertIn("最終答案", harness.answered())
+
+
+def guild_view(message: SimpleNamespace, channels: dict[int, object]) -> SimpleNamespace:
+    return SimpleNamespace(
+        id=GUILD, unavailable=False, me=SimpleNamespace(display_name="霍蘿"),
+        get_member=lambda user_id: message.author, get_channel_or_thread=channels.get,
+    )
+
+
+class RequestScopeTests(unittest.IsolatedAsyncioTestCase):
+    def request(self, harness: Harness, message: SimpleNamespace, guilds: dict[int, object]) -> AiRequest:
+        live = LiveGuild(SimpleNamespace(get_guild=guilds.get), GUILD, lambda: False)
+        services = AiServices(live, harness.settings, harness.model, harness.media, testing.group(PRESENTATION),
+                              harness.store)
+        return AiRequest(
+            services, message, key=conversation_key(GUILD, message.channel.id, USER, is_thread=False),
+            content="你好", mentions_bot=True, referenced_message=None, bot_user_id=BOT, bot_name="霍蘿",
+        )
+
+    async def test_channel_epoch_revokes_only_removed_scope_and_stays_stale_after_readd(self) -> None:
+        first, second = make_message(), make_message()
+        second.channel.id = OTHER_CHANNEL
+        harness = Harness(first, channel_ids=(CHANNEL, OTHER_CHANNEL))
+        guilds = {GUILD: guild_view(first, {CHANNEL: first.channel, OTHER_CHANNEL: second.channel})}
+        request_a, request_b = self.request(harness, first, guilds), self.request(harness, second, guilds)
+        self.assertTrue(await request_a.can_send())
+        self.assertTrue(await request_b.can_send())
+        harness.settings.suspend(frozenset({CHANNEL}))
+        harness.settings.set_allowlist(frozenset({OTHER_CHANNEL}), roles=False)
+        harness.settings.resume(frozenset({CHANNEL}))
+        self.assertFalse(await request_a.can_send())
+        self.assertTrue(await request_b.can_send())
+        harness.settings.set_allowlist(frozenset({CHANNEL, OTHER_CHANNEL}), roles=False)
+        self.assertFalse(await request_a.can_send())
+        self.assertTrue(await request_b.can_send())
+
+    async def test_old_message_objects_cannot_bypass_current_guild_channel_permissions(self) -> None:
+        message = make_message()
+        harness = Harness(message)
+        guilds = {GUILD: guild_view(message, {CHANNEL: message.channel})}
+        request = self.request(harness, message, guilds)
+        self.assertTrue(await request.can_send())
+        denied = SimpleNamespace(id=CHANNEL, permissions_for=lambda member: discord.Permissions(view_channel=False))
+        guilds[GUILD] = guild_view(message, {CHANNEL: denied})
+        self.assertTrue(message.channel.permissions_for(message.author).view_channel)
+        self.assertFalse(await request.can_send())
+        guilds[GUILD] = guild_view(message, {})
+        self.assertFalse(await request.can_send())
+        guilds.clear()
+        self.assertFalse(await request.can_send())
 
 
 if __name__ == "__main__":

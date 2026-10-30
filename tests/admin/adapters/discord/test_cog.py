@@ -1,15 +1,15 @@
 import unittest
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import MagicMock
 
 import discord
 
+from src.ai.app.unavailable import UnavailableModel
 from src.bot import HoroBot
 from src.core.adapters.sqlite.db import open_db, transaction
 from src.core.adapters.sqlite.operations import OperationStore
-from tests.support.admin import G, FakeCodex, PanelDriver, admin_guild
+from tests.support.admin import G, PanelDriver, admin_guild
 
 KINDS = {
-    "action.receipt": ("AI 操作結果卡", ["核對後標記已送達", "已查核未送達，重送"]),
     "game_hub_publish": ("發布遊戲大廳", ["核對後標記已送達"]),
     "game_table_open": ("開啟賭桌", []),
     "game_table_edit": ("更新賭桌", ["核對後標記已送達"]),
@@ -24,9 +24,7 @@ class ComposedPanelTests(PanelDriver):
     async def asyncSetUp(self) -> None:
         db = open_db(":memory:")
         self.addCleanup(db.close)
-        codex = FakeCodex()
-        codex.stop_new_work, codex.close = MagicMock(), AsyncMock()
-        self.bot = HoroBot(codex, guild_id=G, db=db)
+        self.bot = HoroBot(UnavailableModel(), guild_id=G, db=db)
         self.guild, _channels = admin_guild()
         self.bot.get_guild = MagicMock(side_effect=lambda guild_id: self.guild if guild_id == G else None)
         await self.enterAsyncContext(self.bot)

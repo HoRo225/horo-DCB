@@ -26,7 +26,6 @@ ICONS = {
     "models": "🎛️",
     "refresh": "🔄",
     "save": "💾",
-    "prev": "◀️",
     "next": "▶️",
     "settings": "⚙️",
     "sync": "🔁",
@@ -43,9 +42,6 @@ ICONS = {
     "status": "📊",
     "access": "🔐",
     "thinking": "🧠",
-    "tech": "🛠️",
-    "image": "🖼️",
-    "reconnect": "🔌",
     "deadline": "⏰",
     "dotok": "🟢",
     "dotwarn": "🟠",
@@ -100,12 +96,6 @@ def bar(fraction: float, width: int = 10) -> str:
     if all(name in APP_EMOJIS for name in names):
         return "".join(APP_EMOJIS[name] for name in names)
     return "▰" * filled + "▱" * (width - filled)
-
-
-def rana_says(line: str, name: str) -> str:
-    name = f"**{discord.utils.escape_markdown(name)}**"
-    head = f"{APP_EMOJIS['rana']} {name}" if "rana" in APP_EMOJIS else name
-    return "\n".join(f"> {part}" for part in f"{head}　{line}".split("\n"))
 
 
 def bot_avatar() -> str | None:

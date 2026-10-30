@@ -10,33 +10,30 @@ from tests.support.testing import text
 
 
 class AiStatusPageTests(PanelCase):
-    async def test_rate_limits_only_on_status_page_not_tech(self) -> None:
-        await self.open_panel()
-        shown = self.screen(await self.go("樂奈"))
-        self.assertIn(
-            "### 帳號額度\n**5 小時**　▰▰▰▰▰▰▰▰▱▱ 剩餘 80%\n**重設時間**　未提供\n**額度快照**　<t:", shown
-        )
-        self.assertNotIn("已用", shown)
-        shown = self.screen(await self.go("技術"))
+    async def test_status_names_the_clewdr_version_without_quota_or_tech_tab(self) -> None:
+        shown = self.screen(await self.open_panel())
         self.assertNotIn("額度", shown)
-        self.assertIn("### 安全邊界\n唯讀；指令列、MCP、應用程式、外掛、子代理與全域記憶都停用", shown)
+        shown = self.screen(await self.go("樂奈"))
+        self.assertIn("**clewdr 已連線（v0.13.6）**", shown)
+        self.assertNotIn("額度", shown)
+        self.assertNotIn("技術", self.labels())
 
     async def test_toggle_ai_cancels_requests_only_when_turning_off(self) -> None:
         await self.open_panel()
         await self.go("樂奈")
         self.guild.me.display_name = "Horo"
-        reads = self.codex.get_runtime_status.await_count
+        reads = self.model.get_runtime_status.await_count
         await self.click(self.button("關閉樂奈"))
         clicked = await self.click(self.button("確認關閉"))
         self.assertFalse(self.admin.ai.enabled)
         self.assertIn("✅ 已關閉 Horo。", self.screen(clicked))
-        self.assertEqual(self.codex.get_runtime_status.await_count, reads + 1)
-        self.codex.cancel.assert_awaited_once_with(G)
+        self.assertEqual(self.model.get_runtime_status.await_count, reads + 1)
+        self.model.cancel.assert_awaited_once_with(G)
         self.view.toggled_at.clear()
         clicked = await self.click(self.button("開啟 Horo"))
         self.assertTrue(self.admin.ai.enabled)
         self.assertIn("✅ 已開啟 Horo。", self.screen(clicked))
-        self.codex.cancel.assert_awaited_once()
+        self.model.cancel.assert_awaited_once()
 
     async def test_turning_ai_off_asks_first_and_cancel_keeps_it_on(self) -> None:
         await self.open_panel()
@@ -47,31 +44,29 @@ class AiStatusPageTests(PanelCase):
         self.assertEqual(self.button("取消").style, discord.ButtonStyle.secondary)
         self.assertEqual(str(self.button("取消").emoji), ICONS["cancel"])
         self.assertTrue(self.admin.ai.enabled)
-        self.codex.cancel.assert_not_awaited()
+        self.model.cancel.assert_not_awaited()
         shown = self.screen(await self.click(self.button("取消")))
         self.assertIn("### 目前狀態", shown)
         self.assertNotIn("確認關閉", shown)
         self.assertTrue(self.admin.ai.enabled)
-        self.codex.cancel.assert_not_awaited()
+        self.model.cancel.assert_not_awaited()
 
-    async def test_last_codex_error_is_explained_with_its_code(self) -> None:
-        self.codex.get_runtime_status.return_value = RuntimeStatus(
-            reason="ready", authenticated=True, plan="plus", last_error="timeout",
-        )
+    async def test_last_error_is_explained_with_its_code(self) -> None:
+        self.model.get_runtime_status.return_value = RuntimeStatus("ready", "v0.13.6", "timeout")
         await self.open_panel()
         shown = self.screen(await self.go("樂奈"))
         self.assertIn("### ⚠️ 最近錯誤\n樂奈 回覆逾時，請稍後再試。\n**錯誤代碼**　`timeout`", shown)
 
-    async def test_unresponsive_codex_is_named_on_ai_page_and_overview(self) -> None:
-        self.codex.get_runtime_status.return_value = RuntimeStatus(reason="unresponsive")
-        self.admin.ai.set_allowlist(G, frozenset({600}), roles=False)
-        self.admin.ai.set_allowlist(G, frozenset({700}), roles=True)
+    async def test_unreachable_clewdr_is_named_on_ai_page_and_overview(self) -> None:
+        self.model.get_runtime_status.return_value = RuntimeStatus("unavailable")
+        self.admin.ai.set_allowlist(frozenset({600}), roles=False)
+        self.admin.ai.set_allowlist(frozenset({700}), roles=True)
         self.channels[600] = text_channel(600, self.guild)
         self.role(700)
         shown = self.screen(await self.open_panel())
-        self.assertIn("**🤖 樂奈**\ncodex 無回應", shown)
+        self.assertIn("**🤖 樂奈**\nclewdr 無法連線", shown)
         shown = self.screen(await self.go("樂奈"))
-        self.assertIn("codex 無回應，請手動重啟 codex 容器後再重新整理。", shown)
+        self.assertIn("clewdr 無法連線，請檢查容器與 secrets/clewdr_password。", shown)
         with self.assertRaises(StopIteration):
             self.button("登入")
 
@@ -93,15 +88,15 @@ class AiAccessPageTests(PanelCase):
         self.assertIn("✅ 已更新 1 個白名單頻道。", self.screen(clicked))
 
     async def test_channel_removal_saves_at_once_and_stops_only_revoked_requests(self) -> None:
-        self.admin.ai.set_allowlist(G, frozenset({600, 601}), roles=False)
+        self.admin.ai.set_allowlist(frozenset({600, 601}), roles=False)
         for channel_id in (600, 601):
             self.channels[channel_id] = text_channel(channel_id, self.guild)
         await self.open_access()
         clicked = await self.choose(self.select(self.CHANNELS), resolved(self.channels[600]))
         self.assertEqual(self.admin.ai.channel_ids, frozenset({600}))
         self.assertIn("✅ 已更新 1 個白名單頻道。", self.screen(clicked))
-        self.codex.cancel_revoked.assert_awaited_once()
-        self.codex.archive_scope.assert_not_awaited()
+        self.model.cancel_revoked.assert_awaited_once()
+        self.model.forget_scope.assert_not_awaited()
 
     async def test_channel_from_another_guild_is_rejected(self) -> None:
         await self.open_access()
@@ -124,8 +119,8 @@ class AiAccessPageTests(PanelCase):
         self.assertEqual(self.admin.ai.channel_ids, frozenset())
 
     async def test_clearing_roles_says_nobody_may_use_the_bot(self) -> None:
-        self.admin.ai.set_allowlist(G, frozenset({600}), roles=False)
-        self.admin.ai.set_allowlist(G, frozenset({700}), roles=True)
+        self.admin.ai.set_allowlist(frozenset({600}), roles=False)
+        self.admin.ai.set_allowlist(frozenset({700}), roles=True)
         self.channels[600] = text_channel(600, self.guild)
         self.role(700)
         await self.open_access()
@@ -143,8 +138,8 @@ class AiAccessPageTests(PanelCase):
         self.assertIn("已清除白名單身分組，目前沒有人可以使用樂奈。", shown)
 
     async def test_selected_channels_and_roles_are_listed_and_deleted_ones_named_by_id(self) -> None:
-        self.admin.ai.set_allowlist(G, frozenset({600, 601}), roles=False)
-        self.admin.ai.set_allowlist(G, frozenset({700, 701}), roles=True)
+        self.admin.ai.set_allowlist(frozenset({600, 601}), roles=False)
+        self.admin.ai.set_allowlist(frozenset({700, 701}), roles=True)
         self.channels[600] = text_channel(600, self.guild)
         self.role(700)
         await self.open_access()
@@ -154,8 +149,8 @@ class AiAccessPageTests(PanelCase):
 
     async def test_long_role_list_is_cut_with_the_total(self) -> None:
         role_ids = frozenset(range(700, 725))
-        self.admin.ai.set_allowlist(G, frozenset({600}), roles=False)
-        self.admin.ai.set_allowlist(G, role_ids, roles=True)
+        self.admin.ai.set_allowlist(frozenset({600}), roles=False)
+        self.admin.ai.set_allowlist(role_ids, roles=True)
         self.channels[600] = text_channel(600, self.guild)
         self.guild.get_role.side_effect = lambda role_id: object()
         await self.open_access()
@@ -186,7 +181,7 @@ class AiSwitchedOffTests(PanelCase):
     async def test_other_ai_pages_point_at_the_status_page_and_stay_editable(self) -> None:
         await self.open_panel()
         await self.go("樂奈")
-        for tab in ("權限", "模型", "技術"):
+        for tab in ("權限", "模型"):
             with self.subTest(tab):
                 shown = self.screen(await self.go(tab))
                 self.assertIn("⚪ **此功能目前關閉**　可在「AI・狀態」頁開啟；設定仍可修改。", shown)

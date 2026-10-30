@@ -1,74 +1,17 @@
 import json
 import unittest
 from pathlib import Path
-from unittest.mock import MagicMock, patch
 
 from src.ai.domain.conversation import MAX_PROMPT_CHARACTERS
-from src.ai.domain.intent import envelope_schema
-from src.ai.domain.prompts import (
-    CHAIN_NOTE,
-    CHAT_INSTRUCTIONS,
-    SUMMARY_INSTRUCTIONS,
-    Quote,
-    chat_prompt,
-    intent_instructions,
-)
-from src.bot import HoroBot
-from src.core.adapters.sqlite.db import open_db
-from src.core.app.actions import ActionEngine
+from src.ai.domain.prompts import CHAIN_NOTE, CHAT_INSTRUCTIONS, Quote, chat_prompt
 
 FIXTURES = Path(__file__).resolve().parents[2] / "fixtures"
-GOLDEN = json.loads((FIXTURES / "intent.json").read_text(encoding="utf-8"))
 PROMPTS = json.loads((FIXTURES / "prompts.json").read_text(encoding="utf-8"))
-REGISTRATION_ORDER = [
-    "open_table", "deal", "again", "hit", "stand", "leave_table",
-    "games_roles", "games_channel", "publish_hub",
-    "ai_enabled", "ai_models", "ai_channels", "ai_roles", "help",
-    "voice_enabled", "voice_entry", "voice_sync",
-    "steam_enabled", "steam_channel", "steam_roles", "steam_query",
-    "admin_status",
-    "pending_resolution",
-]
-
-
-def split_choices(schema: dict) -> tuple[dict, list[dict]]:
-    envelope = json.loads(json.dumps(schema))
-    choices = envelope["properties"]["actions"]["items"].pop("anyOf")
-    return envelope, choices
-
-
-def action_name(choice: dict) -> str:
-    (name,) = choice["properties"]["name"]["enum"]
-    return name
-
-
-class IntentGoldenTests(unittest.TestCase):
-    def setUp(self) -> None:
-        db = open_db(":memory:")
-        self.addCleanup(db.close)
-        with patch("src.bot.ActionEngine", wraps=ActionEngine) as engine:
-            HoroBot(MagicMock(), guild_id=1, db=db)
-        self.catalogue = engine.call_args.args[0].freeze()
-
-    def test_instructions_are_verbatim(self) -> None:
-        self.assertEqual(intent_instructions(self.catalogue.hints()), GOLDEN["instructions"])
-
-    def test_envelope_schema_is_unchanged(self) -> None:
-        self.assertEqual(split_choices(envelope_schema(self.catalogue))[0], split_choices(GOLDEN["schema"])[0])
-
-    def test_each_action_choice_is_unchanged(self) -> None:
-        actual = {action_name(choice): choice for choice in split_choices(envelope_schema(self.catalogue))[1]}
-        expected = {action_name(choice): choice for choice in split_choices(GOLDEN["schema"])[1]}
-        self.assertEqual(actual, expected)
-
-    def test_action_choices_follow_registration_order(self) -> None:
-        self.assertEqual([action_name(choice) for choice in split_choices(envelope_schema(self.catalogue))[1]],
-                         REGISTRATION_ORDER)
 
 
 class InstructionGoldenTests(unittest.TestCase):
     def test_model_instructions_are_verbatim(self) -> None:
-        self.assertEqual({"chat": CHAT_INSTRUCTIONS, "summary": SUMMARY_INSTRUCTIONS}, PROMPTS)
+        self.assertEqual({"chat": CHAT_INSTRUCTIONS}, PROMPTS)
 
 
 class ChatPromptTests(unittest.TestCase):

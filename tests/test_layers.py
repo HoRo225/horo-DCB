@@ -63,7 +63,7 @@ def layer_problems(path: Path, source: str) -> list[str]:
         problems += [f"{layer} imports {name}" for name in sorted(names) if not allowed(name, rules[layer])]
     if layer == "adapters":
         kind = parts[2]
-        if kind in {"sqlite", "media", "codex"}:
+        if kind in {"sqlite", "media", "claude"}:
             problems += [f"{kind} adapter imports discord" for name in names if name.split(".")[0] == "discord"]
         if kind == "discord":
             problems += ["discord adapter imports sqlite3" for name in names if name == "sqlite3"]
@@ -136,7 +136,7 @@ class LayerTests(unittest.TestCase):
             voice / "app" / "x.py": ("import aiohttp", "from src.core.adapters.sqlite.db import transaction",
                                      "from src.games import x", "from src.voice.adapters.discord import gateway"),
             voice / "adapters" / "sqlite" / "x.py": ("import discord",),
-            SRC / "ai" / "adapters" / "codex" / "x.py": ("import discord", "from discord import Embed"),
+            SRC / "ai" / "adapters" / "claude" / "x.py": ("import discord", "from discord import Embed"),
             voice / "adapters" / "discord" / "x.py": ("import sqlite3",),
         }
         for path, samples in cases.items():
@@ -148,12 +148,12 @@ class LayerTests(unittest.TestCase):
         for path, sample in (
             (voice / "adapters" / "discord" / "x.py", "QUERY = 'SELECT 1 FROM voice_rooms'"),
             (SRC / "core" / "adapters" / "discord" / "x.py", "db.execute('UPDATE operations SET status = 1')"),
-            (SRC / "ai" / "adapters" / "codex" / "rpc.py", "import sqlite3"),
-            (SRC / "ai" / "adapters" / "codex" / "conversations.py", "Q = 'SELECT 1 FROM codex_threads'"),
+            (SRC / "ai" / "adapters" / "claude" / "client.py", "import sqlite3"),
+            (SRC / "ai" / "adapters" / "claude" / "memory.py", "Q = 'SELECT 1 FROM ai_tipped'"),
         ):
             with self.subTest(sample):
                 self.assertNotEqual(sql_problems(path, sample), [])
-        for path in (SRC / "core" / "adapters" / "sqlite" / "x.py", SRC / "ai" / "adapters" / "sqlite" / "conversations.py",
+        for path in (SRC / "core" / "adapters" / "sqlite" / "x.py", SRC / "ai" / "adapters" / "sqlite" / "store.py",
                      SRC / "bot.py"):
             with self.subTest(str(path)):
                 self.assertEqual(sql_problems(path, "import sqlite3\nQ = 'SELECT 1'"), [])

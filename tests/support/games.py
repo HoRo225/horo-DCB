@@ -72,13 +72,11 @@ class FakePlayers:
     def __init__(self) -> None:
         self.members = {PLAYER: Player(PLAYER, "玩家", "https://cdn.example.com/1.png", frozenset({ROLE}))}
         self.refusal: str | None = None
-        self.fresh: list[bool] = []
 
     def demote(self, user_id: int = PLAYER) -> None:
         self.members[user_id] = dataclasses.replace(self.members[user_id], role_ids=frozenset())
 
-    async def player(self, channel_id: int, user_id: int, *, fresh: bool) -> Player:
-        self.fresh.append(fresh)
+    async def player(self, channel_id: int, user_id: int) -> Player:
         if self.refusal is not None:
             raise Refused(self.refusal)
         return self.members[user_id]
@@ -218,18 +216,18 @@ class GameHarness:
         await asyncio.gather(*self.tasks.pending(), return_exceptions=True)
 
     def token(self, user_id: int = PLAYER) -> str:
-        return self.play.snapshot(user_id)["state_token"]
+        return self.play.token(user_id)
 
     def table(self, user_id: int = PLAYER) -> LiveTable | None:
         return self.play.table_of(user_id)
 
-    def move(self, action: str, *, token: str | None = None, **fields: object) -> Move:
+    def move(self, action: str, *, token: str | None = None, source: int | None = None, **fields: object) -> Move:
         return Move(action, fields.pop("user_id", PLAYER), fields.pop("guild_id", GUILD), fields.pop("channel_id", CHANNEL),
-                    next(self.sources), self.token() if token is None else token, **fields)
+                    next(self.sources) if source is None else source, self.token() if token is None else token, **fields)
 
-    async def ai(self, action: str, *, operation_id: str | None = None, **fields: object) -> Mapping[str, object]:
-        move = self.move(action, operation_id=operation_id or f"op-{next(self.sources)}", **fields)
-        return await self.play.execute(move)
+    async def act(self, action: str, **fields: object) -> Mapping[str, object]:
+        result, _ = await self.ui(action, **fields)
+        return result
 
     async def ui(self, action: str, reply: FakeReply | None = None, **fields: object) -> tuple[Mapping[str, object], FakeReply]:
         reply = reply or FakeReply()
@@ -239,13 +237,13 @@ class GameHarness:
         return await self.ui(action, reply, table=table, token=fields.pop("token", table.token), **fields)
 
     async def open(self, game: str = "blackjack") -> LiveTable:
-        result = await self.ai("open_table", game=game)
+        result = await self.act("open_table", game=game)
         assert result["ok"], result
         return self.table()
 
     async def dealt(self, *ranks: str) -> LiveTable:
         table = self.table() or await self.open("blackjack")
         self.rigged.decks.append(deck(*ranks))
-        result = await self.ai("deal")
+        result = await self.act("deal")
         assert result["ok"], result
         return table

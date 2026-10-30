@@ -1,46 +1,4 @@
 services:
-  codex:
-    build:
-      context: docker
-      dockerfile: codex.Dockerfile
-    image: horo-dcb-codex:latest
-    logging:
-      driver: local
-    command:
-      - codex
-      - -c
-      - forced_login_method="chatgpt"
-      - -c
-      - cli_auth_credentials_store="file"
-      - -c
-      - agents.enabled=false
-      - -c
-      - mcp_servers={}
-      - -c
-      - shell_environment_policy.inherit="none"
-      - -c
-      - check_for_update_on_startup=false
-      - app-server
-      - --listen
-      - ws://0.0.0.0:8765
-      - --ws-auth
-      - capability-token
-      - --ws-token-file
-      - /run/secrets/codex_ws_token
-    volumes:
-      - codex-home:/app/codex
-    secrets:
-      - codex_ws_token
-    healthcheck:
-      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8765/readyz"]
-      interval: 60s
-      start_interval: 1s
-      timeout: 5s
-      retries: 5
-      start_period: 20s
-    stop_grace_period: 20s
-    restart: unless-stopped
-
   bot:
     build: .
     image: horo-dcb-bot:latest
@@ -52,19 +10,12 @@ services:
       - data:/app/data
     secrets:
       - discord_token
-      - codex_ws_token
-    depends_on:
-      codex:
-        condition: service_healthy
     stop_grace_period: 30s
     restart: unless-stopped
 
 secrets:
   discord_token:
     file: ./secrets/discord_token
-  codex_ws_token:
-    file: ./secrets/codex_ws_token
 
 volumes:
-  codex-home:
   data:

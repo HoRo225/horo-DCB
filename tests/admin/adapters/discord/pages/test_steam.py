@@ -27,7 +27,7 @@ class SteamPageTests(PanelCase):
 
     async def test_page_has_no_pending_items_button(self) -> None:
         with transaction(self.db):
-            self.admin.operations.create_effect("e1", "action.receipt", 700, {})
+            self.admin.operations.create_effect("e1", "voice.create", 700, {})
         await self.open_panel()
         await self.go("Steam 免費遊戲")
         self.assertEqual(self.labels(), ["返回總覽", "開啟 Steam 自動通知", "重新查詢", "重新整理"])

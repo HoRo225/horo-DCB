@@ -60,7 +60,7 @@ class ShutdownTests(unittest.IsolatedAsyncioTestCase):
         return name, Owner(name, self.order, **kwargs)
 
     async def test_owners_stop_then_work_drains_then_resolver_and_owner_closes_start_before_transport(self) -> None:
-        shutdown = self.build((self.owner("access"), self.owner("codex")), (self.owner("voice"),))
+        shutdown = self.build((self.owner("access"), self.owner("ai")), (self.owner("voice"),))
         work = self.supervisor.group("work", WORK)
         gate = asyncio.Event()
 
@@ -71,13 +71,13 @@ class ShutdownTests(unittest.IsolatedAsyncioTestCase):
         work.spawn(accepted())
         asyncio.get_running_loop().call_later(0.05, gate.set)
         await shutdown.run()
-        self.assertEqual(self.order[:4], ["access.stop", "codex.stop", "voice.stop", "interrupt"])
+        self.assertEqual(self.order[:4], ["access.stop", "ai.stop", "voice.stop", "interrupt"])
         self.assertLess(self.order.index("work.commit"), self.order.index("resolver.stop"))
         self.assertLess(self.order.index("resolver.stop"), self.order.index("access.close"))
-        self.assertLess(self.order.index("access.close"), self.order.index("codex.close"))
+        self.assertLess(self.order.index("access.close"), self.order.index("ai.close"))
         self.assertLess(self.order.index("detach"), self.order.index("transport"))
         self.assertLess(self.order.index("voice.close"), self.order.index("transport"))
-        self.assertIn("codex.close", self.order)
+        self.assertIn("ai.close", self.order)
         self.assertTrue(shutdown.safe_to_close_db)
         self.assertTrue(self.supervisor.closing)
 
@@ -124,7 +124,7 @@ class ShutdownTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_stuck_owner_is_cut_off_by_its_own_stage_limit(self) -> None:
         shutdown = self.build(
-            (self.owner("panel", stuck=True),), (self.owner("access"), self.owner("codex")), (self.owner("steam"),),
+            (self.owner("panel", stuck=True),), (self.owner("access"), self.owner("ai")), (self.owner("steam"),),
             seconds=2.0, stage_seconds=0.2,
         )
         loop = asyncio.get_running_loop()
@@ -132,12 +132,12 @@ class ShutdownTests(unittest.IsolatedAsyncioTestCase):
         with self.assertLogs(level="ERROR") as logs:
             await shutdown.run()
         self.assertLess(loop.time() - started, 1.5)
-        self.assertLessEqual({"panel.close", "access.close", "codex.close", "steam.close", "transport"}, set(self.order))
+        self.assertLessEqual({"panel.close", "access.close", "ai.close", "steam.close", "transport"}, set(self.order))
         self.assertEqual([record.getMessage() for record in logs.records], ["Panel shutdown timed out."])
         self.assertTrue(shutdown.safe_to_close_db)
 
     async def test_owners_share_the_total_deadline(self) -> None:
-        names = ("panel", "access", "codex", "steam")
+        names = ("panel", "access", "ai", "steam")
         owners = [self.owner(name) for name in names]
         shutdown = self.build(*((owner,) for owner in owners))
         await shutdown.run()

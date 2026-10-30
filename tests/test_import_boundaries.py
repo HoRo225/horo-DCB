@@ -11,9 +11,8 @@ ROOT = Path(__file__).resolve().parents[1]
 SRC = ROOT / "src"
 TESTS = ROOT / "tests"
 FEATURES = ("ai", "games", "voice", "steam", "admin")
-CODEX = "src.ai.adapters.codex"
-CODEX_STORE = "src.ai.adapters.sqlite.conversations"
-CODEX_REACH = ("src.ai.domain", "src.ai.app", "src.core.domain", "src.core.app", CODEX, CODEX_STORE)
+CLAUDE = "src.ai.adapters.claude"
+CLAUDE_REACH = ("src.ai.domain", "src.ai.app", "src.core.domain", "src.core.app", CLAUDE)
 HOSTS = frozenset({"bot", "client"})
 BOT_API = frozenset(dir(commands.Bot))
 PRIVATE_ACCESS = {
@@ -93,13 +92,13 @@ def core_problems(module: str, names: set[str]) -> list[str]:
     return sorted(name for name in names if feature_of(name))
 
 
-def codex_problems(module: str, names: set[str]) -> list[str]:
-    if within(module, CODEX):
+def claude_problems(module: str, names: set[str]) -> list[str]:
+    if within(module, CLAUDE):
         return sorted(name for name in names if within(name, "src") and name != "src.ai"
-                      and not any(within(name, home) for home in CODEX_REACH))
+                      and not any(within(name, home) for home in CLAUDE_REACH))
     if module == "src.bot":
         return []
-    return sorted(name for name in names if within(name, CODEX) or within(name, CODEX_STORE))
+    return sorted(name for name in names if within(name, CLAUDE))
 
 
 def host_name(node: ast.expr) -> str | None:
@@ -177,7 +176,7 @@ class FeatureBoundaryTests(unittest.TestCase):
     def test_boundary_detectors_catch_each_violation(self) -> None:
         for module, source in (
             ("src.admin.adapters.discord.pages.games", "from src.games.adapters.discord.access import hub_link"),
-            ("src.admin.adapters.discord.pages.ai", "from src.ai.adapters.discord.errors import codex_error_text"),
+            ("src.admin.adapters.discord.pages.ai", "from src.ai.adapters.discord.errors import ai_error_text"),
             ("src.games.app.play", "from src.ai import AiSettings"),
             ("src.steam.adapters.discord.cog", "import src.voice"),
         ):
@@ -213,7 +212,7 @@ class CoreBoundaryTests(unittest.TestCase):
         self.assertEqual({m for m in loaded if feature_of(m)}, set())
 
     def test_detector_catches_core_reaching_out(self) -> None:
-        for source in ("from src.games import Lobby", "import src.voice.app.voice", "from src.ai.adapters.codex import rpc",
+        for source in ("from src.games import Lobby", "import src.voice.app.voice", "from src.ai.adapters.claude import client",
                        "from ...ai.domain import models"):
             with self.subTest(source):
                 self.assertNotEqual(core_problems("src.core.app.x", imported(source, "src.core.app")), [])
@@ -221,43 +220,42 @@ class CoreBoundaryTests(unittest.TestCase):
         self.assertEqual(core_problems("src.bot", imported("from src.games import Lobby", "src")), [])
 
 
-class CodexBoundaryTests(unittest.TestCase):
-    def test_codex_reaches_only_ai_core_and_its_store_and_only_bot_composes_it(self) -> None:
+class ClaudeBoundaryTests(unittest.TestCase):
+    def test_claude_reaches_only_ai_and_core_and_only_bot_composes_it(self) -> None:
         for path in product_files():
             with self.subTest(path=str(path.relative_to(SRC))):
-                self.assertEqual(codex_problems(module_name(path), imports(path)), [])
+                self.assertEqual(claude_problems(module_name(path), imports(path)), [])
 
-    def test_codex_detector_catches_each_violation(self) -> None:
+    def test_claude_detector_catches_each_violation(self) -> None:
         for module, source in (
-            ("src.ai.adapters.codex.service", "from src.ai.adapters.discord.errors import codex_error_text"),
-            ("src.ai.adapters.codex.service", "from src.ai.adapters.media.images import MediaReader"),
-            ("src.ai.adapters.codex.rpc", "from src.core.adapters.discord.live import LiveGuild"),
-            ("src.ai.adapters.codex.turns", "from src.games import Lobby"),
-            ("src.ai.adapters.discord.cog", "from src.ai.adapters.codex.service import CodexService"),
-            ("src.ai.adapters.discord.cog", "from src.ai.adapters.sqlite.conversations import ConversationStore"),
-            ("src.admin.adapters.discord.pages.ai", "from src.ai.adapters import codex"),
+            ("src.ai.adapters.claude.service", "from src.ai.adapters.discord.errors import ai_error_text"),
+            ("src.ai.adapters.claude.service", "from src.ai.adapters.media.images import MediaReader"),
+            ("src.ai.adapters.claude.service", "from src.ai.adapters.sqlite.store import SqliteAiStore"),
+            ("src.ai.adapters.claude.client", "from src.core.adapters.discord.live import LiveGuild"),
+            ("src.ai.adapters.claude.memory", "from src.games import Lobby"),
+            ("src.ai.adapters.discord.cog", "from src.ai.adapters.claude.service import ClaudeService"),
+            ("src.admin.adapters.discord.pages.ai", "from src.ai.adapters.claude import service"),
         ):
             with self.subTest(source):
-                self.assertNotEqual(codex_problems(module, imported(source, module.rpartition(".")[0])), [])
+                self.assertNotEqual(claude_problems(module, imported(source, module.rpartition(".")[0])), [])
         for module, source in (
-            ("src.ai.adapters.codex.service", "from src.ai import ModelError\nfrom src.ai.app.ports import Job\n"
-                                              "from src.core.app.supervisor import track\nfrom .rpc import RpcError\n"
-                                              "from src.ai.adapters.sqlite.conversations import ConversationStore"),
-            ("src.bot", "from src.ai.adapters.codex.service import CodexService"),
+            ("src.ai.adapters.claude.service", "from src.ai.app.ports import Job, ModelError\n"
+                                               "from src.core.app.supervisor import TaskGroup\nfrom .client import ClaudeClient\n"),
+            ("src.bot", "from src.ai.adapters.claude.service import ClaudeService"),
         ):
             with self.subTest(source):
-                self.assertEqual(codex_problems(module, imported(source, module.rpartition(".")[0])), [])
+                self.assertEqual(claude_problems(module, imported(source, module.rpartition(".")[0])), [])
 
     def test_detector_resolves_every_spelling(self) -> None:
-        package = CODEX
+        package = CLAUDE
         for source, expected in (
             ("from src.ai import ModelError", {"src.ai"}),
             ("from src import ai, core", {"src.ai", "src.core"}),
             ("from src.games import adapters", {"src.games.adapters"}),
             ("import src.ai.adapters.discord.cog", {"src.ai.adapters.discord.cog"}),
             ("from ...adapters import x", {"src.ai.adapters"}),
-            ("from .. import codex", {CODEX}),
-            ("from .rpc import x", {f"{CODEX}.rpc"}),
+            ("from .. import discord", {"src.ai.adapters.discord"}),
+            ("from .client import x", {f"{CLAUDE}.client"}),
             ("if TYPE_CHECKING:\n    from src.games.store import GameStore", {"src.games.store"}),
         ):
             with self.subTest(source):
@@ -292,11 +290,11 @@ class RuntimeImportTests(unittest.TestCase):
         self.assertTrue({"discord", "sqlite3"}.isdisjoint(loaded))
         self.assertEqual({m for m in loaded if ".adapters" in m}, set())
 
-    def test_frame_worker_loads_no_discord_config_or_codex(self) -> None:
+    def test_frame_worker_loads_no_discord_config_or_claude(self) -> None:
         modules = loaded_modules("src.ai.adapters.media.frames")
         self.assertNotIn("discord", modules)
         self.assertNotIn("src.core.app.config", modules)
-        self.assertFalse({module for module in modules if within(module, CODEX)})
+        self.assertFalse({module for module in modules if within(module, CLAUDE)})
 
     def test_feature_cogs_do_not_load_other_features(self) -> None:
         for feature in set(FEATURES) - {"admin"}:

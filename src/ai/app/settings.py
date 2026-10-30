@@ -6,13 +6,13 @@ from src.ai.app.ports import AiStore, ModelError, TextModel
 from src.ai.domain.models import DEFAULT_MODEL_SETTINGS, ModelSettings, parse_model_settings
 from src.core.domain.ids import is_positive_int
 
-MAX_CODEX_ALLOWED_CHANNELS = 25
+MAX_AI_ALLOWED_CHANNELS = 25
 
 
 def valid_allowlist_ids(values: object, *, minimum: int) -> bool:
     return (
         isinstance(values, frozenset)
-        and minimum <= len(values) <= MAX_CODEX_ALLOWED_CHANNELS
+        and minimum <= len(values) <= MAX_AI_ALLOWED_CHANNELS
         and all(map(is_positive_int, values))
     )
 
@@ -73,7 +73,12 @@ class AiSettings:
     @property
     def models(self) -> ModelSettings:
         raw = self._store.models()
-        return DEFAULT_MODEL_SETTINGS if raw is None else parse_model_settings(raw)
+        if raw is None:
+            return DEFAULT_MODEL_SETTINGS
+        try:
+            return parse_model_settings(raw)
+        except ValueError:
+            return DEFAULT_MODEL_SETTINGS
 
     def save_models(self, settings: ModelSettings, *, operation_id: str | None = None) -> bool:
         payload = parse_model_settings(settings.to_payload()).to_payload()
@@ -90,11 +95,9 @@ class AiSettings:
             or not valid_allowlist_ids(selected, minimum=0 if roles else 1)
             or (roles and (not self.channel_ids or guild_id in selected))
         ):
-            raise ValueError(f"invalid Codex allowlist {'roles' if roles else 'channels'}")
+            raise ValueError(f"invalid AI allowlist {'roles' if roles else 'channels'}")
 
-    def set_allowlist(
-        self, guild_id: int, selected: frozenset[int], *, roles: bool, operation_id: str | None = None
-    ) -> bool:
+    def set_allowlist(self, selected: frozenset[int], *, roles: bool, operation_id: str | None = None) -> bool:
         return self._store.set_allowlist(sorted(selected), roles=roles, operation_id=operation_id)
 
     def channel_generation(self, channel_id: int) -> int:

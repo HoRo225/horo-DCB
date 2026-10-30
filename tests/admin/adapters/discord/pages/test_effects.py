@@ -11,6 +11,7 @@ from src.core.adapters.discord.brand import ICONS
 from src.core.adapters.sqlite.db import open_db, transaction
 from src.core.adapters.sqlite.operations import OperationStore
 from src.core.app.effects import EffectKind, EffectRegistry, MessageProof, PendingEffect
+from src.steam.domain.offers import ANNOUNCE
 from tests.support.admin import G, PanelCase
 from tests.support.testing import interaction
 
@@ -168,7 +169,8 @@ class EffectsThroughPanelTests(PanelCase):
     def pending(self, *effects: tuple[str, str]) -> None:
         with transaction(self.db):
             for effect_id, kind in effects:
-                self.admin.operations.create_effect(effect_id, kind, 700, {})
+                payload = {"offer": {"app_id": 10}, "role_ids": []} if kind == ANNOUNCE else {}
+                self.admin.operations.create_effect(effect_id, kind, 700, payload)
 
     def status(self, effect_id: str) -> str:
         return self.admin.operations.get_effect(effect_id).status
@@ -177,7 +179,7 @@ class EffectsThroughPanelTests(PanelCase):
         return next(item for item in self.view.walk_children() if isinstance(item, discord.ui.Select))
 
     async def test_skip_and_retry_ask_before_acting(self) -> None:
-        self.pending(("first", "action.receipt"), ("second", "action.receipt"))
+        self.pending(("first", ANNOUNCE), ("second", ANNOUNCE))
         await self.open_panel()
         await self.click(self.button("待處理項目（2）"))
         await self.choose(self.picker(), "second")
@@ -206,11 +208,11 @@ class EffectsThroughPanelTests(PanelCase):
         self.assertIn("已處理；僅變更通知結果，不重做原本的功能操作。", shown)
         self.assertIn("**1 項待處理**", shown)
 
-        async def resend(effect_id, *, allow_unknown, still_current):
+        async def resend(effect_id, *, still_current):
             self.assertTrue(still_current())
             return False
 
-        with patch.object(self.admin.receipts, "resend", side_effect=resend) as resent:
+        with patch.object(self.admin.steam, "retry", side_effect=resend) as resent:
             await self.click(self.button("已查核未送達，重送"))
             resent.assert_not_awaited()
             shown = self.screen(await self.click(self.button("確定要重送？無法復原")))
@@ -219,7 +221,7 @@ class EffectsThroughPanelTests(PanelCase):
 
     async def test_only_valid_actions_are_offered_and_a_message_link_confirms(self) -> None:
         self.pending(("delete", "voice.delete"), ("open", "game_table_open"),
-                     ("failed", "action.receipt"), ("sent", "action.receipt"))
+                     ("failed", ANNOUNCE), ("sent", ANNOUNCE))
         with transaction(self.db):
             self.admin.operations.update_effect("failed", "failed")
         await self.open_panel()

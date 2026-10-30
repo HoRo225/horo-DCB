@@ -84,7 +84,7 @@ class GameStore(Protocol):
 
 
 class Players(Protocol):
-    async def player(self, channel_id: int, user_id: int, *, fresh: bool) -> Player: ...
+    async def player(self, channel_id: int, user_id: int) -> Player: ...
 
 
 class TablePresenter(Protocol):

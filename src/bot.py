@@ -4,52 +4,42 @@ import logging
 import os
 import sqlite3
 from dataclasses import dataclass
-from typing import Any
 
 import discord
 from discord.ext import commands
 
 from src.admin.adapters.discord.cog import AdminCog
-from src.admin.adapters.discord.logins import CodexLogins
 from src.admin.adapters.discord.ports import AdminServices
 from src.admin.adapters.discord.sessions import PanelSessionRegistry
-from src.admin.adapters.discord.status import admin_actions
 from src.ai import AiAccess, AiSettings
-from src.ai.adapters.codex.service import LOGIN_SECONDS, CodexService
-from src.ai.adapters.discord.actions import ai_actions
 from src.ai.adapters.discord.cog import AiCog
-from src.ai.adapters.discord.errors import codex_error_text
-from src.ai.adapters.discord.help import help_actions
+from src.ai.adapters.discord.errors import ai_error_text
 from src.ai.adapters.discord.messages import AiMessages
 from src.ai.adapters.media.frames import Frames
 from src.ai.adapters.media.images import MediaReader
-from src.ai.adapters.sqlite.conversations import ConversationStore
 from src.ai.adapters.sqlite.store import SqliteAiStore
+from src.ai.app.ports import TextModel
+from src.ai.app.unavailable import UnavailableModel
 from src.core.adapters.discord.brand import load_app_emojis, report_interaction_error, sync_discord_brand
 from src.core.adapters.discord.channels import member_role_ids
-from src.core.adapters.discord.confirmations import Confirmations
-from src.core.adapters.discord.effects import EffectResolver, effect_actions
+from src.core.adapters.discord.effects import EffectResolver
 from src.core.adapters.discord.live import LiveGuild
-from src.core.adapters.discord.receipts import DiscordReceipts
 from src.core.adapters.discord.shutdown import Shutdown
 from src.core.adapters.discord.watchdog import install_stack_dump_signal, run_watchdog
 from src.core.adapters.sqlite.backups import SqliteBackups
 from src.core.adapters.sqlite.db import DB_PATH, hold_lock, open_db
 from src.core.adapters.sqlite.operations import OperationStore
-from src.core.app.actions import ActionEngine, ActionRegistry
-from src.core.app.config import CODEX_URL, AppConfig
+from src.core.app.config import AppConfig
 from src.core.app.effects import EffectRegistry
 from src.core.app.maintenance import Maintenance
 from src.core.app.supervisor import PRESENTATION, REQUEST, SCHEDULED, WORK, Supervisor, TaskGroup
 from src.games import Lobby, Play, Tables
 from src.games.adapters.discord.access import DiscordPlayers
-from src.games.adapters.discord.actions import game_actions
 from src.games.adapters.discord.cog import GamesCog
 from src.games.adapters.discord.effects import game_effect_kinds
 from src.games.adapters.discord.presenter import DiscordLobbyBoard, DiscordTables
 from src.games.adapters.sqlite.store import SqliteGameStore
 from src.steam import Steam
-from src.steam.adapters.discord.actions import steam_actions
 from src.steam.adapters.discord.announcer import DiscordAnnouncer
 from src.steam.adapters.discord.cog import SteamCog
 from src.steam.adapters.discord.effects import steam_effect_kinds
@@ -57,7 +47,6 @@ from src.steam.adapters.discord.views import offer_summary
 from src.steam.adapters.http.provider import SteamOfferProvider
 from src.steam.adapters.sqlite.store import SqliteSteamStore
 from src.voice import Voice
-from src.voice.adapters.discord.actions import voice_actions
 from src.voice.adapters.discord.cog import VoiceCog
 from src.voice.adapters.discord.effects import voice_effect_kinds
 from src.voice.adapters.discord.gateway import DiscordVoiceGateway
@@ -71,23 +60,22 @@ class Runtime:
     watchdog: TaskGroup
     shutdown: Shutdown
     cogs: tuple[commands.Cog, ...]
-    dynamic_items: tuple[type[discord.ui.DynamicItem[Any]], ...]
 
 
-def compose(bot: HoroBot, codex: CodexService, db: sqlite3.Connection, guild_id: int) -> Runtime:
+def compose(bot: HoroBot, model: TextModel, db: sqlite3.Connection, guild_id: int) -> Runtime:
     supervisor = Supervisor()
     live = LiveGuild(bot, guild_id, lambda: supervisor.closing)
     operations = OperationStore(db)
     backups = SqliteBackups(db)
     maintenance = Maintenance(operations, backups, supervisor.group("maintenance", SCHEDULED))
     ai_store = SqliteAiStore(db)
-    ai_settings = AiSettings(ai_store, codex, guild_id)
+    ai_settings = AiSettings(ai_store, model, guild_id)
 
     def member_roles(user_id: int) -> frozenset[int] | None:
         member = live.member(user_id)
         return member_role_ids(member) if member is not None else None
 
-    access = AiAccess(ai_settings, codex, supervisor.group("access", WORK), role_ids_for_user=member_roles)
+    access = AiAccess(ai_settings, model, supervisor.group("access", WORK), role_ids_for_user=member_roles)
     voice = Voice(SqliteVoiceStore(db), DiscordVoiceGateway(live), supervisor.group("voice", WORK))
     steam_store = SqliteSteamStore(db)
     steam = Steam(steam_store, SteamOfferProvider(), DiscordAnnouncer(bot, live), supervisor.group("steam", SCHEDULED))
@@ -98,45 +86,26 @@ def compose(bot: HoroBot, codex: CodexService, db: sqlite3.Connection, guild_id:
     games_cog = GamesCog(bot, play, lobby, game_tables, game_presenter, game_players, live,
                          supervisor.group("games.cog", SCHEDULED))
     panels = PanelSessionRegistry(supervisor.group("admin", PRESENTATION), supervisor.group("admin", WORK))
-    logins = CodexLogins(codex, supervisor.group("admin", WORK), seconds=LOGIN_SECONDS)
-    registry = ActionRegistry()
-    receipts = DiscordReceipts(operations, live, bot, registry)
     kinds = EffectRegistry()
-    kinds.register(
-        *voice_effect_kinds(voice), *steam_effect_kinds(steam, steam_store), *game_effect_kinds(),
-        receipts.effect_kind(),
-    )
+    kinds.register(*voice_effect_kinds(voice), *steam_effect_kinds(steam, steam_store), *game_effect_kinds())
     effects = EffectResolver(operations, kinds, live, bot)
-    registry.register(
-        *game_actions(play, lobby, live),
-        ai_actions(ai_settings, access, codex.get_models),
-        help_actions(lobby, live.bot_name),
-        voice_actions(voice, live),
-        steam_actions(steam, live),
-        admin_actions(lambda: ai_settings.enabled, lambda: voice.enabled,
-                      lambda: steam.status().running, lambda: len(effects.pending()), lobby.attention),
-        effect_actions(effects),
-    )
-    actions = ActionEngine(registry, operations, live, receipts, supervisor.group("actions", WORK))
-    confirmations = Confirmations(actions, live, supervisor.group("confirmations", WORK))
-    messages = AiMessages(live, ai_settings, codex, actions, lobby, MediaReader(Frames()),
-                          tips=ai_store, cleanups=supervisor.group("ai", PRESENTATION), confirmations=confirmations)
-    ai_cog = AiCog(bot, live, ai_settings, codex, messages, requests=supervisor.group("ai", REQUEST))
+    messages = AiMessages(live, ai_settings, model, lobby, MediaReader(Frames()),
+                          tips=ai_store, cleanups=supervisor.group("ai", PRESENTATION))
+    ai_cog = AiCog(bot, live, ai_settings, model, messages, requests=supervisor.group("ai", REQUEST))
     admin = AdminServices(
-        live=live, panels=panels, codex=codex, logins=logins, ai=ai_settings, access=access, voice=voice, steam=steam,
-        games=lobby, effects=effects, codex_error=codex_error_text, hub_link=game_presenter.hub_link,
+        live=live, panels=panels, model=model, ai=ai_settings, access=access, voice=voice, steam=steam,
+        games=lobby, effects=effects, ai_error=ai_error_text, hub_link=game_presenter.hub_link,
         offer_summary=offer_summary, last_backup=backups.last,
     )
     shutdown = Shutdown(
         supervisor,
         (
-            (("access", access), ("codex login", logins), ("codex", codex)),
-            (("actions", actions),),
+            (("access", access), ("ai", model)),
             (("steam", steam),),
             (("voice", voice),),
             (("panel", panels),),
         ),
-        interrupt=lambda: codex.cancel(guild_id),
+        interrupt=lambda: model.cancel(guild_id),
         stop_resolver=effects.stop_new_work,
         detach=bot.remove_cogs,
         transport=bot.disconnect,
@@ -147,12 +116,11 @@ def compose(bot: HoroBot, codex: CodexService, db: sqlite3.Connection, guild_id:
         watchdog=supervisor.group("watchdog", SCHEDULED),
         shutdown=shutdown,
         cogs=(games_cog, VoiceCog(voice, live), AdminCog(admin), ai_cog, SteamCog(steam)),
-        dynamic_items=(receipts.private_results.item, confirmations.item),
     )
 
 
 class HoroBot(commands.Bot):
-    def __init__(self, codex: CodexService, *, guild_id: int, db: sqlite3.Connection) -> None:
+    def __init__(self, model: TextModel, *, guild_id: int, db: sqlite3.Connection) -> None:
         super().__init__(
             command_prefix=commands.when_mentioned,
             help_command=None,
@@ -167,7 +135,7 @@ class HoroBot(commands.Bot):
             max_messages=None,
         )
         self.guild = discord.Object(id=guild_id)
-        self.runtime = compose(self, codex, db, guild_id)
+        self.runtime = compose(self, model, db, guild_id)
         self.tree.error(report_interaction_error)
 
     @property
@@ -175,7 +143,6 @@ class HoroBot(commands.Bot):
         return self.runtime.shutdown.safe_to_close_db
 
     async def add_cogs(self) -> None:
-        self.add_dynamic_items(*self.runtime.dynamic_items)
         for cog in self.runtime.cogs:
             await self.add_cog(cog, guild=self.guild)
 
@@ -228,8 +195,7 @@ def main() -> None:
     bot = None
     try:
         db = open_db(DB_PATH)
-        codex = CodexService(CODEX_URL, config.codex_token, ConversationStore(db))
-        bot = HoroBot(codex, guild_id=config.guild_id, db=db)
+        bot = HoroBot(UnavailableModel(), guild_id=config.guild_id, db=db)
         bot.run(config.discord_token, log_handler=None)
     finally:
         if bot is not None and not bot.db_safe_to_close:

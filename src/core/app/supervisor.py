@@ -37,13 +37,6 @@ def log_task_exception(task: asyncio.Future[object]) -> None:
         logging.error("Background task failed.", exc_info=error)
 
 
-def track[T](tasks: set[asyncio.Task[T]], task: asyncio.Task[T], *, log: bool = False) -> asyncio.Task[T]:
-    tasks.add(task)
-    task.add_done_callback(tasks.discard)
-    task.add_done_callback(log_task_exception if log else consume_task_exception)
-    return task
-
-
 def cancel_all(tasks: Iterable[asyncio.Future[Any]]) -> None:
     for task in tasks:
         if not task.done() and not task.cancelling():

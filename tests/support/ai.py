@@ -5,9 +5,7 @@ import contextlib
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
-from src.ai import ArchiveResult, ModelError, ModelReply
-from src.ai.domain.intent import Intent
-from src.core.domain.actions import Catalogue
+from src.ai.app.ports import ModelError, ModelReply
 
 
 class MemoryAiStore:
@@ -66,15 +64,10 @@ class FakeModel:
                  work_seconds: float = 5.0, deadline_seconds: float = 5.0) -> None:
         self.start = AsyncMock()
         self.try_start_request = MagicMock(return_value=allow)
-        self.request_counts = MagicMock(return_value=(0, 0))
-        self.get_models = AsyncMock(return_value=())
         self.chat = AsyncMock(return_value=ModelReply("最終答案"))
-        self.structured = AsyncMock(return_value=Intent("chat"))
-        self.summarize = AsyncMock(return_value=ModelReply("操作已完成。"))
         self.cancel = AsyncMock()
         self.cancel_revoked = AsyncMock()
-        self.reset_conversation = AsyncMock(return_value=ArchiveResult(1, 1, 0))
-        self.archive_scope = AsyncMock(return_value=ArchiveResult(0, 0, 0))
+        self.forget_scope = AsyncMock()
         self.admission_error = admission_error
         self.work_seconds = work_seconds
         self.deadline_seconds = deadline_seconds
@@ -95,15 +88,6 @@ class FakeModel:
             current=True,
         )
         yield self.job
-
-
-class FakeActions:
-    def __init__(self) -> None:
-        self.catalogue = Catalogue([], [])
-        self.context = MagicMock(return_value={})
-        self.needs_confirmation = MagicMock(return_value=False)
-        self.execute = AsyncMock()
-        self.explain = AsyncMock()
 
 
 class FakeMedia:

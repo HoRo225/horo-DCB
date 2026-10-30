@@ -5,8 +5,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import discord
 
-from src.admin.adapters.discord.logins import CodexLogins
-from src.ai import DeviceLogin, ModelError
+from src.ai.app.unavailable import UnavailableModel
 from src.bot import HoroBot, main
 from src.core.app.supervisor import WORK
 from src.games.adapters.discord.views import lobby_view
@@ -18,12 +17,6 @@ from tests.support import testing
 G, BOT = 100, 999
 COGS = ["GamesCog", "VoiceCog", "AdminCog", "AiCog", "SteamCog"]
 COMMANDS = {
-    "新話題": {
-        "name": "新話題",
-        "description": "開始新的 AI 對話，封存這個範圍的舊對話",
-        "type": 1, "options": [], "nsfw": False, "dm_permission": False,
-        "default_member_permissions": None, "contexts": [0], "integration_types": None,
-    },
     "控制台": {
         "name": "控制台",
         "description": "開啟管理控制台",
@@ -33,13 +26,12 @@ COMMANDS = {
 }
 
 
-def fake_codex() -> MagicMock:
-    codex = MagicMock()
-    codex.request_counts.return_value = (0, 0)
-    codex.start = AsyncMock()
-    codex.close = AsyncMock()
-    codex.cancel = AsyncMock()
-    return codex
+def fake_model() -> MagicMock:
+    model = MagicMock()
+    model.start = AsyncMock()
+    model.close = AsyncMock()
+    model.cancel = AsyncMock()
+    return model
 
 
 def step(order: list[str], name: str):
@@ -52,13 +44,13 @@ def step(order: list[str], name: str):
 class StartupTests(unittest.IsolatedAsyncioTestCase):
     def setUp(self) -> None:
         self.db = testing.memory_db(self)
-        self.bot = HoroBot(fake_codex(), guild_id=G, db=self.db)
+        self.bot = HoroBot(fake_model(), guild_id=G, db=self.db)
 
     async def start(self) -> None:
         await self.enterAsyncContext(self.bot)
         await self.bot.add_cogs()
 
-    async def test_guild_gets_the_feature_cogs_and_two_slash_commands(self) -> None:
+    async def test_guild_gets_the_feature_cogs_and_the_control_panel_command(self) -> None:
         await self.start()
         tree = self.bot.tree
         self.assertEqual(list(self.bot.cogs), COGS)
@@ -73,8 +65,7 @@ class StartupTests(unittest.IsolatedAsyncioTestCase):
         ids = {custom_id for view in views for item in view.walk_children()
                if (custom_id := getattr(item, "custom_id", None))}
         self.assertIn("horo:game:pick", ids)
-        for custom_id in ids | {*(f"horo:game:rules:{key}" for key in GAMES), "horo:private:abc_123",
-                                "horo:confirm:abc_123:yes", "horo:confirm:abc_123:no"}:
+        for custom_id in ids | {f"horo:game:rules:{key}" for key in GAMES}:
             with self.subTest(custom_id):
                 self.assertTrue(any(pattern.fullmatch(custom_id) for pattern in patterns))
 
@@ -106,9 +97,9 @@ class StartupTests(unittest.IsolatedAsyncioTestCase):
 
 class ShutdownTests(unittest.IsolatedAsyncioTestCase):
     def setUp(self) -> None:
-        self.codex = fake_codex()
+        self.model = fake_model()
         self.db = testing.memory_db(self)
-        self.bot = HoroBot(self.codex, guild_id=G, db=self.db)
+        self.bot = HoroBot(self.model, guild_id=G, db=self.db)
 
     async def test_close_removes_cogs_and_their_commands(self) -> None:
         await self.enterAsyncContext(self.bot)
@@ -136,53 +127,24 @@ class ShutdownTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(owner.done())
         self.assertTrue(self.bot.db_safe_to_close)
         self.assertEqual(self.db.execute("SELECT value FROM shutdown_check").fetchone(), (1,))
-        self.codex.cancel.assert_awaited_once_with(G)
-        self.codex.close.assert_awaited_once()
-
-    async def test_shutdown_cancels_a_waiting_codex_login_before_codex_closes(self) -> None:
-        order: list[object] = []
-
-        async def forever(*args: object, **kwargs: object) -> bool:
-            await asyncio.Event().wait()
-            return True
-
-        def build(*args: object, **kwargs: object) -> CodexLogins:
-            made.append(CodexLogins(*args, **kwargs))
-            return made[-1]
-
-        made: list[CodexLogins] = []
-        self.codex.login_start = AsyncMock(return_value=DeviceLogin("login-1", "https://example.test/device", "CODE"))
-        self.codex.wait_login = AsyncMock(side_effect=forever)
-        self.codex.login_cancel = AsyncMock(side_effect=lambda login_id: order.append(("login cancel", login_id)))
-        self.codex.close = AsyncMock(side_effect=lambda **kwargs: order.append("codex close"))
-        with patch("src.bot.CodexLogins", side_effect=build):
-            bot = HoroBot(self.codex, guild_id=G, db=self.db)
-        [logins] = made
-        await logins.start()
-        with patch("discord.Client.close", AsyncMock()):
-            await bot.close()
-        self.assertEqual(order, [("login cancel", "login-1"), "codex close"])
-        self.assertIsNone(logins.pending)
-        self.assertTrue(bot.db_safe_to_close)
-        with self.assertRaises(ModelError):
-            await logins.start()
-        self.codex.login_start.assert_awaited_once()
-
+        self.model.cancel.assert_awaited_once_with(G)
+        self.model.close.assert_awaited_once()
 
 class MainTests(unittest.TestCase):
     def setUp(self) -> None:
         self.db, self.lock = MagicMock(), MagicMock()
 
     def run_main(self, *, safe: bool) -> None:
-        config = SimpleNamespace(guild_id=G, codex_token="fixture", discord_token="fixture")
+        config = SimpleNamespace(guild_id=G, discord_token="fixture")
         with (
             patch("src.bot.AppConfig.from_env", return_value=config),
             patch("logging.basicConfig"),
             patch("src.bot.hold_lock", return_value=self.lock),
             patch("src.bot.open_db", return_value=self.db),
-            patch("src.bot.HoroBot", return_value=MagicMock(db_safe_to_close=safe)),
+            patch("src.bot.HoroBot", return_value=MagicMock(db_safe_to_close=safe)) as bot,
         ):
             main()
+        self.assertIsInstance(bot.call_args.args[0], UnavailableModel)
 
     def test_database_and_lock_close_after_a_safe_shutdown(self) -> None:
         self.run_main(safe=True)

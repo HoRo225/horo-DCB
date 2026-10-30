@@ -18,27 +18,12 @@ PROGRESS_FALLBACK = ("thinking", "{name} 正在思考")
 PROGRESS_OVERRIDES = {
     "searching": ("query", "{name} 正在搜尋網路"),
     "fallback": ("fallback", "{name} 正在切換備援模型"),
-    "reconnecting": ("reconnect", "{name} 連線逾時，正在重新連線"),
 }
 ANSWER_MENTIONS = discord.AllowedMentions(replied_user=True)
 
 
 def truncation_notice() -> str:
     return f"\n\n-# {ICONS['info']} 回覆過長，已截斷。"
-
-
-def build_ai_native_image_links(image_urls: tuple[str, ...]) -> str:
-    urls = list(image_urls)
-    if not urls:
-        return ""
-
-    for omitted in range(len(urls) + 1):
-        suffix = f"\n-# 另有 {omitted} 個圖片連結因訊息長度限制省略。" if omitted else ""
-        content = "\n".join((f"-# {ICONS['image']} 圖片連結", *urls)) + suffix
-        if len(content) <= DISCORD_MESSAGE_LIMIT:
-            return content
-        urls.remove(max(reversed(urls), key=len))
-    raise AssertionError("image link message cannot fit Discord limit")
 
 
 def build_ai_progress_view(
@@ -180,15 +165,9 @@ async def send_ai_answer(
     message: discord.Message,
     answer: str,
     *,
-    image_urls: tuple[str, ...] = (),
     can_send: Any,
 ) -> str:
-    chunks = split_markdown(
-        discord_tables(answer), DISCORD_MESSAGE_LIMIT, MAX_DISCORD_RESPONSE_CHUNKS - bool(image_urls),
-        truncation_notice(),
-    )
-    if link_message := build_ai_native_image_links(image_urls):
-        chunks.append(link_message)
+    chunks = split_markdown(discord_tables(answer), DISCORD_MESSAGE_LIMIT, MAX_DISCORD_RESPONSE_CHUNKS, truncation_notice())
     if not chunks:
         return "unavailable"
     try:

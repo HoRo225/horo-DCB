@@ -3,12 +3,11 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
-from collections.abc import Callable, Mapping
+from collections.abc import Mapping
 from dataclasses import dataclass
 from uuid import uuid4
 
 from src.core.app.supervisor import TaskGroup
-from src.core.domain.actions import failure
 from src.games.app.lobby import Lobby
 from src.games.app.ports import GameStore, Player, Players, PresentError, Refused, Reply, TablePresenter
 from src.games.app.tables import LiveTable, Posted, Tables
@@ -18,8 +17,6 @@ from src.games.domain.table import Dealer, IllegalMove, Seat, snapshot
 
 BUSY_SECONDS = 5
 BUSY_TEXT = "上一個動作還在處理，請稍候再按一次。"
-BUSY_REQUEST = "你的賭桌正在處理上一個動作，請稍候。"
-GRANT_GONE = "你目前沒有執行這個 AI 操作的權限。"
 OWNER_ONLY = "只有開桌的玩家可以操作這張賭桌。"
 SEAT_GONE = "這張賭桌已失效，這局沒有結算；請從遊戲大廳重新開桌。"
 STALE = "賭桌狀態已經改變，請查看目前畫面再操作。"
@@ -32,6 +29,10 @@ LEFT = "已離桌。"
 IDLE_FAREWELL = "已閒置結束"
 
 
+def failure(code: str, text: str) -> dict[str, object]:
+    return {"ok": False, "code": code, "text": text}
+
+
 @dataclass(frozen=True, slots=True)
 class Move:
     action: str
@@ -41,9 +42,7 @@ class Move:
     source_id: int
     expected_token: str | None
     game: str | None = None
-    operation_id: str | None = None
     table: LiveTable | None = None
-    still_current: Callable[[], bool] | None = None
 
 
 class Play:
@@ -64,14 +63,8 @@ class Play:
         seat = self._store.seat(user_id)
         return self._tables.at(seat.message_id) if seat is not None else None
 
-    def snapshot(self, user_id: int) -> dict[str, object]:
-        table = self.table_of(user_id)
-        state = None if table is None or table.closed else table.state
-        return {
-            **snapshot(state, None if table is None else table.token, self._presenter.symbol),
-            "state_token": self._tables.token(user_id),
-            "busy": self._tables.lock(user_id).locked(),
-        }
+    def token(self, user_id: int) -> str:
+        return self._tables.token(user_id)
 
     async def close_leftover_tables(self) -> None:
         for leftover in self._store.seats():
@@ -113,17 +106,14 @@ class Play:
                     logging.warning("Idle game table %s could not be updated.", message_id)
             self._tables.discard(message_id)
 
-    async def execute(self, move: Move, reply: Reply | None = None) -> Mapping[str, object]:
+    async def execute(self, move: Move, reply: Reply) -> Mapping[str, object]:
         with self._tasks.adopt():
             user_id = move.table.player_id if move.table is not None else move.user_id
             lock = self._tables.lock(user_id)
             if lock.locked():
-                if reply is None:
-                    return failure("busy", BUSY_REQUEST)
                 await reply.defer()
             if not await self._take_turn(lock):
-                if reply is not None:
-                    await reply.notice(BUSY_TEXT)
+                await reply.notice(BUSY_TEXT)
                 return failure("busy", BUSY_TEXT)
             try:
                 return await self._run(move, user_id, reply)
@@ -137,28 +127,24 @@ class Play:
             return False
         return True
 
-    async def _admit(self, move: Move, table: LiveTable | None, *, fresh: bool) -> tuple[Player | None, str | None]:
+    async def _admit(self, move: Move, table: LiveTable | None) -> tuple[Player | None, str | None]:
         try:
-            player = await self._players.player(move.channel_id, move.user_id, fresh=fresh)
+            player = await self._players.player(move.channel_id, move.user_id)
         except Refused as refused:
             return None, refused.text
         if table is not None and player.user_id != table.player_id:
             return player, OWNER_ONLY
         if problem := self._lobby.problem(move.guild_id, move.channel_id, player.role_ids):
             return player, problem
-        if move.still_current is not None and not move.still_current():
-            return player, GRANT_GONE
         return player, None
 
-    async def _run(self, move: Move, user_id: int, reply: Reply | None) -> Mapping[str, object]:
-        if reply is not None:
-            await reply.defer()
-        player, problem = await self._admit(move, move.table, fresh=reply is None)
+    async def _run(self, move: Move, user_id: int, reply: Reply) -> Mapping[str, object]:
+        await reply.defer()
+        player, problem = await self._admit(move, move.table)
         if problem is not None:
-            if reply is not None:
-                await reply.notice(problem, link=True)
+            await reply.notice(problem, link=True)
             return failure("forbidden", problem)
-        operation_id = move.operation_id or f"interaction:{move.source_id}"
+        operation_id = f"interaction:{move.source_id}"
         inputs = {"actor_id": user_id, "guild_id": move.guild_id, "channel_id": move.channel_id,
                   "action": move.action, "game": move.game, "state_token": move.expected_token}
         if (prior := self._store.prior(operation_id, inputs)) is not None:
@@ -177,23 +163,14 @@ class Play:
             result = self._remember(operation_id, inputs, failure("no_table", NO_TABLE))
         else:
             result = self._move(table, move.action, operation_id, inputs)
-        if reply is not None:
-            if not result["ok"]:
-                gone = result["code"] == "seat_gone"
-                await reply.notice(result["text"], tone="error" if gone else "warn",
-                                   link=result["code"] in {"seat_gone", "no_table"})
-            elif table.closed:
-                await self._delete(table.posted, operation_id)
-            else:
-                await self._show(table, operation_id, reply)
-        elif result["ok"] and table is not None:
-            if table.closed:
-                await self._delete(table.posted, operation_id)
-            else:
-                try:
-                    await self._show(table, operation_id, None)
-                except PresentError:
-                    logging.exception("Committed game result could not be shown; it will not be played again.")
+        if not result["ok"]:
+            gone = result["code"] == "seat_gone"
+            await reply.notice(result["text"], tone="error" if gone else "warn",
+                               link=result["code"] in {"seat_gone", "no_table"})
+        elif table.closed:
+            await self._delete(table.posted, operation_id)
+        else:
+            await self._show(table, operation_id, reply)
         return result
 
     def _remember(self, operation_id: str, inputs: Mapping[str, object], result: dict[str, object]) -> dict[str, object]:
@@ -226,13 +203,10 @@ class Play:
             table.state = state
         return result
 
-    async def _show(self, table: LiveTable, operation_id: str, reply: Reply | None) -> None:
+    async def _show(self, table: LiveTable, operation_id: str, reply: Reply) -> None:
         effect_id = f"{operation_id}:table-edit"
         self._store.mark(effect_id, "unknown")
-        if reply is not None:
-            await reply.show(table)
-        else:
-            await self._presenter.edit(table)
+        await reply.show(table)
         self._store.mark(effect_id, "done")
 
     async def _delete(self, posted: Posted, operation_id: str) -> None:
@@ -243,7 +217,7 @@ class Play:
 
     async def _open(
         self, move: Move, player: Player, previous: LiveTable | None, operation_id: str,
-        inputs: Mapping[str, object], reply: Reply | None,
+        inputs: Mapping[str, object], reply: Reply,
     ) -> Mapping[str, object]:
         game = GAMES[move.game]
         for orphan in self._store.open_orphans(player.user_id):
@@ -261,16 +235,14 @@ class Play:
             new.posted = await self._presenter.post(move.channel_id, new)
         except PresentError:
             logging.exception("Game table opening result is unknown; keeping the previous table.")
-            if reply is not None:
-                await reply.notice(OPEN_UNCERTAIN)
+            await reply.notice(OPEN_UNCERTAIN)
             return uncertain
-        _, problem = await self._admit(move, previous, fresh=reply is None)
+        _, problem = await self._admit(move, previous)
         if problem is not None:
             await self._presenter.delete(move.channel_id, new.posted.message_id)
             result = failure("forbidden", problem)
             self._store.reject_open(effect_id, new.posted.message_id, problem, operation_id, inputs, result)
-            if reply is not None:
-                await reply.notice(problem, link=True)
+            await reply.notice(problem, link=True)
             return result
         result = {"ok": True, "code": "done", "text": OPENED, **snapshot(new.state, new.token, self._presenter.symbol),
                   "resource_id": str(new.posted.message_id)}
@@ -291,6 +263,5 @@ class Play:
                 await self._delete(previous.posted, operation_id)
             else:
                 await self._presenter.delete(replaced.channel_id, replaced.message_id)
-        if reply is not None:
-            await reply.opened(OPENED, new.posted.url)
+        await reply.opened(OPENED, new.posted.url)
         return result

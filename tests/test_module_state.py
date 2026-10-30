@@ -8,12 +8,9 @@ CONTAINER_CALLS = frozenset({"list", "dict", "set", "bytearray", "defaultdict", 
 MUTATORS = frozenset({"append", "extend", "insert", "pop", "popitem", "remove", "discard", "add", "clear", "update",
                       "setdefault", "sort", "reverse", "__setitem__", "__delitem__"})
 CONSTANTS = {
-    "admin/adapters/discord/pages/ai_models.py": {"EFFORT_LABELS"},
     "admin/adapters/discord/pages/common.py": {"STATUS_DOTS"},
     "admin/adapters/discord/pages/effects.py": {"STATES"},
     "admin/adapters/discord/panel.py": {"PAGES"},
-    "ai/adapters/codex/rpc.py": {"SERVER_REQUEST_REPLIES"},
-    "ai/adapters/discord/actions.py": {"MODEL_CHOICE"},
     "ai/adapters/discord/errors.py": {"_ERROR_TEXT"},
     "ai/adapters/discord/messages.py": {"DENIAL_CODES"},
     "ai/adapters/discord/output.py": {"PROGRESS_OVERRIDES"},

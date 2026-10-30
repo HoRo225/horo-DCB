@@ -72,7 +72,7 @@ class AiAccess:
                         await self._model.cancel_revoked(guild_id, in_removed)
                     except ModelError:
                         logging.exception("AI requests in removed allowlist channels did not stop in time.")
-                settings.set_allowlist(guild_id, selected, roles=roles, operation_id=operation_id)
+                settings.set_allowlist(selected, roles=roles, operation_id=operation_id)
                 if roles and removed:
                     if self._role_ids_for_user is None:
                         await self._model.cancel(guild_id)

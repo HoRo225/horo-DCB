@@ -71,7 +71,7 @@ class ExtractFramesTest(unittest.IsolatedAsyncioTestCase):
 
 
 class FrameWorkerTest(unittest.IsolatedAsyncioTestCase):
-    async def test_worker_module_loads_without_discord_codex_or_config(self) -> None:
+    async def test_worker_module_loads_without_discord_ai_backend_or_config(self) -> None:
         code = "import sys, src.ai.adapters.media.frames; print(*sys.modules, sep=chr(10))"
         process = await asyncio.create_subprocess_exec(
             sys.executable, "-E", "-s", "-B", "-c", code, cwd=ROOT, stdout=asyncio.subprocess.PIPE,
@@ -82,7 +82,7 @@ class FrameWorkerTest(unittest.IsolatedAsyncioTestCase):
         self.assertIn("src.ai.adapters.media.frames", modules)
         self.assertNotIn("discord", modules)
         self.assertNotIn("src.core.app.config", modules)
-        self.assertFalse({name for name in modules if name.startswith("src.ai.adapters.codex")})
+        self.assertFalse({name for name in modules if name.startswith("src.ai.adapters.claude")})
 
 
 if __name__ == "__main__":

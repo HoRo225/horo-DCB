@@ -5,9 +5,9 @@ import time
 import unittest
 
 from src.core.adapters.discord.effects import WAITING
+from src.core.adapters.sqlite.db import transaction
 from src.games.adapters.sqlite.store import SqliteGameStore
 from src.games.app.play import (
-    BUSY_REQUEST,
     BUSY_TEXT,
     IDLE_FAREWELL,
     OPEN_UNCERTAIN,
@@ -28,33 +28,25 @@ class FailingCommit(SqliteGameStore):
         raise sqlite3.OperationalError("disk full")
 
 
-class SnapshotTests(unittest.IsolatedAsyncioTestCase):
+class ResultTests(unittest.IsolatedAsyncioTestCase):
     async def test_dealt_round_hides_the_hole_card(self) -> None:
         game = GameHarness(self)
-        await game.dealt("10", "9", "8", "8", "2")
-        state = game.play.snapshot(PLAYER)
+        await game.open("blackjack")
+        game.rigged.decks.append(deck("10", "9", "8", "8", "2"))
+        state = await game.act("deal")
         self.assertEqual((state["game"], state["phase"]), ("blackjack", "player"))
         self.assertEqual((state["dealer_cards"], state["player_cards"]), (["9S"], ["10S", "8S"]))
         self.assertEqual(state["legal_actions"], ["hit", "stand", "open_table"])
-        self.assertFalse(state["busy"])
         self.assertEqual(json.loads(json.dumps(state)), state)
 
     async def test_finished_round_reports_its_outcome(self) -> None:
         game = GameHarness(self)
         await game.dealt("10", "9", "8", "8")
-        result = await game.ai("stand")
+        result = await game.act("stand")
         self.assertEqual((result["phase"], result["outcome"]), ("done", "win"))
         self.assertEqual(result["dealer_cards"], ["9S", "8S"])
         self.assertEqual(result["legal_actions"], ["deal", "leave_table", "open_table"])
         self.assertEqual(result["state_token"], game.token())
-
-    async def test_without_a_table_only_opening_is_offered(self) -> None:
-        game = GameHarness(self)
-        state = game.play.snapshot(PLAYER)
-        self.assertEqual({key: state[key] for key in ("game", "legal_actions", "busy")},
-                         {"game": None, "legal_actions": ["open_table"], "busy": False})
-        self.assertEqual(state["state_token"], game.token())
-
 
 class MoveTests(unittest.IsolatedAsyncioTestCase):
     async def test_replay_returns_the_stored_spin_without_spinning_again(self) -> None:
@@ -62,8 +54,8 @@ class MoveTests(unittest.IsolatedAsyncioTestCase):
         await game.open("slots")
         game.rigged.spins.append(SPUN)
         token = game.token()
-        first = await game.ai("deal", operation_id="spin", token=token)
-        second = await game.ai("deal", operation_id="spin", token=token)
+        first = await game.act("deal", source=7, token=token)
+        second = await game.act("deal", source=7, token=token)
         self.assertEqual(first, second)
         self.assertEqual((first["multiplier"], first["summary"]), (4, ["# ×4", "中 2 條線：上橫線 <cherry><cherry> ×2 · 左直線 <cherry><cherry> ×2"]))
         self.assertEqual(game.rigged.spun, 1)
@@ -74,57 +66,40 @@ class MoveTests(unittest.IsolatedAsyncioTestCase):
         token = table.token
         game.rigged.decks.append(deck("10", "9", "8", "8"))
         with self.assertRaises(sqlite3.OperationalError):
-            await game.ai("deal", operation_id="deal")
+            await game.act("deal", source=7)
         self.assertEqual((table.state, table.token), (Blackjack(), token))
-        self.assertIsNone(game.records.get("deal"))
+        self.assertIsNone(game.records.get("interaction:7"))
 
     async def test_roles_and_channel_are_rechecked_for_every_action(self) -> None:
         game = GameHarness(self)
         table = await game.dealt("10", "9", "8", "8")
-        denied = await game.ai("stand", channel_id=CHANNEL + 1)
+        denied = await game.act("stand", channel_id=CHANNEL + 1)
         self.assertEqual(denied, {"ok": False, "code": "forbidden", "text": f"請到 <#{CHANNEL}> 使用遊戲大廳。"})
         game.players.demote()
-        denied = await game.ai("stand")
+        denied = await game.act("stand")
         self.assertEqual(denied["text"], "你沒有使用這個功能的身分組。")
         game.players.refusal = "你目前無法在這個頻道操作賭桌。"
-        self.assertEqual((await game.ai("stand"))["text"], "你目前無法在這個頻道操作賭桌。")
+        self.assertEqual((await game.act("stand"))["text"], "你目前無法在這個頻道操作賭桌。")
         self.assertFalse(table.state.hand.done)
-
-    async def test_revoked_request_grant_is_refused(self) -> None:
-        game = GameHarness(self)
-        await game.open("slots")
-        result = await game.ai("deal", still_current=lambda: False)
-        self.assertEqual(result["text"], "你目前沒有執行這個 AI 操作的權限。")
-        self.assertEqual(game.rigged.spun, 0)
 
     async def test_old_state_is_rejected(self) -> None:
         game = GameHarness(self)
         old = (await game.open("blackjack")).token
         table = await game.dealt("10", "9", "8", "8")
-        self.assertEqual((await game.ai("hit", token=old))["code"], "stale")
+        self.assertEqual((await game.act("hit", token=old))["code"], "stale")
         self.assertEqual(len(table.state.hand.player), 2)
 
     async def test_actions_outside_the_round_are_illegal(self) -> None:
         game = GameHarness(self)
         await game.open("blackjack")
-        self.assertEqual(await game.ai("hit"), {"ok": False, "code": "illegal", "text": "這張賭桌目前不能進行這個動作。"})
+        self.assertEqual(await game.act("hit"), {"ok": False, "code": "illegal", "text": "這張賭桌目前不能進行這個動作。"})
         table = await game.dealt("10", "9", "8", "8")
         for action in ("deal", "again", "leave_table"):
             with self.subTest(action=action):
-                self.assertEqual((await game.ai(action))["text"], "這局尚未結束，請先完成牌局。")
+                self.assertEqual((await game.act(action))["text"], "這局尚未結束，請先完成牌局。")
         self.assertFalse(table.state.hand.done)
         await game.open("slots")
-        self.assertEqual((await game.ai("stand"))["code"], "illegal")
-
-    async def test_busy_request_never_waits_or_consumes_an_operation(self) -> None:
-        game = GameHarness(self)
-        table = await game.open("blackjack")
-        async with game.tables.lock(PLAYER):
-            self.assertTrue(game.play.snapshot(PLAYER)["busy"])
-            result = await game.ai("deal", operation_id="busy")
-        self.assertEqual(result, {"ok": False, "code": "busy", "text": BUSY_REQUEST})
-        self.assertIsNone(game.records.get("busy"))
-        self.assertIsNone(table.state.hand)
+        self.assertEqual((await game.act("stand"))["code"], "illegal")
 
     async def test_click_while_busy_waits_then_acts(self) -> None:
         game = GameHarness(self)
@@ -151,14 +126,14 @@ class MoveTests(unittest.IsolatedAsyncioTestCase):
         game = GameHarness(self)
         table = await game.open("slots")
         token = table.token
-        first, reply = await game.click("again", table, operation_id="ui")
-        replay, again = await game.click("again", table, operation_id="ui", token=token)
+        first, reply = await game.click("again", table, source=7)
+        replay, again = await game.click("again", table, source=7, token=token)
         self.assertEqual(first, replay)
         [(_, shown)] = reply.answers()
         self.assertEqual((shown.state, shown.token), (table.state, table.token))
         self.assertIsNotNone(table.state.spin)
         self.assertEqual(again.answers(), [])
-        self.assertEqual(game.records.get_effect("ui:table-edit").status, "done")
+        self.assertEqual(game.records.get_effect("interaction:7:table-edit").status, "done")
         self.assertNotIn(asyncio.current_task(), game.tasks.pending())
 
     async def test_other_players_cannot_drive_a_table(self) -> None:
@@ -168,12 +143,6 @@ class MoveTests(unittest.IsolatedAsyncioTestCase):
         result, reply = await game.click("again", table, user_id=2)
         self.assertEqual(result["text"], OWNER_ONLY)
         self.assertEqual(reply.answers(), [("notice", OWNER_ONLY, "warn", True)])
-
-    async def test_clicks_read_the_member_cache_and_requests_refetch(self) -> None:
-        game = GameHarness(self)
-        table = await game.open("slots")
-        await game.click("again", table)
-        self.assertEqual(game.players.fresh, [True, True, False])
 
     async def test_clicks_refresh_the_idle_clock(self) -> None:
         game = GameHarness(self)
@@ -185,12 +154,12 @@ class MoveTests(unittest.IsolatedAsyncioTestCase):
     async def test_leaving_deletes_the_table(self) -> None:
         game = GameHarness(self)
         table = await game.open("slots")
-        result, reply = await game.click("leave_table", table, operation_id="leave")
+        result, reply = await game.click("leave_table", table, source=7)
         self.assertEqual((result["text"], result["game"], result["state_token"]), ("已離桌。", None, game.token()))
         self.assertEqual(game.presenter.deleted, [(CHANNEL, table.posted.message_id)])
         self.assertTrue(table.closed)
         self.assertEqual((game.table(), game.store.seat(PLAYER)), (None, None))
-        self.assertEqual(game.records.get_effect("leave:table-delete").status, "done")
+        self.assertEqual(game.records.get_effect("interaction:7:table-delete").status, "done")
         self.assertEqual(reply.answers(), [])
 
     async def test_round_on_a_deleted_seat_is_not_settled(self) -> None:
@@ -209,23 +178,10 @@ class MoveTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(reply.answers(), [("notice", "請先從遊戲大廳開桌。", "warn", True)])
         self.assertEqual(result["code"], "no_table")
 
-    async def test_failed_edit_after_commit_is_left_for_reconciliation(self) -> None:
-        game = GameHarness(self)
-        await game.open("slots")
-        game.presenter.edit_error = PresentError("down")
-        token = game.token()
-        with self.assertLogs(level="ERROR"):
-            first = await game.ai("deal", operation_id="spin", token=token)
-        self.assertEqual(await game.ai("deal", operation_id="spin", token=token), first)
-        self.assertTrue(first["ok"])
-        self.assertEqual(game.rigged.spun, 1)
-        self.assertEqual(game.records.get_effect("spin:table-edit").status, "unknown")
-
-
 class OpenTests(unittest.IsolatedAsyncioTestCase):
     async def test_opening_posts_a_table_and_records_its_seat(self) -> None:
         game = GameHarness(self)
-        result = await game.ai("open_table", game="slots", operation_id="open")
+        result = await game.act("open_table", game="slots", source=7)
         table = game.table()
         self.assertEqual({key: result[key] for key in ("ok", "text", "game", "resource_id", "message_url")},
                          {"ok": True, "text": "賭桌已開啟。", "game": "slots", "resource_id": "100",
@@ -233,7 +189,7 @@ class OpenTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual((table.posted.message_id, table.avatar_url), (100, "https://cdn.example.com/1.png"))
         self.assertEqual(game.presenter.posted[0].token, result["state_token"])
         self.assertEqual(game.store.seat(PLAYER).game, "slots")
-        effect = game.records.get_effect("open:table-send")
+        effect = game.records.get_effect("interaction:7:table-send")
         self.assertEqual((effect.status, effect.message_id, effect.payload["user_id"]), ("done", 100, PLAYER))
 
     async def test_picking_a_game_tells_the_player_where_the_new_table_is(self) -> None:
@@ -245,13 +201,13 @@ class OpenTests(unittest.IsolatedAsyncioTestCase):
     async def test_new_table_replaces_the_old_one_after_it_is_shown(self) -> None:
         game = GameHarness(self)
         old = await game.dealt("10", "9", "8", "8", "2")
-        result = await game.ai("open_table", game="slots", operation_id="switch")
+        result = await game.act("open_table", game="slots", source=7)
         self.assertTrue(result["ok"])
         self.assertEqual(game.presenter.order, ["post 100", "post 101", "delete 100"])
         self.assertTrue(old.closed)
         self.assertIsNone(game.tables.at(100))
         self.assertEqual(game.store.seat(PLAYER).message_id, 101)
-        self.assertEqual(game.records.get_effect("switch:table-delete").status, "done")
+        self.assertEqual(game.records.get_effect("interaction:7:table-delete").status, "done")
 
     async def test_unknown_send_tells_the_player_it_waits_for_an_admin_check(self) -> None:
         game = GameHarness(self)
@@ -270,13 +226,13 @@ class OpenTests(unittest.IsolatedAsyncioTestCase):
         token = game.token()
         game.presenter.post_error = PresentError("down")
         with self.assertLogs(level="ERROR"):
-            result = await game.ai("open_table", game="slots", token=token, operation_id="lost")
+            result = await game.act("open_table", game="slots", token=token, source=7)
         self.assertEqual(result, {"ok": False, "code": "unknown", "text": OPEN_UNCERTAIN})
-        self.assertEqual(await game.ai("open_table", game="slots", token=token, operation_id="lost"), result)
+        self.assertEqual(await game.act("open_table", game="slots", token=token, source=7), result)
         self.assertEqual(len(game.presenter.posted), 1)
         self.assertFalse(old.closed)
-        self.assertEqual(game.records.get_effect("lost:table-send").status, "unknown")
-        self.assertEqual((await game.ai("open_table", game="slots", token=token))["code"], "stale")
+        self.assertEqual(game.records.get_effect("interaction:7:table-send").status, "unknown")
+        self.assertEqual((await game.act("open_table", game="slots", token=token))["code"], "stale")
         self.assertEqual(old.token, game.token())
 
     async def test_reopening_supersedes_unconfirmed_opens(self) -> None:
@@ -284,38 +240,38 @@ class OpenTests(unittest.IsolatedAsyncioTestCase):
         game.presenter.post_error = PresentError("down")
         token = game.token()
         with self.assertLogs(level="ERROR"):
-            await game.ai("open_table", game="slots", operation_id="lost", token=token)
-        with game.records.atomic():
+            await game.act("open_table", game="slots", source=7, token=token)
+        with transaction(game.db):
             for operation_id, user_id, message_id in (("orphan", PLAYER, 25), ("other", 2, 26)):
                 effect_id = f"{operation_id}:table-send"
                 game.records.create_effect(effect_id, "game_table_open", CHANNEL, {"user_id": user_id}, operation_id=operation_id)
                 game.records.update_effect(effect_id, "unknown", message_id=message_id)
                 game.records.complete(operation_id, "game_action", {}, {}, status="running")
         game.presenter.post_error = None
-        result = await game.ai("open_table", game="slots", operation_id="again")
+        result = await game.act("open_table", game="slots")
         self.assertTrue(result["ok"])
         self.assertEqual(game.presenter.deleted, [(CHANNEL, 25)])
-        for operation_id in ("lost", "orphan"):
+        for operation_id in ("interaction:7", "orphan"):
             effect = game.records.get_effect(f"{operation_id}:table-send")
             self.assertEqual((effect.status, effect.error), ("skipped", "superseded_by_player"))
             self.assertEqual(game.records.get(operation_id).status, "failed")
         self.assertEqual((game.records.get_effect("other:table-send").status, game.records.get("other").status),
                          ("unknown", "running"))
-        replay = await game.ai("open_table", game="slots", operation_id="lost", token=token)
+        replay = await game.act("open_table", game="slots", source=7, token=token)
         self.assertEqual(replay, {"ok": False, "code": "superseded", "text": "玩家已重新開桌，這次開桌已作廢。"})
 
     async def test_permission_lost_during_send_takes_the_new_table_back(self) -> None:
         game = GameHarness(self)
         old = await game.open("blackjack")
         game.presenter.on_post = game.players.demote
-        result = await game.ai("open_table", game="slots", operation_id="revoked")
+        result = await game.act("open_table", game="slots", source=7)
         self.assertEqual(result, {"ok": False, "code": "forbidden", "text": "你沒有使用這個功能的身分組。"})
         self.assertEqual(game.store.seat(PLAYER).message_id, old.posted.message_id)
         self.assertEqual(game.presenter.deleted, [(CHANNEL, 101)])
         self.assertIsNone(game.tables.at(101))
-        effect = game.records.get_effect("revoked:table-send")
+        effect = game.records.get_effect("interaction:7:table-send")
         self.assertEqual((effect.status, effect.message_id), ("skipped", 101))
-        self.assertEqual(game.records.get("revoked").status, "failed")
+        self.assertEqual(game.records.get("interaction:7").status, "failed")
 
         game.enrol(PLAYER)
         game.presenter.on_post = game.players.demote
@@ -327,7 +283,7 @@ class OpenTests(unittest.IsolatedAsyncioTestCase):
         game = GameHarness(self)
         game.presenter.post_error = RuntimeError("boom")
         with self.assertRaises(RuntimeError):
-            await game.ai("open_table", game="slots")
+            await game.act("open_table", game="slots")
         self.assertIsNone(game.store.seat(PLAYER))
         self.assertEqual(game.tables.live(), [])
 
@@ -365,13 +321,13 @@ class OpenTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["code"], "stale")
         self.assertEqual((game.tables.live(), game.store.seat(PLAYER)), ([], None))
 
-    async def test_ai_open_after_a_ui_open_and_leave_is_stale(self) -> None:
+    async def test_open_with_a_token_from_before_an_open_and_leave_is_stale(self) -> None:
         game = GameHarness(self)
         before = game.token()
         result, _ = await game.ui("open_table", game="slots")
         await game.click("leave_table", game.table())
         self.assertNotEqual(game.token(), before)
-        self.assertEqual((await game.ai("open_table", game="slots", token=before))["code"], "stale")
+        self.assertEqual((await game.act("open_table", game="slots", token=before))["code"], "stale")
         self.assertEqual(len(game.presenter.posted), 1)
 
 
@@ -409,7 +365,7 @@ class IdleTests(unittest.IsolatedAsyncioTestCase):
         game.enrol(2, 3)
         tables = []
         for user_id in (PLAYER, 2, 3):
-            await game.ai("open_table", game="slots", user_id=user_id, token=game.token(user_id))
+            await game.act("open_table", game="slots", user_id=user_id, token=game.token(user_id))
             tables.append(game.table(user_id))
         idle, busy, recent = tables
         now = time.monotonic()
@@ -432,7 +388,7 @@ class LeftoverTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(game.presenter.deleted, [(CHANNEL, message_id)])
         [waiting] = game.records.effects(status=WAITING)
         self.assertEqual((waiting.effect_id, waiting.kind), (f"games.restart:{message_id}:table-delete", "game_table_delete"))
-        self.assertTrue((await game.ai("open_table", game="slots"))["ok"])
+        self.assertTrue((await game.act("open_table", game="slots"))["ok"])
 
 
 if __name__ == "__main__":

@@ -21,22 +21,18 @@ from src.ai.adapters.discord.context import (
     require_short,
     select_media,
 )
-from src.ai.adapters.discord.errors import codex_error_text
-from src.ai.adapters.discord.intent import route_intent
+from src.ai.adapters.discord.errors import ai_error_text
 from src.ai.adapters.discord.output import AiProgress, reply_notice, send_ai_answer
 from src.ai.adapters.media.images import ImageAttachmentError, MediaItem, MediaReader, describe_media
-from src.ai.app.ports import ActionRunner, GamesChannel, ModelError, NewcomerTips, StoreError, TextModel
+from src.ai.app.ports import ModelError, NewcomerTips, StoreError, TextModel
 from src.ai.app.settings import AiSettings
 from src.ai.domain.conversation import CLEANUP_SECONDS, WORK_TIMEOUT_SECONDS
 from src.ai.domain.prompts import CHAT_INSTRUCTIONS, chat_prompt
 from src.core.adapters.discord.brand import ICONS
-from src.core.adapters.discord.confirmations import Confirmations
-from src.core.adapters.discord.live import LiveGuild, can_send as member_can_send, message_source
-from src.core.app.actions import Grant
+from src.core.adapters.discord.live import LiveGuild, can_send as member_can_send
 from src.core.app.supervisor import TaskGroup
 
 CONTEXT_TIMEOUT_SECONDS = 30.0
-RESTARTED_NOTICE = "已開始新的對話（先前的無法接續）"
 NEWCOMER_TIP = "第一次來？跟我說「說明」看看我能做什麼"
 
 
@@ -45,16 +41,9 @@ class AiServices:
     live: LiveGuild
     settings: AiSettings
     model: TextModel
-    actions: ActionRunner
-    games: GamesChannel
     media: MediaReader
     cleanups: TaskGroup
     tips: NewcomerTips
-    confirmations: Confirmations
-
-
-def ai_grant(settings: AiSettings, guild_id: int, channel_id: int) -> Grant:
-    return lambda actor: settings.denial_reason(guild_id, channel_id, actor.role_ids) is None
 
 
 def _image_count(items: list[MediaItem]) -> int:
@@ -79,7 +68,6 @@ class AiRequest:
         referenced_message: Any,
         bot_user_id: int,
         bot_name: str,
-        received_context: dict[str, object] | None = None,
     ) -> None:
         self.services = services
         self.message = message
@@ -92,16 +80,13 @@ class AiRequest:
         self.id = secrets.token_hex(4)
         self.queued_at = time.monotonic()
         self.accepted_deadline = asyncio.get_running_loop().time() + WORK_TIMEOUT_SECONDS
-        self.ms = {"queue": 0.0, "images": 0.0, "sdk": 0.0, "intent": 0.0, "chat": 0.0, "summary": 0.0, "discord": 0.0}
+        self.ms = {"queue": 0.0, "images": 0.0, "chat": 0.0, "discord": 0.0}
         self.outcome = "unavailable"
         self.output_started = False
         settings = services.settings
         self.generation = settings.generation
         self.allowed_channel_id = allowed_channel_id(message.channel)
         self.channel_generation = settings.channel_generation(self.allowed_channel_id)
-        self.granted = ai_grant(settings, message.guild.id, self.allowed_channel_id)
-        self.source = message_source(message)
-        self.context = received_context if received_context is not None else services.actions.context(self.source)
         self.job: Any = None
         self.progress = AiProgress(
             can_send=self.can_send, deadline=self.accepted_deadline, name=bot_name, cleanups=services.cleanups,
@@ -149,7 +134,7 @@ class AiRequest:
         error_text = (
             str(exc)
             if isinstance(exc, ImageAttachmentError)
-            else codex_error_text(self.outcome, self.bot_name)
+            else ai_error_text(self.outcome, self.bot_name)
         )
         remaining = deadline - asyncio.get_running_loop().time()
         if remaining <= 0:
@@ -200,14 +185,12 @@ class AiRequest:
             raise ModelError("revoked")
         return prompt, images
 
-    def _notes(self, restarted: bool) -> list[str]:
-        notes = [RESTARTED_NOTICE] * restarted
+    def _tip(self) -> bool:
         try:
-            first = self.services.tips.claim_tip(self.message.author.id)
+            return self.services.tips.claim_tip(self.message.author.id)
         except StoreError:
             logging.warning("AI newcomer tip state unavailable; answering without the tip.")
-            first = False
-        return [*notes, NEWCOMER_TIP] if first else notes
+            return False
 
     async def run(self) -> None:
         message, model, progress = self.message, self.services.model, self.progress
@@ -215,7 +198,7 @@ class AiRequest:
             await progress.start(message)
             try:
                 models = self.services.settings.models
-            except StoreError, ValueError:
+            except StoreError:
                 raise ModelError("model_configuration_invalid") from None
             async with model.accepted_request(
                 self.key,
@@ -236,11 +219,9 @@ class AiRequest:
                     async with asyncio.timeout_at(job.deadline):
                         typing = asyncio.create_task(_keep_typing(message.channel))
                         try:
-                            if await route_intent(self, models):
-                                return
                             async with asyncio.timeout_at(job.work_deadline):
                                 prompt, images = await self._prepare()
-                            with self.timed("sdk"), self.timed("chat"):
+                            with self.timed("chat"):
                                 reply = await model.chat(
                                     self.key,
                                     prompt,
@@ -255,15 +236,9 @@ class AiRequest:
                             typing.cancel()
                         await progress.stop()
                         with self.timed("discord"):
-                            notes = self._notes(reply.restarted)
-                            answer = f"-# {ICONS['info']} {' · '.join(notes)}\n{reply.text}" if notes else reply.text
+                            answer = f"-# {ICONS['info']} {NEWCOMER_TIP}\n{reply.text}" if self._tip() else reply.text
                             self.output_started = True
-                            self.outcome = await send_ai_answer(
-                                message,
-                                answer,
-                                image_urls=reply.image_urls,
-                                can_send=self.can_send,
-                            )
+                            self.outcome = await send_ai_answer(message, answer, can_send=self.can_send)
                         if not job.current:
                             self.outcome = "revoked"
                 except (ImageAttachmentError, ModelError, TimeoutError) as exc:

@@ -6,7 +6,6 @@ MAX_IMAGE_ATTACHMENTS = 12
 MAX_PROMPT_CHARACTERS = 4000
 MAX_IMAGE_BYTES = 20 * 1024 * 1024
 MAX_IMAGE_TOTAL_BYTES = 50 * 1024 * 1024
-MAX_REPLY_IMAGES = 10
 MAX_ACTIVE_KEYS = 4
 MAX_CHAT_BUDGET_MS = 300_000
 WORK_TIMEOUT_SECONDS = MAX_CHAT_BUDGET_MS / 1000 + 30
@@ -74,22 +73,3 @@ def is_discord_media_url(url: str) -> bool:
         or host.endswith(".discordapp.net")
     )
 
-
-def normalize_reply_image_urls(value: object) -> tuple[str, ...]:
-    if not isinstance(value, (list, tuple)):
-        return ()
-
-    result: list[str] = []
-    seen: set[str] = set()
-    for url in value:
-        if not isinstance(url, str) or not url or any(char.isspace() for char in url):
-            continue
-        if safe_https_hostname(url) is None:
-            continue
-        if url in seen:
-            continue
-        seen.add(url)
-        result.append(url)
-        if len(result) == MAX_REPLY_IMAGES:
-            break
-    return tuple(result)

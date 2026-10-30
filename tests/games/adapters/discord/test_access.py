@@ -5,7 +5,6 @@ from src.core.adapters.discord.live import LiveGuild
 from src.games.adapters.discord.access import (
     CANNOT_PLAY,
     NO_CHANNEL,
-    NO_GRANT,
     NO_GUILD,
     NO_MEMBER,
     DiscordPlayers,
@@ -23,30 +22,24 @@ class PlayerTests(unittest.IsolatedAsyncioTestCase):
         self.client = Client(self.guild)
         self.players = DiscordPlayers(LiveGuild(self.client, G, lambda: False))
 
-    async def refusal(self, *, fresh: bool, channel_id: int = CHANNEL, user_id: int = 1) -> str:
+    async def refusal(self, *, channel_id: int = CHANNEL, user_id: int = 1) -> str:
         with self.assertRaises(Refused) as raised:
-            await self.players.player(channel_id, user_id, fresh=fresh)
+            await self.players.player(channel_id, user_id)
         return raised.exception.text
 
     async def test_cached_member_who_can_post_is_a_player(self) -> None:
-        self.assertEqual(await self.players.player(CHANNEL, 1, fresh=False),
+        self.assertEqual(await self.players.player(CHANNEL, 1),
                          Player(1, "玩家", "https://cdn.example.com/1.png", frozenset({7})))
         self.assertEqual(self.players.role_ids(1), frozenset({7}))
         self.assertIsNone(self.players.role_ids(2))
 
-    async def test_requests_use_the_freshly_fetched_member(self) -> None:
-        self.guild.add(member(1, roles=(8,)), fetched=True)
-        self.assertEqual((await self.players.player(CHANNEL, 1, fresh=True)).role_ids, frozenset({8}))
-        self.assertEqual(await self.refusal(fresh=True, user_id=2), NO_GRANT)
-
     async def test_unconfirmed_guild_member_or_channel_is_refused(self) -> None:
-        self.assertEqual(await self.refusal(fresh=False, user_id=2), NO_MEMBER)
-        self.assertEqual(await self.refusal(fresh=False, channel_id=CHANNEL + 1), NO_CHANNEL)
+        self.assertEqual(await self.refusal(user_id=2), NO_MEMBER)
+        self.assertEqual(await self.refusal(channel_id=CHANNEL + 1), NO_CHANNEL)
         self.guild.add(channel(CHANNEL + 2, view_channel=True))
-        self.assertEqual(await self.refusal(fresh=False, channel_id=CHANNEL + 2), CANNOT_PLAY)
+        self.assertEqual(await self.refusal(channel_id=CHANNEL + 2), CANNOT_PLAY)
         self.guild.unavailable = True
-        self.assertEqual(await self.refusal(fresh=False), NO_GUILD)
-        self.assertEqual(await self.refusal(fresh=True), "目前無法確認最新的伺服器狀態，請稍後再試。")
+        self.assertEqual(await self.refusal(), NO_GUILD)
 
 
 class HubLinkTests(unittest.TestCase):

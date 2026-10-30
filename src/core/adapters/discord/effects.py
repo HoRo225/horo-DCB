@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from collections.abc import Callable, Mapping
+from collections.abc import Callable
 
 import aiohttp
 import discord
@@ -10,9 +10,7 @@ import discord
 from src.core.adapters.discord.live import LiveGuild
 from src.core.adapters.sqlite.db import StorageError, transaction
 from src.core.adapters.sqlite.operations import OperationStore
-from src.core.app.actions import ActionGroup, ActionSpec, Network, Step
 from src.core.app.effects import EffectKind, EffectRegistry, MessageProof, PendingEffect, ResourceProof
-from src.core.domain.actions import Param, Target, failure
 from src.core.domain.records import DiscordEffect
 
 WAITING = ("pending", "unknown", "failed")
@@ -132,21 +130,3 @@ class EffectResolver:
             if kind.settle is not None:
                 kind.settle(effect)
 
-
-def effect_actions(resolver: EffectResolver) -> ActionGroup:
-    async def resolve(step: Step, params: Mapping[str, object]) -> Mapping[str, object] | None:
-        problem = await resolver.resolve(params["effect_id"], params["resolution"], message_id=params.get("message_id"),
-                                         still_current=step.still_current, actor_id=step.actor.user_id)
-        return failure("effect", problem) if problem is not None else None
-
-    return ActionGroup("effects", (
-        ActionSpec("pending_resolution", {
-            "effect_id": Param("text", target=Target("quoted")),
-            "resolution": Param("enum", choices=("confirmed", "retry", "skip")),
-            "message_id": Param("id", required=False),
-        }, admin=True, effect=Network(resolve),
-            label=lambda params: {"confirmed": "核對後標記已送達", "retry": "重送待處理項目",
-                                  "skip": "略過待處理項目"}[params["resolution"]],
-            warning=lambda params: {"retry": "確定要重送？無法復原", "skip": "確定要略過此次？無法復原"}.get(
-                params["resolution"])),
-    ))

@@ -1,57 +1,32 @@
 from __future__ import annotations
 
-import logging
 from collections.abc import Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 import discord
 
 from src.admin.adapters.discord.pages.common import PendingConfirm, Proceed, footer_note, spacer
-from src.ai import (
-    DEFAULT_MODEL_SETTINGS,
-    ModelChoice,
-    ModelInfo,
-    ModelSettings,
-    StoreError,
-    find_model,
-)
+from src.ai import DEFAULT_MODEL_SETTINGS, MODEL_CATALOG, ModelChoice, ModelSettings, StoreError, find_model
 from src.core.adapters.discord.brand import BRAND_COLOUR, ICONS
 from src.core.adapters.discord.channels import interaction_operation_id
 
 if TYPE_CHECKING:
     from src.admin.adapters.discord.panel import AdminPanelView
 
-EFFORT_LABELS = {
-    "none": "無",
-    "minimal": "極低",
-    "low": "低",
-    "medium": "中",
-    "high": "高",
-    "xhigh": "極高",
-    "max": "最高",
-    "ultra": "極致",
-}
-MODEL_PAGE_SIZE = 24
 UNSAVED_MARK = "● 尚有未儲存的變更"
 
 
 @dataclass(slots=True)
 class ModelEditor:
-    catalog: tuple[ModelInfo, ...] = ()
     draft: ModelSettings | None = None
     notice: tuple[str, str] | None = None
-    pages: dict[str, int] = field(default_factory=lambda: {"primary": 0, "fallback": 0})
-
-
-def last_page(catalog: tuple[object, ...]) -> int:
-    return max(0, (len(catalog) - 1) // MODEL_PAGE_SIZE)
 
 
 def saved_models(view: AdminPanelView) -> ModelSettings:
     try:
         return view.services.ai.models
-    except StoreError, ValueError:
+    except StoreError:
         return DEFAULT_MODEL_SETTINGS
 
 
@@ -70,76 +45,43 @@ def leave_models(view: AdminPanelView, proceed: Proceed) -> PendingConfirm | Non
 
     return PendingConfirm(
         "捨棄未儲存的變更？",
-        "這次選擇的模型與推理強度不會套用，後續請求仍使用已儲存的設定。",
+        "這次選擇的模型不會套用，後續請求仍使用已儲存的設定。",
         "捨棄",
         discard,
         "繼續編輯",
     )
 
+
 async def load_models(view: AdminPanelView, operation: int) -> bool:
+    if not view.is_current(operation):
+        return False
     editor = view.state(ModelEditor)
-    if not view.is_current(operation):
-        return False
-    try:
-        catalog = await view.services.codex.get_models()
-    except Exception:
-        logging.exception("Admin panel failed to load model catalog.")
-        catalog = ()
-    if not view.is_current(operation):
-        return False
-    editor.catalog = catalog
     if editor.draft is None:
         editor.draft = saved_models(view)
-    editor.notice = ("warn", "目前無法取得模型清單；未變更已儲存設定。") if not catalog else None
-    for side in editor.pages:
-        editor.pages[side] = min(editor.pages[side], last_page(catalog))
+    editor.notice = None
     return True
 
 
-def model_setting_select(view: AdminPanelView, side: str, kind: str) -> discord.ui.Select:
-    editor = view.state(ModelEditor)
-    choice = getattr(editor.draft, side)
-    if kind == "model":
-        start = editor.pages[side] * MODEL_PAGE_SIZE
-        options = [
-            discord.SelectOption(
-                label=info.display_name[:100],
-                description=info.model[:100],
-                value=str(index),
-                default=choice is not None and choice.model == info.model,
-            )
-            for index, info in enumerate(editor.catalog[start : start + MODEL_PAGE_SIZE], start)
-        ]
-        if side == "fallback":
-            options.insert(
-                0, discord.SelectOption(label="停用備援", value="off", default=choice is None)
-            )
-        placeholder = "選擇主模型" if side == "primary" else "選擇備援模型（可停用）"
-        disabled = not editor.catalog
-    else:
-        info = find_model(editor.catalog, choice.model if choice else None)
-        if info is not None and info.default_effort in info.supported_efforts:
-            options = [
-                discord.SelectOption(
-                    label=EFFORT_LABELS.get(effort, effort)[:100],
-                    description=effort[:100],
-                    value="default" if effort == info.default_effort else str(index),
-                    default=(choice.effort or info.default_effort) == effort,
-                )
-                for index, effort in enumerate(info.supported_efforts)
-            ]
-        else:
-            options = [discord.SelectOption(label="模型預設", value="default", default=True)]
-        placeholder = "選擇主模型推理強度" if side == "primary" else "選擇備援模型推理強度"
-        disabled = not editor.catalog or info is None
-    if not options:
-        options = [discord.SelectOption(label="無可用模型", value="unavailable")]
+def model_select(view: AdminPanelView, side: str) -> discord.ui.Select:
+    choice = getattr(view.state(ModelEditor).draft, side)
+    options = [
+        discord.SelectOption(
+            label=info.display_name,
+            description=info.model,
+            value=info.model,
+            default=choice is not None and choice.model == info.model,
+        )
+        for info in MODEL_CATALOG
+    ]
+    if side == "fallback":
+        options.insert(0, discord.SelectOption(label="停用備援", value="off", default=choice is None))
     item = view.control(
-        ("model_setting", side, kind),
+        ("model_setting", side),
         discord.ui.Select,
-        lambda item, interaction: handle_model_select(view, interaction, side, kind, item.values),
+        lambda item, interaction: handle_model_select(view, interaction, side, item.values),
     )
-    item.options, item.placeholder, item.disabled = options, placeholder, disabled
+    item.options = options
+    item.placeholder = "選擇主模型" if side == "primary" else "選擇備援模型（可停用）"
     return item
 
 
@@ -147,7 +89,6 @@ async def handle_model_select(
     view: AdminPanelView,
     interaction: discord.Interaction,
     side: str,
-    kind: str,
     values: list[str],
 ) -> None:
     if not values:
@@ -156,40 +97,14 @@ async def handle_model_select(
     editor = view.state(ModelEditor)
 
     async def work(operation: int) -> Callable[[], None] | None:
-        if not editor.catalog or not _model_ready(view, operation):
+        if not _model_ready(view, operation):
             return None
-        choice = getattr(editor.draft, side)
-        if kind == "model":
-            if side == "fallback" and value == "off":
-                selected = None
-            else:
-                try:
-                    index = int(value)
-                except ValueError:
-                    return None
-                start = editor.pages[side] * MODEL_PAGE_SIZE
-                if not start <= index < min(start + MODEL_PAGE_SIZE, len(editor.catalog)):
-                    return None
-                info = editor.catalog[index]
-                effort = (
-                    choice.effort if choice and choice.effort in info.supported_efforts else None
-                )
-                selected = ModelChoice(info.model, effort)
+        if side == "fallback" and value == "off":
+            selected = None
+        elif (info := find_model(MODEL_CATALOG, value)) is not None:
+            selected = ModelChoice(info.model)
         else:
-            info = find_model(editor.catalog, choice.model if choice else None)
-            if info is None:
-                return None
-            if value == "default":
-                effort = None
-            else:
-                try:
-                    index = int(value)
-                except ValueError:
-                    return None
-                if not 0 <= index < len(info.supported_efforts):
-                    return None
-                effort = info.supported_efforts[index]
-            selected = ModelChoice(choice.model, effort)
+            return None
         editor.draft = ModelSettings(
             selected if side == "primary" else editor.draft.primary,
             selected if side == "fallback" else editor.draft.fallback,
@@ -212,43 +127,14 @@ async def save_models(view: AdminPanelView, interaction: discord.Interaction) ->
     editor = view.state(ModelEditor)
 
     async def work(operation: int) -> Callable[[], None] | None:
-        if not _model_ready(view, operation) or not await load_models(view, operation):
-            return None
-        valid = bool(editor.catalog)
-        for choice in (editor.draft.primary, editor.draft.fallback):
-            if choice is None:
-                continue
-            info = find_model(editor.catalog, choice.model)
-            valid = (
-                valid
-                and info is not None
-                and (choice.effort is None or choice.effort in info.supported_efforts)
-            )
-        if not valid:
-            editor.notice = ("warn", "模型或推理強度已失效，請重新選擇；已儲存設定未變更。")
-        else:
-            try:
-                view.services.ai.save_models(editor.draft, operation_id=interaction_operation_id(interaction))
-            except StoreError, ValueError:
-                editor.notice = ("warn", "設定無法儲存；原設定未變更。")
-            else:
-                editor.notice = ("ok", "已儲存全 Bot 模型設定；只影響後續接納的請求。")
-        return lambda: render_ai_models(view)
-
-    await view.run(interaction, work)
-
-
-async def turn_model_page(
-    view: AdminPanelView, interaction: discord.Interaction, side: str, step: int
-) -> None:
-    editor = view.state(ModelEditor)
-
-    async def work(operation: int) -> Callable[[], None] | None:
         if not _model_ready(view, operation):
             return None
-        editor.pages[side] = min(
-            last_page(editor.catalog), max(0, editor.pages[side] + step)
-        )
+        try:
+            view.services.ai.save_models(editor.draft, operation_id=interaction_operation_id(interaction))
+        except StoreError, ValueError:
+            editor.notice = ("warn", "設定無法儲存；原設定未變更。")
+        else:
+            editor.notice = ("ok", "已儲存全 Bot 模型設定；只影響後續接納的請求。")
         return lambda: render_ai_models(view)
 
     await view.run(interaction, work)
@@ -259,56 +145,21 @@ def render_ai_models(view: AdminPanelView) -> None:
     children = view.header(view.bot_text(after="模型設定"), "ai_models")
     marker = f"**{UNSAVED_MARK}**\n" if unsaved(view) else ""
     children.append(discord.ui.TextDisplay(f"{marker}全 Bot 共用；儲存後只影響後續接納的請求。"))
-    pages = last_page(editor.catalog)
     for side, label in (("primary", "主模型"), ("fallback", "備援模型")):
         if side == "fallback":
             children.append(spacer())
         choice = getattr(editor.draft, side) if editor.draft is not None else None
-        info = find_model(editor.catalog, choice.model if choice else None)
         if choice is None:
             status = "**停用**"
         else:
-            effort = (
-                choice.effort
-                if choice.effort
-                else info.default_effort
-                if info is not None
-                else "模型預設"
-            )
-            status = (
-                f"**{discord.utils.escape_markdown(info.display_name if info is not None else choice.model)}**"
-                f" · 推理強度：{EFFORT_LABELS.get(effort, effort)}"
-            )
-            if info is None and editor.catalog:
-                status += f" · {ICONS['warn']} 模型已失效"
-        heading = f"{label} · 第 {editor.pages[side] + 1}/{pages + 1} 頁" if pages else label
+            info = find_model(MODEL_CATALOG, choice.model)
+            status = f"**{discord.utils.escape_markdown(info.display_name if info is not None else choice.model)}**"
         children.extend(
             (
-                discord.ui.TextDisplay(f"### {heading}\n{status}"),
-                discord.ui.ActionRow(model_setting_select(view, side, "model")),
-                discord.ui.ActionRow(model_setting_select(view, side, "effort")),
+                discord.ui.TextDisplay(f"### {label}\n{status}"),
+                discord.ui.ActionRow(model_select(view, side)),
             )
         )
-        if pages:
-            page = editor.pages[side]
-            children.append(
-                discord.ui.ActionRow(
-                    view.button(
-                        f"model_{side}_prev",
-                        "上一頁",
-                        on_click=lambda i, side=side: turn_model_page(view, i, side, -1),
-                        disabled=page == 0,
-                        emoji=ICONS["prev"],
-                    ),
-                    view.button(
-                        f"model_{side}_next",
-                        "下一頁",
-                        on_click=lambda i, side=side: turn_model_page(view, i, side, 1),
-                        disabled=page >= pages,
-                        emoji=ICONS["next"],
-                    ),
-                )
-            )
     children.extend((discord.ui.Separator(), *footer_note(editor.notice)))
     children.append(
         view.actions(
@@ -317,7 +168,6 @@ def render_ai_models(view: AdminPanelView) -> None:
                 "儲存設定",
                 on_click=lambda i: save_models(view, i),
                 style=discord.ButtonStyle.primary,
-                disabled=not editor.catalog,
                 emoji=ICONS["save"],
             )
         )

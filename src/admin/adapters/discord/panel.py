@@ -8,8 +8,7 @@ from typing import Any
 
 import discord
 
-from src.admin.adapters.discord.codex_login import follow_logins
-from src.admin.adapters.discord.pages.ai import load_ai, render_ai, render_ai_access, render_ai_tech
+from src.admin.adapters.discord.pages.ai import load_ai, render_ai, render_ai_access
 from src.admin.adapters.discord.pages.ai_models import leave_models, load_models, render_ai_models
 from src.admin.adapters.discord.pages.common import IDLE_TIMEOUT_SECONDS, PendingConfirm, Proceed
 from src.admin.adapters.discord.pages.games import render_games
@@ -66,13 +65,11 @@ PAGES = {
     page.key: page
     for page in (
         Page("overview", "總覽", "控制台首頁", "overview", render_overview, load_ai),
-        Page("ai", "AI・狀態", "狀態與額度", "ai", render_ai, load_ai, tab=("狀態", "status"), feature=AI),
+        Page("ai", "AI・狀態", "連線狀態", "ai", render_ai, load_ai, tab=("狀態", "status"), feature=AI),
         Page("ai_access", "AI・權限", "頻道與身分組白名單", "access", render_ai_access, tab=("權限", "access"),
              feature=AI),
-        Page("ai_models", "AI・模型", "主模型、備援與推理強度", "models", render_ai_models, load_models,
+        Page("ai_models", "AI・模型", "主模型與備援", "models", render_ai_models, load_models,
              tab=("模型", "models"), leave=leave_models, feature=AI),
-        Page("ai_tech", "AI・技術", "版本、工作與安全邊界", "tech", render_ai_tech, load_ai, tab=("技術", "tech"),
-             feature=AI),
         Page("voice", "臨時語音", "入口頻道與同步狀態", "voice", render_voice, feature=VOICE),
         Page("steam", "Steam 免費遊戲", "通知設定與手動查詢", "steam", render_steam, feature=STEAM),
         Page("games", "遊戲大廳", "頻道與身分組", "games", render_games),
@@ -111,7 +108,6 @@ class AdminPanelView(ErrorNotice, discord.ui.LayoutView):
         self._desired_children: tuple[discord.ui.Item, ...] | None = None
         self._published_children: tuple[discord.ui.Item, ...] | None = None
         self._pending: PendingConfirm | None = None
-        self._unfollow_logins: Callable[[], None] = lambda: None
 
     async def open_panel(self, interaction: discord.Interaction) -> None:
         published = False
@@ -119,7 +115,6 @@ class AdminPanelView(ErrorNotice, discord.ui.LayoutView):
         try:
             await interaction.response.defer(ephemeral=True)
             self.bind_interaction(interaction)
-            self._unfollow_logins = follow_logins(self, lambda note: render_ai(self, note))
             self._panel_registry.attach_view(self._panel_session, self)
             home = PAGES["overview"]
             if not self.alive or not await home.load(self, self._begin_operation()):
@@ -397,7 +392,6 @@ class AdminPanelView(ErrorNotice, discord.ui.LayoutView):
 
     def retire_session(self) -> None:
         self._operation += 1
-        self._unfollow_logins()
         self.stop()
         current = asyncio.current_task()
         for task in tuple(self._panel_session.tasks):

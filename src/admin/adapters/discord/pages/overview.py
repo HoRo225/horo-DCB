@@ -4,7 +4,7 @@ from typing import TYPE_CHECKING
 
 import discord
 
-from src.admin.adapters.discord.pages.ai import AiReadings, ai_state, rate_period_label, rate_visible
+from src.admin.adapters.discord.pages.ai import ai_state
 from src.admin.adapters.discord.pages.common import IDLE_TIMEOUT_SECONDS, status_text
 from src.admin.adapters.discord.pages.games import games_state
 from src.admin.adapters.discord.pages.steam import steam_state
@@ -13,17 +13,6 @@ from src.core.adapters.discord.brand import ICONS
 
 if TYPE_CHECKING:
     from src.admin.adapters.discord.panel import AdminPanelView
-
-
-def rate_line(view: AdminPanelView) -> str:
-    limits = view.state(AiReadings).rate_limits
-    parts = [
-        f"{rate_period_label(window.window_minutes, window.slot)} {max(0, 100 - window.used_percent):g}%"
-        for window in limits.windows
-    ]
-    if limits.fetched_at is None or not parts:
-        return "**額度**　暫時無法取得"
-    return f"**額度剩餘**　{' · '.join(parts)}"
 
 
 def render_overview(view: AdminPanelView) -> None:
@@ -51,8 +40,6 @@ def render_overview(view: AdminPanelView) -> None:
         )
     )
     children = view.header("管理控制台", "overview", subtitle=subtitle)
-    if rate_visible(view):
-        children.insert(1, discord.ui.TextDisplay(rate_line(view)))
     for key, name, label, detail in rows:
         detail = detail.removesuffix("。")
         children.append(

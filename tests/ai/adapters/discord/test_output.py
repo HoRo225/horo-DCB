@@ -6,12 +6,11 @@ from unittest.mock import AsyncMock
 
 import discord
 
-from src.ai.adapters.discord.errors import codex_error_text
+from src.ai.adapters.discord.errors import ai_error_text
 from tests.support import testing
 from src.ai.adapters.discord.output import (
     DISCORD_MESSAGE_LIMIT,
     AiProgress,
-    build_ai_native_image_links,
     build_ai_progress_view,
     send_ai_answer,
 )
@@ -38,9 +37,8 @@ class ProgressViewTests(unittest.TestCase):
 
     def test_recovery_stages_have_their_own_titles(self) -> None:
         self.assertIn("賢狼 正在切換備援模型", card(build_ai_progress_view("fallback", "", 0, name="賢狼")))
-        self.assertIn("賢狼 連線逾時", card(build_ai_progress_view("reconnecting", "", 0, name="賢狼")))
         self.assertIn("🔍 賢狼 正在搜尋網路", card(build_ai_progress_view("searching", "", 0, name="賢狼")))
-        for old in ("等待處理中", "正在整理內容", "正在生成回覆", "正在搜尋資料", "Codex"):
+        for old in ("等待處理中", "正在整理內容", "正在生成回覆", "正在搜尋資料"):
             self.assertNotIn(old, card(build_ai_progress_view("generating", "", 0, name="賢狼")))
 
     def test_bot_name_is_escaped(self) -> None:
@@ -52,14 +50,14 @@ class ProgressViewTests(unittest.TestCase):
 
 class ErrorTextTests(unittest.TestCase):
     def test_codes_name_the_bot_escaped(self) -> None:
-        self.assertEqual(codex_error_text("busy", "*霍蘿*"), "\\*霍蘿\\* 目前忙碌，請稍後再試。")
-        self.assertEqual(codex_error_text("nope", "霍蘿"), "霍蘿 暫時無法回覆，請稍後再試。")
-        self.assertEqual(codex_error_text("not_allowed_channel", "霍蘿", channels="<#1>"),
+        self.assertEqual(ai_error_text("busy", "*霍蘿*"), "\\*霍蘿\\* 目前忙碌，請稍後再試。")
+        self.assertEqual(ai_error_text("nope", "霍蘿"), "霍蘿 暫時無法回覆，請稍後再試。")
+        self.assertEqual(ai_error_text("not_allowed_channel", "霍蘿", channels="<#1>"),
                          "這個頻道不能找霍蘿聊天，請到 <#1> 再 @霍蘿。")
-        self.assertEqual(codex_error_text("not_allowed_channel", "HoRo", channels="<#1>"),
+        self.assertEqual(ai_error_text("not_allowed_channel", "HoRo", channels="<#1>"),
                          "這個頻道不能找 HoRo 聊天，請到 <#1> 再 @HoRo。")
-        self.assertEqual(codex_error_text("not_allowed_role", "HoRo"), "你目前沒有使用 HoRo AI 的身分組，需要的話請找管理員。")
-        self.assertNotIn("AI 助手", codex_error_text("auth_required", "霍蘿"))
+        self.assertEqual(ai_error_text("not_allowed_role", "HoRo"), "你目前沒有使用 HoRo AI 的身分組，需要的話請找管理員。")
+        self.assertEqual(ai_error_text("model_configuration_invalid", "霍蘿"), "AI 模型設定目前無法使用，請聯絡管理員檢查模型。")
 
 
 class ProgressCardTests(unittest.IsolatedAsyncioTestCase):
@@ -156,37 +154,6 @@ class AnswerTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(chunks), 8)
         self.assertTrue(all(len(chunk) <= DISCORD_MESSAGE_LIMIT for chunk in chunks))
         self.assertTrue(chunks[-1].endswith("回覆過長，已截斷。"))
-
-    async def test_images_follow_the_text_as_a_link_message(self) -> None:
-        send = AsyncMock()
-        message = SimpleNamespace(channel=SimpleNamespace(send=send), to_reference=lambda **kwargs: kwargs)
-        url = "https://cdn.example.com/a.png"
-        await send_ai_answer(message, "word " * 5_000, image_urls=(url,), can_send=AsyncMock(return_value=True))
-        chunks = [call.args[0] for call in send.await_args_list]
-        self.assertEqual(len(chunks), 8)
-        self.assertTrue(chunks[-2].endswith("回覆過長，已截斷。"))
-        self.assertTrue(chunks[-1].endswith(url))
-        self.assertTrue(all("view" not in call.kwargs for call in send.await_args_list))
-
-    async def test_image_only_answer_replies_with_the_links(self) -> None:
-        message = SimpleNamespace(channel=SimpleNamespace(send=AsyncMock()), to_reference=lambda **kwargs: kwargs)
-        url = "https://cdn.example.com/a.png"
-        self.assertEqual(await send_ai_answer(message, "", image_urls=(url,), can_send=AsyncMock(return_value=True)),
-                         "success")
-        message.channel.send.assert_awaited_once()
-        self.assertTrue(message.channel.send.await_args.args[0].endswith(url))
-        self.assertIn("reference", message.channel.send.await_args.kwargs)
-
-
-class ImageLinksTests(unittest.TestCase):
-    def test_empty(self) -> None:
-        self.assertEqual(build_ai_native_image_links(()), "")
-
-    def test_long_links_are_omitted_with_note(self) -> None:
-        urls = tuple(f"https://cdn.example.com/{i}/" + "a" * 300 for i in range(10))
-        content = build_ai_native_image_links(urls)
-        self.assertLessEqual(len(content), DISCORD_MESSAGE_LIMIT)
-        self.assertRegex(content, r"另有 \d+ 個圖片連結")
 
 
 if __name__ == "__main__":
