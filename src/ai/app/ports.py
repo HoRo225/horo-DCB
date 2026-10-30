@@ -37,13 +37,16 @@ class RuntimeStatus:
         return self.reason == "ready"
 
 
-class Job(Protocol):
+class Scoped(Protocol):
     @property
     def key(self) -> str: ...
     @property
     def user_id(self) -> int | None: ...
     @property
     def parent_channel_id(self) -> int | None: ...
+
+
+class Job(Scoped, Protocol):
     @property
     def accepted_at(self) -> float: ...
     @property
@@ -71,10 +74,11 @@ class TextModel(Protocol):
     ) -> ModelReply: ...
 
     async def cancel(self, guild_id: int, user_id: int | None = None) -> None: ...
-    async def cancel_revoked(self, guild_id: int, predicate: Callable[[Job], bool]) -> None: ...
+    async def revoke(self, guild_id: int, predicate: Callable[[Scoped], bool]) -> None: ...
 
     async def forget_scope(
         self, guild_id: int, channel_id: int | None = None, *, include_children: bool = False,
+        user_id: int | None = None,
     ) -> None: ...
 
 

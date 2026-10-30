@@ -13,12 +13,13 @@ def settings(**values: object) -> tuple[AiSettings, MemoryAiStore, FakeModel]:
 
 
 class SwitchTests(unittest.IsolatedAsyncioTestCase):
-    async def test_turning_off_stops_requests_only_on_the_transition(self) -> None:
+    async def test_turning_off_stops_and_forgets_only_on_the_transition(self) -> None:
         ai, store, model = settings(enabled=False)
         self.assertTrue(await ai.set_enabled(True, operation_id="op-1"))
         self.assertTrue(await ai.set_enabled(False))
         self.assertTrue(await ai.set_enabled(False))
         model.cancel.assert_awaited_once_with(G)
+        model.forget_scope.assert_awaited_once_with(G)
         self.assertFalse(ai.enabled)
         self.assertEqual(store.saved[0], ("enabled", True, "op-1"))
 
@@ -37,6 +38,7 @@ class SwitchTests(unittest.IsolatedAsyncioTestCase):
         with self.assertLogs(level="ERROR"):
             self.assertFalse(await ai.set_enabled(False))
         self.assertFalse(ai.enabled)
+        model.forget_scope.assert_awaited_once_with(G)
 
     async def test_switch_rejects_non_booleans(self) -> None:
         ai, store, _model = settings()

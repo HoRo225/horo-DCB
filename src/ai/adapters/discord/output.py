@@ -17,6 +17,7 @@ MAX_DISCORD_RESPONSE_CHUNKS = 8
 PROGRESS_FALLBACK = ("thinking", "{name} 正在思考")
 PROGRESS_OVERRIDES = {
     "searching": ("query", "{name} 正在搜尋網路"),
+    "generating": ("writing", "{name} 正在生成回覆"),
     "fallback": ("fallback", "{name} 正在切換備援模型"),
 }
 ANSWER_MENTIONS = discord.AllowedMentions(replied_user=True)
@@ -52,7 +53,7 @@ class AiProgress:
         self.deadline = deadline
         self._cleanups = cleanups
         self.started_at = int(time.time())
-        self._latest = ("generating", "")
+        self._latest = ("thinking", "")
         self._published = self._latest
         self._changed = asyncio.Event()
         self._task: asyncio.Task[None] | None = None
@@ -77,7 +78,7 @@ class AiProgress:
         self._task = asyncio.create_task(self._run())
 
     def update(self, stage: str, summary: str = "") -> None:
-        stage = stage if stage in PROGRESS_OVERRIDES else "generating"
+        stage = stage if stage in PROGRESS_OVERRIDES else "thinking"
         latest = (stage, reasoning_title(summary))
         if latest != self._latest:
             self._latest = latest

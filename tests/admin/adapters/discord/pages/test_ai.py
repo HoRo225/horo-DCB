@@ -95,7 +95,7 @@ class AiAccessPageTests(PanelCase):
         clicked = await self.choose(self.select(self.CHANNELS), resolved(self.channels[600]))
         self.assertEqual(self.admin.ai.channel_ids, frozenset({600}))
         self.assertIn("✅ 已更新 1 個白名單頻道。", self.screen(clicked))
-        self.model.cancel_revoked.assert_awaited_once()
+        self.model.revoke.assert_awaited_once()
         self.model.forget_scope.assert_not_awaited()
 
     async def test_channel_from_another_guild_is_rejected(self) -> None:

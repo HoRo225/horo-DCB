@@ -5,7 +5,9 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 DATA_DIR = Path("/app/data")
+CLAUDE_URL = "http://clewdr:8484"
 DISCORD_TOKEN_FILE = Path("/run/secrets/discord_token")
+CLAUDE_PASSWORD_FILE = Path("/run/secrets/clewdr_password")
 
 
 def required_env(name: str) -> str:
@@ -35,11 +37,13 @@ def read_secret(path: Path) -> str:
 @dataclass(frozen=True, slots=True)
 class AppConfig:
     discord_token: str = field(repr=False)
+    claude_password: str = field(repr=False)
     guild_id: int
 
     @classmethod
     def from_env(cls) -> AppConfig:
         return cls(
             discord_token=read_secret(DISCORD_TOKEN_FILE),
+            claude_password=read_secret(CLAUDE_PASSWORD_FILE),
             guild_id=guild_id_env(),
         )

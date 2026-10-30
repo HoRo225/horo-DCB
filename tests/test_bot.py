@@ -5,7 +5,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import discord
 
-from src.ai.app.unavailable import UnavailableModel
+from src.ai.adapters.claude.service import ClaudeService
 from src.bot import HoroBot, main
 from src.core.app.supervisor import WORK
 from src.games.adapters.discord.views import lobby_view
@@ -135,7 +135,7 @@ class MainTests(unittest.TestCase):
         self.db, self.lock = MagicMock(), MagicMock()
 
     def run_main(self, *, safe: bool) -> None:
-        config = SimpleNamespace(guild_id=G, discord_token="fixture")
+        config = SimpleNamespace(guild_id=G, discord_token="fixture", claude_password="fixture")
         with (
             patch("src.bot.AppConfig.from_env", return_value=config),
             patch("logging.basicConfig"),
@@ -144,7 +144,7 @@ class MainTests(unittest.TestCase):
             patch("src.bot.HoroBot", return_value=MagicMock(db_safe_to_close=safe)) as bot,
         ):
             main()
-        self.assertIsInstance(bot.call_args.args[0], UnavailableModel)
+        self.assertIsInstance(bot.call_args.args[0], ClaudeService)
 
     def test_database_and_lock_close_after_a_safe_shutdown(self) -> None:
         self.run_main(safe=True)

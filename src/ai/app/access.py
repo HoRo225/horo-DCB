@@ -5,7 +5,7 @@ import logging
 from collections.abc import Callable
 from typing import Literal
 
-from src.ai.app.ports import Job, ModelError, TextModel
+from src.ai.app.ports import ModelError, Scoped, TextModel
 from src.ai.app.settings import AiSettings
 from src.ai.domain.conversation import scope_matches
 from src.core.app.supervisor import TaskGroup, cancel_all, wait_until
@@ -62,14 +62,14 @@ class AiAccess:
                 settings.suspend(removed)
             try:
                 if detach:
-                    def in_removed(job: Job) -> bool:
+                    def in_removed(scoped: Scoped) -> bool:
                         return any(
-                            scope_matches(job.key, guild_id, channel_id,
-                                          parent_channel_id=job.parent_channel_id, include_children=True)
+                            scope_matches(scoped.key, guild_id, channel_id,
+                                          parent_channel_id=scoped.parent_channel_id, include_children=True)
                             for channel_id in removed
                         )
                     try:
-                        await self._model.cancel_revoked(guild_id, in_removed)
+                        await self._model.revoke(guild_id, in_removed)
                     except ModelError:
                         logging.exception("AI requests in removed allowlist channels did not stop in time.")
                 settings.set_allowlist(selected, roles=roles, operation_id=operation_id)
@@ -77,12 +77,12 @@ class AiAccess:
                     if self._role_ids_for_user is None:
                         await self._model.cancel(guild_id)
                     else:
-                        def revoked(job: Job) -> bool:
-                            if job.user_id is None:
+                        def revoked(scoped: Scoped) -> bool:
+                            if scoped.user_id is None:
                                 return False
-                            member_roles = self._role_ids_for_user(job.user_id)
+                            member_roles = self._role_ids_for_user(scoped.user_id)
                             return member_roles is None or not selected.intersection(member_roles)
-                        await self._model.cancel_revoked(guild_id, revoked)
+                        await self._model.revoke(guild_id, revoked)
                 return "unchanged" if previous == selected else "updated"
             finally:
                 if detach:

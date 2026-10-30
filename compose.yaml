@@ -1,4 +1,14 @@
 services:
+  clewdr:
+    image: ghcr.io/xerxes-2/clewdr:v0.13.6
+    logging:
+      driver: local
+    ports:
+      - "192.168.1.105:8484:8484"
+    volumes:
+      - clewdr-data:/etc/clewdr
+    restart: unless-stopped
+
   bot:
     build: .
     image: horo-dcb-bot:latest
@@ -10,12 +20,19 @@ services:
       - data:/app/data
     secrets:
       - discord_token
+      - clewdr_password
+    depends_on:
+      clewdr:
+        condition: service_started
     stop_grace_period: 30s
     restart: unless-stopped
 
 secrets:
   discord_token:
     file: ./secrets/discord_token
+  clewdr_password:
+    file: ./secrets/clewdr_password
 
 volumes:
+  clewdr-data:
   data:

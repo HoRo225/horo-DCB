@@ -29,17 +29,17 @@ def progress(cleanups=None, *, deadline: float = 0, can_send=None) -> AiProgress
 
 class ProgressViewTests(unittest.TestCase):
     def test_title_line_and_reasoning_heading(self) -> None:
-        view = build_ai_progress_view("generating", "Checking code", 0, name="賢狼")
+        view = build_ai_progress_view("thinking", "Checking code", 0, name="賢狼")
         self.assertEqual(card(view), "**🧠 賢狼 正在思考** … · 開始於 <t:0:R>\n-# Checking code")
         self.assertEqual(view.children[0].accent_colour, BRAND_COLOUR)
         self.assertEqual(card(build_ai_progress_view("queued", "", None, name="賢狼")), "**🧠 賢狼 正在思考** …")
-        self.assertTrue(card(build_ai_progress_view("generating", "a_b", 0, name="賢狼")).endswith("\n-# a\\_b"))
+        self.assertTrue(card(build_ai_progress_view("thinking", "a_b", 0, name="賢狼")).endswith("\n-# a\\_b"))
 
-    def test_recovery_stages_have_their_own_titles(self) -> None:
+    def test_each_stage_has_its_own_title(self) -> None:
         self.assertIn("賢狼 正在切換備援模型", card(build_ai_progress_view("fallback", "", 0, name="賢狼")))
         self.assertIn("🔍 賢狼 正在搜尋網路", card(build_ai_progress_view("searching", "", 0, name="賢狼")))
-        for old in ("等待處理中", "正在整理內容", "正在生成回覆", "正在搜尋資料"):
-            self.assertNotIn(old, card(build_ai_progress_view("generating", "", 0, name="賢狼")))
+        self.assertIn("✍️ 賢狼 正在生成回覆", card(build_ai_progress_view("generating", "", 0, name="賢狼")))
+        self.assertIn("🧠 賢狼 正在思考", card(build_ai_progress_view("thinking", "", 0, name="賢狼")))
 
     def test_bot_name_is_escaped(self) -> None:
         self.assertIn("**🧠 新\\_名字 正在思考**", card(build_ai_progress_view("queued", "", 0, name="新_名字")))
@@ -118,9 +118,9 @@ class ProgressCardTests(unittest.IsolatedAsyncioTestCase):
         await tracker.start(SimpleNamespace(reply=AsyncMock(return_value=posted)))
         for stage in ("preparing", "generating", "queued"):
             tracker.update(stage, "")
-        tracker.update("generating", "**比較做法**\n\n第一段")
+        tracker.update("thinking", "**比較做法**\n\n第一段")
         await asyncio.sleep(1.1)
-        tracker.update("generating", "**比較做法**\n\n第一段，再多一些")
+        tracker.update("thinking", "**比較做法**\n\n第一段，再多一些")
         await asyncio.sleep(1.1)
         await tracker.finish()
         self.assertEqual([card(call.kwargs["view"]).split("\n-# ")[1] for call in posted.edit.await_args_list],

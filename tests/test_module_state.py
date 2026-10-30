@@ -11,6 +11,8 @@ CONSTANTS = {
     "admin/adapters/discord/pages/common.py": {"STATUS_DOTS"},
     "admin/adapters/discord/pages/effects.py": {"STATES"},
     "admin/adapters/discord/panel.py": {"PAGES"},
+    "ai/adapters/claude/client.py": {"ERROR_STATUS"},
+    "ai/adapters/claude/stream.py": {"BLOCK_STAGES"},
     "ai/adapters/discord/errors.py": {"_ERROR_TEXT"},
     "ai/adapters/discord/messages.py": {"DENIAL_CODES"},
     "ai/adapters/discord/output.py": {"PROGRESS_OVERRIDES"},

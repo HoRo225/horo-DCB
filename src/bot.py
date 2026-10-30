@@ -12,6 +12,8 @@ from src.admin.adapters.discord.cog import AdminCog
 from src.admin.adapters.discord.ports import AdminServices
 from src.admin.adapters.discord.sessions import PanelSessionRegistry
 from src.ai import AiAccess, AiSettings
+from src.ai.adapters.claude.client import ClaudeClient
+from src.ai.adapters.claude.service import ClaudeService
 from src.ai.adapters.discord.cog import AiCog
 from src.ai.adapters.discord.errors import ai_error_text
 from src.ai.adapters.discord.messages import AiMessages
@@ -19,7 +21,6 @@ from src.ai.adapters.media.frames import Frames
 from src.ai.adapters.media.images import MediaReader
 from src.ai.adapters.sqlite.store import SqliteAiStore
 from src.ai.app.ports import TextModel
-from src.ai.app.unavailable import UnavailableModel
 from src.core.adapters.discord.brand import load_app_emojis, report_interaction_error, sync_discord_brand
 from src.core.adapters.discord.channels import member_role_ids
 from src.core.adapters.discord.effects import EffectResolver
@@ -29,7 +30,7 @@ from src.core.adapters.discord.watchdog import install_stack_dump_signal, run_wa
 from src.core.adapters.sqlite.backups import SqliteBackups
 from src.core.adapters.sqlite.db import DB_PATH, hold_lock, open_db
 from src.core.adapters.sqlite.operations import OperationStore
-from src.core.app.config import AppConfig
+from src.core.app.config import CLAUDE_URL, AppConfig
 from src.core.app.effects import EffectRegistry
 from src.core.app.maintenance import Maintenance
 from src.core.app.supervisor import PRESENTATION, REQUEST, SCHEDULED, WORK, Supervisor, TaskGroup
@@ -195,7 +196,8 @@ def main() -> None:
     bot = None
     try:
         db = open_db(DB_PATH)
-        bot = HoroBot(UnavailableModel(), guild_id=config.guild_id, db=db)
+        model = ClaudeService(ClaudeClient(CLAUDE_URL, config.claude_password))
+        bot = HoroBot(model, guild_id=config.guild_id, db=db)
         bot.run(config.discord_token, log_handler=None)
     finally:
         if bot is not None and not bot.db_safe_to_close:

@@ -5,7 +5,7 @@ import contextlib
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
-from src.ai.app.ports import ModelError, ModelReply
+from src.ai.app.ports import ModelError, ModelReply, RuntimeStatus
 
 
 class MemoryAiStore:
@@ -66,8 +66,11 @@ class FakeModel:
         self.try_start_request = MagicMock(return_value=allow)
         self.chat = AsyncMock(return_value=ModelReply("最終答案"))
         self.cancel = AsyncMock()
-        self.cancel_revoked = AsyncMock()
+        self.revoke = AsyncMock()
         self.forget_scope = AsyncMock()
+        self.get_runtime_status = AsyncMock(return_value=RuntimeStatus())
+        self.stop_new_work = MagicMock()
+        self.close = AsyncMock()
         self.admission_error = admission_error
         self.work_seconds = work_seconds
         self.deadline_seconds = deadline_seconds

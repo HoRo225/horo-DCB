@@ -49,6 +49,7 @@ class AiCog(commands.Cog):
             await self._model.cancel(after.guild.id, after.id)
         except ModelError:
             logging.exception("AI revoked member cleanup failed.")
+        await self._model.forget_scope(after.guild.id, user_id=after.id)
 
     @commands.Cog.listener()
     async def on_guild_channel_delete(self, channel: discord.abc.GuildChannel) -> None:

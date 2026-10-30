@@ -9,9 +9,16 @@ Commit 訊息與 PR 描述不加任何署名行（不加 `Co-Authored-By`，也�
 
 ## 正式機 horo-DCB
 - 連線：`ssh horo-dcb`（`~/.ssh/config`：192.168.1.105，使用者 `horo-dcb`，金鑰 `~/.ssh/id_ed25519_horo-dcb`）。Ubuntu，Linux 7.0，Docker 29。
-- 專案在 `~/horo-DCB`，追蹤 origin/main，以 `compose.yaml` 跑兩個服務：`bot`（具名卷 `data` 掛在 `/app/data`）與 `codex`（具名卷 `codex-home` 掛在 `/app/codex`）。
-- 憑證用 Docker secret：`~/horo-DCB/secrets/discord_token` 與 `secrets/codex_ws_token`（目錄 700、檔案 644，容器內以 uid 10001 讀取）。伺服器 ID 寫在 `compose.yaml` 的 `DISCORD_GUILD_ID`，不再使用 `.env`。
-- 正式資料庫是容器內的 `/app/data/horo.db`（schema v19）。bot 每次啟動與每天台北 0 點會自動線上備份到 `/app/data/backups/horo-YYYYMMDD.db`，保留最近 7 份；這些備份和正式庫在同一個具名卷。
+- 專案在 `~/horo-DCB`，追蹤 origin/main，以 `compose.yaml` 跑兩個服務：`bot`（具名卷 `data` 掛在 `/app/data`）與 `clewdr`（映像 `ghcr.io/xerxes-2/clewdr:v0.13.6`，具名卷 `clewdr-data` 掛在 `/etc/clewdr`，網頁後台 `http://192.168.1.105:8484`）。bot 經 `http://clewdr:8484/code/v1/messages` 呼叫 Claude。
+- 憑證用 Docker secret：`~/horo-DCB/secrets/discord_token` 與 `secrets/clewdr_password`（目錄 700、檔案 644，容器內以 uid 10001 讀取）。`clewdr_password` 是 clewdr 的 API 密碼；admin 密碼只用來登入後台。伺服器 ID 寫在 `compose.yaml` 的 `DISCORD_GUILD_ID`，不再使用 `.env`。
+- 首次建立 clewdr：
+  1. `docker compose up -d clewdr`
+  2. `docker compose logs clewdr` 抄下 `API Password` 與 admin 密碼。
+  3. 把 API 密碼寫進 `~/horo-DCB/secrets/clewdr_password`（644）。
+  4. 瀏覽 `http://192.168.1.105:8484`，用 admin 密碼登入，在 Claude → Submit Cookie 貼 claude.ai 的 `sessionKey`。
+  5. `docker compose up -d --build --remove-orphans bot`（`--remove-orphans` 會移除舊的 codex 容器；舊卷 `codex-home` 不會自動刪除）。
+- Claude 登入失效時（AI 回覆「登入已失效」），回到 clewdr 後台重新貼 cookie，不必重啟 bot。
+- 正式資料庫是容器內的 `/app/data/horo.db`（schema v20）。bot 每次啟動與每天台北 0 點會自動線上備份到 `/app/data/backups/horo-YYYYMMDD.db`，保留最近 7 份；這些備份和正式庫在同一個具名卷。
 - 部署前的手動備份放在主機家目錄 `~/horo-backup-<YYYYMMDD-HHMMSS>.db`，做法是用 sqlite3 的 backup API 線上複製再 `docker compose cp` 出來：
   ```sh
   cd ~/horo-DCB; TS=$(date +%Y%m%d-%H%M%S)

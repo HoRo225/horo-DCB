@@ -5,6 +5,7 @@ from pathlib import Path
 SRC = Path(__file__).resolve().parents[1] / "src"
 SUPERVISOR = "core/app/supervisor.py"
 SCOPED_CHILDREN = {
+    "ai/adapters/claude/service.py": "clewdr reachability poll owned by ClaudeService.start and cancelled in close",
     "ai/adapters/discord/request.py": "typing indicator scoped to one request and cancelled when it ends",
     "ai/adapters/discord/output.py": "progress card reply and edit loop scoped to one AiProgress; late replies go to its cleanup group",
     "core/adapters/discord/watchdog.py": "lag probe scoped to run_watchdog and cancelled when it returns",

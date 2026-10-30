@@ -42,6 +42,7 @@ ICONS = {
     "status": "📊",
     "access": "🔐",
     "thinking": "🧠",
+    "writing": "✍️",
     "deadline": "⏰",
     "dotok": "🟢",
     "dotwarn": "🟠",

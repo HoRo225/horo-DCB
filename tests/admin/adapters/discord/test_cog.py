@@ -3,11 +3,11 @@ from unittest.mock import MagicMock
 
 import discord
 
-from src.ai.app.unavailable import UnavailableModel
 from src.bot import HoroBot
 from src.core.adapters.sqlite.db import open_db, transaction
 from src.core.adapters.sqlite.operations import OperationStore
 from tests.support.admin import G, PanelDriver, admin_guild
+from tests.support.ai import FakeModel
 
 KINDS = {
     "game_hub_publish": ("發布遊戲大廳", ["核對後標記已送達"]),
@@ -24,7 +24,7 @@ class ComposedPanelTests(PanelDriver):
     async def asyncSetUp(self) -> None:
         db = open_db(":memory:")
         self.addCleanup(db.close)
-        self.bot = HoroBot(UnavailableModel(), guild_id=G, db=db)
+        self.bot = HoroBot(FakeModel(), guild_id=G, db=db)
         self.guild, _channels = admin_guild()
         self.bot.get_guild = MagicMock(side_effect=lambda guild_id: self.guild if guild_id == G else None)
         await self.enterAsyncContext(self.bot)

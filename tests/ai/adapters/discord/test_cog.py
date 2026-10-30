@@ -63,17 +63,20 @@ class ChannelDeleteTest(unittest.IsolatedAsyncioTestCase):
 
 
 class MemberAndMessageTest(unittest.IsolatedAsyncioTestCase):
-    async def test_losing_allowlisted_role_cancels_member_requests(self) -> None:
+    async def test_losing_allowlisted_role_stops_and_forgets_the_member(self) -> None:
         harness = Harness()
         allowed, other = SimpleNamespace(id=ROLE), SimpleNamespace(id=8)
         before = SimpleNamespace(roles=[allowed, other])
         after = SimpleNamespace(roles=[other], id=USER, guild=SimpleNamespace(id=G))
         await harness.cog.on_member_update(before, after)
         harness.model.cancel.assert_awaited_once_with(G, USER)
+        harness.model.forget_scope.assert_awaited_once_with(G, user_id=USER)
         harness.model.cancel.reset_mock()
+        harness.model.forget_scope.reset_mock()
         after.roles = [allowed]
         await harness.cog.on_member_update(before, after)
         harness.model.cancel.assert_not_called()
+        harness.model.forget_scope.assert_not_called()
 
     async def test_message_is_a_tracked_request_until_handled(self) -> None:
         harness = Harness()

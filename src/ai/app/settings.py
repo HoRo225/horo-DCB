@@ -42,6 +42,8 @@ class AiSettings:
         except ModelError:
             logging.exception("AI was disabled but requests in flight could not be stopped.")
             return False
+        finally:
+            await self._model.forget_scope(self.guild_id)
         return True
 
     @property

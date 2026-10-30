@@ -11,6 +11,9 @@ _ERROR_TEXT = {
     "not_allowed_role": "你目前沒有使用{name} AI 的身分組，需要的話請找管理員。",
     "timeout": "{name} 回覆逾時，請稍後再試。",
     "model_configuration_invalid": "AI 模型設定目前無法使用，請聯絡管理員檢查模型。",
+    "auth": "{name} 的 AI 帳號登入已失效，請聯絡管理員重新登入 clewdr。",
+    "upstream": "AI 服務暫時無法回應，請稍後再試。",
+    "refusal": "這個問題 AI 無法回答。",
 }
 
 

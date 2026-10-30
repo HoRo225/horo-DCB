@@ -24,6 +24,11 @@ def conversation_key(
     return f"guild:{guild_id}:channel:{channel_id}:user:{user_id}"
 
 
+def conversation_user(key: str) -> int | None:
+    _channel, separator, user = key.rpartition(":user:")
+    return int(user) if separator and user.isdigit() else None
+
+
 def scope_matches(
     key: str,
     guild_id: int,

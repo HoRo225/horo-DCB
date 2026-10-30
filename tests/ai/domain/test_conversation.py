@@ -1,6 +1,6 @@
 import unittest
 
-from src.ai.domain.conversation import conversation_key, scope_matches
+from src.ai.domain.conversation import conversation_key, conversation_user, scope_matches
 
 THREAD_KEY = conversation_key(1, 5, 3, is_thread=True)
 USER_KEY = conversation_key(1, 2, 3, is_thread=False)
@@ -11,6 +11,11 @@ class ConversationKeyTests(unittest.TestCase):
         self.assertEqual(conversation_key(1, 5, 3, is_thread=True), conversation_key(1, 5, 4, is_thread=True))
         self.assertNotEqual(conversation_key(1, 2, 3, is_thread=False), conversation_key(1, 2, 4, is_thread=False))
         self.assertEqual((THREAD_KEY, USER_KEY), ("guild:1:thread:5", "guild:1:channel:2:user:3"))
+
+
+    def test_only_channel_conversations_belong_to_one_user(self) -> None:
+        self.assertEqual(conversation_user(USER_KEY), 3)
+        self.assertIsNone(conversation_user(THREAD_KEY))
 
 
 class ScopeMatchesTests(unittest.TestCase):
