@@ -10,10 +10,12 @@ from pathlib import Path
 
 MAX_FRAMES = 4
 _FRAME_EDGE = 1024
+_STILL_EDGE = 1568
 _MAX_SOURCE_PIXELS = 25_000_000
 _MAX_DECODE_FRAMES = 600
 _ROOT = Path(__file__).resolve().parents[4]
 _FORMATS = ("GIF", "PNG", "WEBP")
+_STILL_FORMATS = ("JPEG", "PNG", "WEBP")
 WORKERS = 2
 
 
@@ -22,6 +24,13 @@ class Frames:
         self._slots = asyncio.Semaphore(workers)
 
     async def extract(self, data: bytes) -> list[bytes]:
+        return await self._run("frames", data)
+
+    async def shrink(self, data: bytes) -> bytes | None:
+        frames = await self._run("still", data)
+        return frames[0] if frames else None
+
+    async def _run(self, mode: str, data: bytes) -> list[bytes]:
         async with self._slots:
             with tempfile.TemporaryDirectory(prefix="horo-frames-") as directory:
                 source = Path(directory, "source")
@@ -33,6 +42,7 @@ class Frames:
                     "-B",
                     "-m",
                     "src.ai.adapters.media.frames",
+                    mode,
                     str(source),
                     directory,
                     cwd=_ROOT,
@@ -79,22 +89,37 @@ def _animated_frames(source: Path) -> list:
         return frames
 
 
-def _save_frames(frames: list, out: Path) -> None:
+def _still_frame(source: Path) -> list:
+    from PIL import Image, ImageOps
+
+    with Image.open(source, formats=_STILL_FORMATS) as image:
+        _check_pixels(*image.size)
+        return [ImageOps.exif_transpose(image)]
+
+
+_MODES = {
+    "frames": (_animated_frames, _FRAME_EDGE, 85),
+    "still": (_still_frame, _STILL_EDGE, 80),
+}
+
+
+def _save_frames(frames: list, out: Path, edge: int, quality: int) -> None:
     from PIL import Image
 
     for number, frame in enumerate(frames, 1):
         frame = frame.convert("RGBA")
-        frame.thumbnail((_FRAME_EDGE, _FRAME_EDGE))
+        frame.thumbnail((edge, edge))
         canvas = Image.new("RGB", frame.size, "white")
         canvas.paste(frame, mask=frame.getchannel("A"))
-        canvas.save(out / f"{number}.jpg", "JPEG", quality=85)
+        canvas.save(out / f"{number}.jpg", "JPEG", quality=quality)
 
 
 def main(argv: list[str]) -> int:
     signal.alarm(10)
-    source, out = Path(argv[1]), Path(argv[2])
+    decode, edge, quality = _MODES[argv[1]]
+    source, out = Path(argv[2]), Path(argv[3])
     try:
-        _save_frames(_animated_frames(source), out)
+        _save_frames(decode(source), out, edge, quality)
     except Exception:
         return 1
     return 0

@@ -17,6 +17,7 @@ from src.ai.domain.conversation import (
 )
 
 MEDIA_CHUNK_BYTES = 64 * 1024
+STILL_AS_IS_BYTES = 2**20
 HTTP_TIMEOUT = aiohttp.ClientTimeout(total=15, connect=3, sock_read=10)
 SUPPORTED_IMAGE_TYPES = {
     "image/jpeg": {".jpg", ".jpeg"},
@@ -151,6 +152,11 @@ async def read_message_media(
                     continue
                 if kind == "video" or not _needs_frames(content_type, data):
                     label = "影片" if kind == "video" else "靜態圖"
+                    if len(data) > STILL_AS_IS_BYTES:
+                        data, content_type = await frames.shrink(data), "image/jpeg"
+                        if data is None:
+                            budget.broken += 1
+                            continue
                     result.append((label, (budget.data_url(content_type, data),)))
                     continue
                 sampled = await frames.extract(data)

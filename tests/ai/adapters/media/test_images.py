@@ -1,5 +1,8 @@
 import asyncio
+import base64
 import io
+import os
+import sys
 import unittest
 from contextlib import nullcontext
 from types import SimpleNamespace
@@ -8,6 +11,7 @@ from unittest.mock import AsyncMock, MagicMock
 import aiohttp
 from PIL import Image
 
+from src.ai.adapters.media.frames import Frames
 from src.ai.adapters.media.images import (
     ImageAttachmentError,
     MediaBudget,
@@ -16,8 +20,12 @@ from src.ai.adapters.media.images import (
     download_discord_media,
     read_message_media,
 )
-from src.ai.domain.conversation import MAX_IMAGE_BYTES
+from src.ai.domain.conversation import MAX_IMAGE_ATTACHMENTS, MAX_IMAGE_BYTES
 
+WORKER_NEEDS_POSIX = "the frame worker uses signal.alarm, which Windows lacks; Docker runs these"
+CLAUDE_IMAGE_BYTES = 5 * 2**20
+CLAUDE_REQUEST_BYTES = 32 * 2**20
+CLAUDE_IMAGE_EDGE = 1568
 CDN = "https://cdn.discordapp.com"
 PNG = b"\x89PNG\r\n\x1a\n" + b"\0" * 8
 JPEG = b"\xff\xd8\xff\xe0" + b"\0" * 8
@@ -31,6 +39,16 @@ def encode(colors: tuple[str, ...], fmt: str) -> bytes:
     out = io.BytesIO()
     frames[0].save(out, fmt, save_all=len(frames) > 1, append_images=frames[1:], duration=100)
     return out.getvalue()
+
+
+def noise(size: tuple[int, int], fmt: str, **params) -> bytes:
+    out = io.BytesIO()
+    Image.frombytes("RGB", size, os.urandom(size[0] * size[1] * 3)).save(out, fmt, **params)
+    return out.getvalue()
+
+
+def data_url(content_type: str, data: bytes) -> str:
+    return f"data:{content_type};base64,{base64.b64encode(data).decode('ascii')}"
 
 
 def frames(sampled: list[bytes] | None = None) -> SimpleNamespace:
@@ -114,6 +132,60 @@ class ReadMediaTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_reader_without_media_opens_no_connection(self) -> None:
         self.assertEqual(await MediaReader(frames()).read([[], []], deadline=0), ([[], []], 0, 0, 0))
+
+    async def test_small_still_images_are_sent_as_is(self) -> None:
+        payloads = {"png": noise((400, 300), "PNG"), "jpeg": noise((640, 480), "JPEG", quality=95)}
+        items, budget, _sampler = await self.read([("media", name) for name in payloads], payloads)
+        self.assertEqual(items, [("靜態圖", (data_url("image/png", payloads["png"]),)),
+                                 ("靜態圖", (data_url("image/jpeg", payloads["jpeg"]),))])
+        self.assertEqual(budget.broken, 0)
+
+
+@unittest.skipIf(sys.platform == "win32", WORKER_NEEDS_POSIX)
+class OversizedStillTest(unittest.IsolatedAsyncioTestCase):
+    async def read(self, kind: str, data: bytes) -> tuple[list, MediaBudget]:
+        async def fetch(url: str, total_before: int) -> bytes:
+            return data
+
+        budget = MediaBudget()
+        items = await read_message_media([(kind, "https://media.discordapp.net/a")], budget=budget,
+                                         frames=Frames(), fetch=fetch)
+        return items, budget
+
+    def assertFitsClaude(self, url: str) -> Image.Image:
+        head, payload = url.split(",", 1)
+        self.assertEqual(head, "data:image/jpeg;base64")
+        self.assertLessEqual(len(payload), CLAUDE_IMAGE_BYTES)
+        self.assertLessEqual(len(url) * MAX_IMAGE_ATTACHMENTS, CLAUDE_REQUEST_BYTES - 4 * 2**20)
+        image = Image.open(io.BytesIO(base64.b64decode(payload)))
+        self.assertEqual(image.format, "JPEG")
+        self.assertEqual(max(image.size), CLAUDE_IMAGE_EDGE)
+        return image
+
+    async def test_large_png_becomes_jpeg_within_claude_limits(self) -> None:
+        items, budget = await self.read("media", noise((2400, 1600), "PNG"))
+        [(label, (url,))] = items
+        self.assertEqual(label, "靜態圖")
+        width, height = self.assertFitsClaude(url).size
+        self.assertAlmostEqual(width / height, 1.5, places=2)
+        self.assertEqual(budget.broken, 0)
+
+    async def test_large_photo_and_video_frame_are_shrunk_upright(self) -> None:
+        exif = Image.Exif()
+        exif[0x0112] = 6
+        photo = noise((4000, 3000), "JPEG", quality=60, exif=exif)
+        for kind, label in (("media", "靜態圖"), ("video", "影片")):
+            with self.subTest(kind):
+                items, _budget = await self.read(kind, photo)
+                [(seen, (url,))] = items
+                self.assertEqual(seen, label)
+                width, height = self.assertFitsClaude(url).size
+                self.assertLess(width, height)
+
+    async def test_undecodable_large_still_is_counted_broken(self) -> None:
+        items, budget = await self.read("media", b"\x89PNG\r\n\x1a\n" + b"\0" * (2 * 2**20))
+        self.assertEqual(items, [])
+        self.assertEqual(budget.broken, 1)
 
 
 class DownloadTest(unittest.IsolatedAsyncioTestCase):
