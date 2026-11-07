@@ -36,6 +36,10 @@ services:
       - -c
       - log_dir="/tmp/codex-logs"
       - -c
+      - agents.enabled=false
+      - -c
+      - tools.experimental_request_user_input.enabled=false
+      - -c
       - features.shell_tool=false
       - -c
       - features.unified_exec=false
