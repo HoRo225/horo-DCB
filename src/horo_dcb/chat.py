@@ -28,6 +28,30 @@ def image_input(data: bytes) -> dict | None:
         return None
 
 
+MAX_CHUNK_CHARS = 4000
+MAX_CHUNK_BYTES = 9000
+
+
+def answer_chunks(text: str) -> list[str]:
+    chunks = []
+    while text:
+        end = 0
+        size = 0
+        while end < len(text) and end < MAX_CHUNK_CHARS:
+            size += len(text[end].encode())
+            if size > MAX_CHUNK_BYTES:
+                break
+            end += 1
+        if end < len(text):
+            newline = text.rfind("\n", 0, end)
+            if newline >= end // 2:
+                end = newline + 1
+        if text[:end].strip():
+            chunks.append(text[:end])
+        text = text[end:]
+    return chunks
+
+
 @dataclass
 class ChatRound:
     message: discord.Message
@@ -92,8 +116,8 @@ class Chat:
                     await self.bot.codex.start_turn(thread, turn, inputs, settings.model, settings.effort)
                     await self.bot.store.advance_cursor(thread.id, round_state.message.id)
                     answer = await self._answer(turn)
-                    for offset in range(0, len(answer), 4000):
-                        await self._send(round_state, answer[offset:offset + 4000])
+                    for chunk in answer_chunks(answer):
+                        await self._send(round_state, chunk)
                     await self.bot.store.record_messages([message.id for message in round_state.messages], thread.id)
         except asyncio.CancelledError:
             log_event("turn_stopped")
