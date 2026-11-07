@@ -1,0 +1,12 @@
+AGENTS.md
+CLAUDE.md
+.claude/
+.git/
+data/
+run/
+secrets/
+.venv/
+__pycache__/
+*.pyc
+dist/
+*.egg-info/

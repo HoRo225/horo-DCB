@@ -1,0 +1,113 @@
+name: horo-dcb
+services:
+  codex:
+    image: horo-dcb-codex:${IMAGE_TAG:?請設定 IMAGE_TAG}
+    build:
+      context: /home/horo-dcb/horo-DCB
+      dockerfile: docker/codex.Dockerfile
+    user: "1000:1000"
+    restart: unless-stopped
+    environment:
+      TZ: Asia/Taipei
+      CODEX_HOME: /data/codex
+      HOME: /home/codex
+      RUST_LOG: "off"
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    read_only: true
+    tmpfs: [/tmp]
+    stop_grace_period: 30s
+    volumes:
+      - /home/horo-dcb/horo-DCB/data/codex:/data/codex
+      - /home/horo-dcb/horo-DCB/run/codex:/run/codex
+      - /home/horo-dcb/horo-DCB/run/codex-daemon:/tmp/codex-daemon-1000
+    command:
+      - app-server
+      - --listen
+      - unix:///run/codex/app-server.sock
+      - -c
+      - sandbox_mode="read-only"
+      - -c
+      - approval_policy="never"
+      - -c
+      - cli_auth_credentials_store="file"
+      - -c
+      - web_search="live"
+      - -c
+      - log_dir="/tmp/codex-logs"
+      - -c
+      - features.shell_tool=false
+      - -c
+      - features.unified_exec=false
+      - -c
+      - features.view_image=false
+      - -c
+      - features.multi_agent=false
+      - -c
+      - features.apps=false
+      - -c
+      - features.plugins=false
+      - -c
+      - features.tool_suggest=false
+      - -c
+      - features.image_generation=false
+      - -c
+      - features.code_mode=false
+      - -c
+      - features.code_mode_only=false
+      - -c
+      - features.memories=false
+      - -c
+      - memories.generate_memories=false
+      - -c
+      - memories.use_memories=false
+      - -c
+      - features.hooks=false
+      - -c
+      - features.goals=false
+      - -c
+      - skills.bundled.enabled=false
+      - -c
+      - skills.include_instructions=false
+      - -c
+      - features.skip_host_skill_discovery=true
+      - -c
+      - features.skill_search=false
+      - -c
+      - features.skill_mcp_dependency_install=false
+      - -c
+      - cloud.skills.enabled=false
+      - -c
+      - analytics.enabled=false
+      - -c
+      - feedback.enabled=false
+      - -c
+      - otel.exporter="none"
+      - -c
+      - otel.metrics_exporter="none"
+      - -c
+      - otel.trace_exporter="none"
+  bot:
+    image: horo-dcb-bot:${IMAGE_TAG:?請設定 IMAGE_TAG}
+    build:
+      context: /home/horo-dcb/horo-DCB
+      dockerfile: docker/bot.Dockerfile
+    user: "1000:1000"
+    restart: unless-stopped
+    depends_on: [codex]
+    environment:
+      TZ: Asia/Taipei
+      HOME: /tmp
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    read_only: true
+    tmpfs: [/tmp]
+    stop_grace_period: 30s
+    volumes:
+      - /home/horo-dcb/horo-DCB/data/bot:/data/bot
+      - /home/horo-dcb/horo-DCB/run/codex:/run/codex
+      - /home/horo-dcb/horo-DCB/run/codex-daemon:/tmp/codex-daemon-1000
+    secrets: [discord_token]
+secrets:
+  discord_token:
+    file: /home/horo-dcb/horo-DCB/secrets/discord_token

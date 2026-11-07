@@ -1,0 +1,17 @@
+import json
+import traceback
+from pathlib import Path
+
+
+def log_event(code: str, error: BaseException | None = None, **metrics: int | float | bool) -> None:
+    event = {"code": code}
+    fields = {"duration_ms", "input_tokens", "cached_input_tokens", "output_tokens", "reasoning_output_tokens", "total_tokens", "usage_incomplete", "rpc_code"}
+    for key, value in metrics.items():
+        if key in fields and isinstance(value, (int, float, bool)):
+            event[key] = value
+    if error is not None:
+        event["locations"] = [
+            {"file": Path(frame.filename).name, "line": frame.lineno, "function": frame.name}
+            for frame in traceback.extract_tb(error.__traceback__)
+        ]
+    print(json.dumps(event, ensure_ascii=False), flush=True)
