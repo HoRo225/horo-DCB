@@ -58,6 +58,7 @@ class CodexClient:
         self._pending: dict[int, asyncio.Future] = {}
         self._subscribers: set[asyncio.Queue] = set()
         self.threads: dict[str, ThreadState] = {}
+        self.loaded: set[str] = set()
 
     async def start(self) -> None:
         self._runner = asyncio.create_task(self._connect_loop())
@@ -92,6 +93,7 @@ class CodexClient:
                 async with aiohttp.ClientSession(connector=connector, timeout=timeout) as session:
                     async with session.ws_connect("http://localhost/", max_msg_size=0, heartbeat=30) as websocket:
                         self._ws = websocket
+                        self.loaded.clear()
                         reader = asyncio.create_task(self._read(websocket))
                         await self._request("initialize", {"clientInfo": {"name": "horo_dcb", "title": "horo-DCB", "version": "0.1.0"}, "capabilities": {"experimentalApi": True, "requestAttestation": False}}, wait_ready=False)
                         await websocket.send_json({"method": "initialized"})
@@ -108,6 +110,7 @@ class CodexClient:
             finally:
                 self.ready.clear()
                 self._ws = None
+                self.loaded.clear()
                 if reader is not None:
                     reader.cancel()
                     with contextlib.suppress(asyncio.CancelledError, Exception):
@@ -237,11 +240,18 @@ class CodexClient:
         result = await self._request("thread/start", params)
         thread = self.thread_state(result["thread"]["id"])
         thread.token_total = {key: 0 for key in ("inputTokens", "cachedInputTokens", "outputTokens", "reasoningOutputTokens", "totalTokens")}
+        self.loaded.add(thread.id)
         return thread
 
     async def resume_thread(self, thread_id: str) -> ThreadState:
-        await self._request("thread/resume", {"threadId": thread_id})
+        await self._request("thread/resume", {"threadId": thread_id, "approvalPolicy": "never", "sandbox": "read-only"})
+        self.loaded.add(thread_id)
         return self.thread_state(thread_id)
+
+    async def load_thread(self, thread_id: str) -> ThreadState:
+        if thread_id in self.loaded:
+            return self.thread_state(thread_id)
+        return await self.resume_thread(thread_id)
 
     async def start_turn(self, thread: ThreadState, turn: TurnState, inputs: list[dict], model: str | None = None, effort: str | None = None, summary: str = "auto") -> None:
         if thread.active is not None:
@@ -303,7 +313,8 @@ class CodexClient:
         result = await self._request("thread/read", {"threadId": turn.thread_id, "includeTurns": True}, wait_ready=wait_ready)
         thread_data = result["thread"]
         if thread_data["status"]["type"] in ("notLoaded", "active"):
-            result = await self._request("thread/resume", {"threadId": turn.thread_id}, wait_ready=wait_ready)
+            result = await self._request("thread/resume", {"threadId": turn.thread_id, "approvalPolicy": "never", "sandbox": "read-only"}, wait_ready=wait_ready)
+            self.loaded.add(turn.thread_id)
             thread_data = result["thread"]
         for candidate in thread_data.get("turns", []):
             if candidate["id"] == turn.id and candidate["status"] in ("completed", "failed", "interrupted"):
