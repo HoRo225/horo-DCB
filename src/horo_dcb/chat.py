@@ -146,7 +146,7 @@ class Chat:
                 items.append(item)
         return items
 
-    async def _inputs(self, channel_messages: list[discord.Message], trigger: discord.Message) -> list[dict]:
+    async def _inputs(self, channel_messages: list[discord.Message], trigger: discord.Message, replied: discord.Message | None) -> list[dict]:
         entries = [*channel_messages, trigger]
         images = await asyncio.gather(*(self._images(message) for message in entries))
         blocks = []
@@ -155,6 +155,8 @@ class Chat:
             labels = "".join(f"〔圖片 {count + index}〕" for index in range(1, len(items) + 1))
             count += len(items)
             content = "\n".join(part for part in (message_text(message), labels) if part)
+            if message is trigger and replied is not None:
+                content = f"（回覆 {replied.author.display_name}　{replied.created_at.astimezone(TAIPEI):%Y-%m-%d %H:%M} 的訊息：{message_text(replied)}）\n{content}"
             if content or message is trigger:
                 blocks.append(f"{message.author.display_name}　{message.created_at.astimezone(TAIPEI):%Y-%m-%d %H:%M}\n{content}")
         inputs = []
@@ -180,7 +182,7 @@ class Chat:
                     locked = True
                     if thread_id is not None:
                         await self.bot.codex.load_thread(thread_id)
-                    inputs = await self._inputs(await self._channel_messages(round_state, thread_id), round_state.message)
+                    inputs = await self._inputs(await self._channel_messages(round_state, thread_id), round_state.message, round_state.referenced if thread_id is None else None)
                     turn = TurnState(thread.id)
                     round_state.turn = turn
                     await self.bot.codex.start_turn(thread, turn, inputs, settings.model, settings.effort)
