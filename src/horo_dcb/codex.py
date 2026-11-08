@@ -22,6 +22,14 @@ class TurnPhase(Enum):
     TERMINAL = "terminal"
 
 
+def choose_model(models: list[dict], model: str | None, effort: str | None) -> tuple[dict | None, str | None]:
+    chosen = next((value for value in models if value["id"] == model), None) or next((value for value in models if value.get("isDefault")), None) or (models[0] if models else None)
+    if chosen is None:
+        return None, effort
+    efforts = [value["reasoningEffort"] for value in chosen.get("supportedReasoningEfforts", [])]
+    return chosen, effort if effort in efforts else chosen.get("defaultReasoningEffort")
+
+
 @dataclass
 class TurnState:
     thread_id: str

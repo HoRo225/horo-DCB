@@ -6,6 +6,10 @@ import discord
 from discord import ui
 
 from . import log_event
+from .codex import choose_model
+
+
+EFFORT_NAMES = {"none": "不思考", "minimal": "最低", "low": "低", "medium": "中", "high": "高", "xhigh": "超高", "max": "最高", "ultra": "極限"}
 
 
 @dataclass(frozen=True)
@@ -73,7 +77,15 @@ class ConsolePanel(ui.LayoutView):
             status = "帳號狀態暫時無法確認"
         else:
             status = f"已登入 ChatGPT，方案：{account.get('planType') or '無資料'}" if account else "尚未登入 ChatGPT"
-        text = f"## 控制台\n{status}\n{quota_text(self.console.limits)}"
+        models = self.console.models
+        model, effort = choose_model(models, settings.model, settings.effort)
+        if model is None:
+            choice = "模型：無資料"
+        else:
+            model_note = "" if settings.model == model["id"] else "（預設）"
+            effort_note = "" if settings.effort == effort else "（預設）"
+            choice = f"模型：{model['displayName']}{model_note}\n思考強度：{EFFORT_NAMES.get(effort, effort)}{effort_note}"
+        text = f"## 控制台\n{status}\n{quota_text(self.console.limits)}\n{choice}"
         if self.console.note:
             text += f"\n\n{self.console.note}"
         attempt = self.console.login_attempt
@@ -106,6 +118,28 @@ class ConsolePanel(ui.LayoutView):
 
         roles.callback = role_callback
         self.add_item(ui.ActionRow(roles))
+        if model is None:
+            return
+        model_select = ui.Select(placeholder="選擇模型，清空即用預設", min_values=0, max_values=1, options=[discord.SelectOption(label=value["displayName"], value=value["id"], description=(value.get("description") or "")[:100] or None, default=value["id"] == settings.model) for value in models[:25]])
+
+        async def model_callback(interaction: discord.Interaction) -> None:
+            selected = model_select.values[0] if model_select.values else None
+            current = await self.console.bot.store.settings()
+            chosen, _ = choose_model(self.console.models, selected, None)
+            supported = [value["reasoningEffort"] for value in chosen.get("supportedReasoningEfforts", [])] if chosen is not None else []
+            await self.console.bot.store.update_settings(model=selected, effort=current.effort if current.effort in supported else None)
+            await self.console.refresh_panels()
+
+        model_select.callback = model_callback
+        self.add_item(ui.ActionRow(model_select))
+        effort_select = ui.Select(placeholder="選擇思考強度，清空即用預設", min_values=0, max_values=1, options=[discord.SelectOption(label=EFFORT_NAMES.get(value["reasoningEffort"], value["reasoningEffort"]), value=value["reasoningEffort"], description=(value.get("description") or "")[:100] or None, default=value["reasoningEffort"] == settings.effort) for value in model.get("supportedReasoningEfforts", [])[:25]])
+
+        async def effort_callback(interaction: discord.Interaction) -> None:
+            await self.console.bot.store.update_settings(effort=effort_select.values[0] if effort_select.values else None)
+            await self.console.refresh_panels()
+
+        effort_select.callback = effort_callback
+        self.add_item(ui.ActionRow(effort_select))
 
     async def refresh(self) -> None:
         if self.expired or self.interaction.is_expired():
@@ -127,6 +161,7 @@ class Console:
         self.login_attempt: LoginAttempt | None = None
         self.account: dict | None = None
         self.limits: dict = {}
+        self.models: list[dict] = []
         self.note = ""
         self.lock = asyncio.Lock()
         self.queue = bot.codex.subscribe()
@@ -164,12 +199,17 @@ class Console:
     async def _read_account(self) -> None:
         self.account = None
         self.limits = {}
+        self.models = []
         self.account = await self.bot.codex.account()
         if self.account.get("account") is not None:
             try:
                 self.limits = await self.bot.codex.rate_limits()
             except Exception as error:
                 log_event("console_quota_error", error)
+            try:
+                self.models = await self.bot.codex.models()
+            except Exception as error:
+                log_event("console_models_error", error)
 
     async def action(self, operation: str) -> None:
         async with self.lock:

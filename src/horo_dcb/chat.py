@@ -13,7 +13,7 @@ import discord
 from PIL import Image, UnidentifiedImageError
 
 from . import log_event
-from .codex import CodexError, ThreadState, TurnState
+from .codex import CodexError, ThreadState, TurnState, choose_model
 
 
 ALLOWED_MENTIONS = discord.AllowedMentions(everyone=False, roles=False, users=True, replied_user=False)
@@ -388,8 +388,15 @@ class Chat:
                     if account.get("account") is None:
                         raise CodexError("not_logged_in")
                     settings = await self.bot.store.settings()
+                    try:
+                        models = await self.bot.codex.models()
+                    except CodexError as error:
+                        log_event("codex_models_error", error)
+                        models = []
+                    model, effort = choose_model(models, settings.model, settings.effort)
+                    model_id = model["id"] if model is not None else settings.model
                     thread_id = await self.bot.store.thread_for(round_state.referenced.id) if round_state.referenced is not None else None
-                    thread = self.bot.codex.thread_state(thread_id) if thread_id is not None else await self.bot.codex.new_thread(settings.model)
+                    thread = self.bot.codex.thread_state(thread_id) if thread_id is not None else await self.bot.codex.new_thread(model_id)
                     round_state.thread = thread
                     await thread.lock.acquire()
                     locked = True
@@ -401,7 +408,7 @@ class Chat:
                     inputs = await renderer.guard(self._inputs(await renderer.guard(self._channel_messages(round_state, thread_id)), round_state.message, round_state.referenced if thread_id is None else None))
                     turn = TurnState(thread.id)
                     round_state.turn = turn
-                    await self.bot.codex.start_turn(thread, turn, inputs, settings.model, settings.effort)
+                    await self.bot.codex.start_turn(thread, turn, inputs, model_id, effort)
                     await self.bot.store.advance_cursor(thread.id, round_state.message.id)
                     answer = await self._answer(turn, renderer)
                     renderer.refresh(answer)
