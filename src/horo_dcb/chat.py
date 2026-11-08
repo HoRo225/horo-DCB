@@ -166,7 +166,7 @@ class MessageSlot:
 class Renderer:
     def __init__(self, round_state: "ChatRound") -> None:
         self.round_state = round_state
-        self.started_at = int(time.time())
+        self.started_at = int(round_state.message.created_at.timestamp())
         self.failure = asyncio.get_running_loop().create_future()
         self.slots: list[MessageSlot] = []
         self.retired: list[MessageSlot] = []
