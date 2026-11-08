@@ -241,10 +241,12 @@ class CodexClient:
             if not cursor:
                 return result
 
-    async def new_thread(self, model: str | None = None) -> ThreadState:
+    async def new_thread(self, model: str | None = None, instructions: str | None = None) -> ThreadState:
         params = {"ephemeral": False, "approvalPolicy": "never", "sandbox": "read-only"}
         if model is not None:
             params["model"] = model
+        if instructions:
+            params["developerInstructions"] = instructions
         result = await self._request("thread/start", params)
         thread = self.thread_state(result["thread"]["id"])
         thread.token_total = {key: 0 for key in ("inputTokens", "cachedInputTokens", "outputTokens", "reasoningOutputTokens", "totalTokens")}

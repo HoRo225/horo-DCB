@@ -46,6 +46,25 @@ def quota_text(limits: dict) -> str:
     return "\n".join(lines) or "額度：無資料"
 
 
+class InstructionsModal(ui.Modal):
+    def __init__(self, console, current: str | None) -> None:
+        super().__init__(title="AI 指示", timeout=900)
+        self.console = console
+        self.text = ui.TextInput(label="給 AI 的固定指示，只套用到新對話", style=discord.TextStyle.paragraph, required=False, max_length=4000, default=current or "")
+        self.add_item(self.text)
+
+    async def on_submit(self, interaction: discord.Interaction) -> None:
+        await interaction.response.defer()
+        if not await self.console.bot.is_owner(interaction.user):
+            await interaction.followup.send("只有擁有者能使用", ephemeral=True)
+            return
+        await self.console.bot.store.update_settings(instructions=self.text.value.strip() or None)
+        await self.console.refresh_panels()
+
+    async def on_error(self, interaction: discord.Interaction, error: Exception) -> None:
+        log_event("console_interaction_error", error)
+
+
 class ConsolePanel(ui.LayoutView):
     def __init__(self, console, interaction: discord.Interaction) -> None:
         super().__init__(timeout=900)
@@ -55,6 +74,11 @@ class ConsolePanel(ui.LayoutView):
         self.render_lock = asyncio.Lock()
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if (interaction.data or {}).get("custom_id") == "instructions":
+            if not await self.console.bot.is_owner(interaction.user):
+                await interaction.response.send_message("只有擁有者能使用", ephemeral=True)
+                return False
+            return True
         await interaction.response.defer()
         if not await self.console.bot.is_owner(interaction.user):
             await interaction.followup.send("只有擁有者能使用", ephemeral=True)
@@ -85,7 +109,8 @@ class ConsolePanel(ui.LayoutView):
             model_note = "" if settings.model == model["id"] else "（預設）"
             effort_note = "" if settings.effort == effort else "（預設）"
             choice = f"模型：{model['displayName']}{model_note}\n思考強度：{EFFORT_NAMES.get(effort, effort)}{effort_note}"
-        text = f"## 控制台\n{status}\n{quota_text(self.console.limits)}\n{choice}"
+        instructions = f"指示：已設定 {len(settings.instructions)} 字，只套用到新對話" if settings.instructions else "指示：未設定"
+        text = f"## 控制台\n{status}\n{quota_text(self.console.limits)}\n{choice}\n{instructions}"
         if self.console.note:
             text += f"\n\n{self.console.note}"
         attempt = self.console.login_attempt
@@ -101,6 +126,14 @@ class ConsolePanel(ui.LayoutView):
 
             button.callback = callback
             actions.add_item(button)
+        edit = ui.Button(label="編輯指示", style=discord.ButtonStyle.secondary, custom_id="instructions")
+
+        async def edit_callback(interaction: discord.Interaction) -> None:
+            current = await self.console.bot.store.settings()
+            await interaction.response.send_modal(InstructionsModal(self.console, current.instructions))
+
+        edit.callback = edit_callback
+        actions.add_item(edit)
         self.add_item(actions)
         channels = ui.ChannelSelect(channel_types=[discord.ChannelType.text], placeholder="選擇 AI 頻道，清空即停用", min_values=0, max_values=25, default_values=[discord.Object(value) for value in settings.ai_channel_ids])
 
@@ -248,6 +281,10 @@ class Console:
                         self.login_attempt = None
                         await self._read_account()
                         self.note = "登入完成。" if params.get("success") and self.account.get("account") is not None else "登入未完成，請重新登入。"
+                    await self.refresh_panels()
+                elif method == "account/rateLimits/updated" and self.panels:
+                    async with self.lock:
+                        self.limits = await self.bot.codex.rate_limits()
                     await self.refresh_panels()
                 elif method in ("client/connected", "account/updated"):
                     async with self.lock:

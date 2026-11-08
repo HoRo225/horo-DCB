@@ -205,6 +205,8 @@ class Renderer:
             index = params.get("summaryIndex", 0)
             parts[index] = parts.get(index, "") + params.get("delta", "")
             self._mark(("reasoning", params["itemId"], index))
+        elif method == "model/rerouted":
+            self._mark(("reroute", params.get("fromModel") or "", params.get("toModel") or ""))
         else:
             return
         self.refresh()
@@ -232,6 +234,8 @@ class Renderer:
                 entries.append(("💭", summary_title(self.reasoning[key[1]][key[2]])))
             elif key[0] == "search":
                 entries.append(("🔍", self.searches[key[1]]["text"]))
+            elif key[0] == "reroute":
+                entries.append(("🔀", f"模型已由 {key[1]} 改用 {key[2]}"))
         searching = any(not search["done"] for search in self.searches.values())
         header = f"{'🔍 **搜尋中**' if searching else '💭 **思考中**'} · <t:{self.started_at}:R>"
         lines = []
@@ -396,7 +400,7 @@ class Chat:
                     model, effort = choose_model(models, settings.model, settings.effort)
                     model_id = model["id"] if model is not None else settings.model
                     thread_id = await self.bot.store.thread_for(round_state.referenced.id) if round_state.referenced is not None else None
-                    thread = self.bot.codex.thread_state(thread_id) if thread_id is not None else await self.bot.codex.new_thread(model_id)
+                    thread = self.bot.codex.thread_state(thread_id) if thread_id is not None else await self.bot.codex.new_thread(model_id, settings.instructions)
                     round_state.thread = thread
                     await thread.lock.acquire()
                     locked = True

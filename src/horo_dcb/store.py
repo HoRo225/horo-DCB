@@ -11,6 +11,7 @@ class Settings:
     allowed_role_ids: frozenset[int]
     model: str | None
     effort: str | None
+    instructions: str | None
 
 
 class Store:
@@ -23,12 +24,12 @@ class Store:
     async def open(self) -> None:
         async with self.lock:
             self.directory.mkdir(parents=True, exist_ok=True)
-            self._settings = self._load("settings.json", {"ai_channel_ids": [], "allowed_role_ids": [], "model": None, "effort": None})
+            self._settings = self._load("settings.json", {"ai_channel_ids": [], "allowed_role_ids": [], "model": None, "effort": None, "instructions": None})
             self._threads = self._load("threads.json", {"messages": {}, "cursors": {}})
             for key in ("ai_channel_ids", "allowed_role_ids"):
                 if not isinstance(self._settings.get(key), list) or not all(type(value) is int for value in self._settings[key]):
                     raise ValueError("storage_invalid")
-            for key in ("model", "effort"):
+            for key in ("model", "effort", "instructions"):
                 if self._settings.get(key) is not None and not isinstance(self._settings[key], str):
                     raise ValueError("storage_invalid")
             for key in ("messages", "cursors"):
@@ -56,7 +57,7 @@ class Store:
         temporary.replace(path)
 
     def _snapshot(self) -> Settings:
-        return Settings(frozenset(self._settings["ai_channel_ids"]), frozenset(self._settings["allowed_role_ids"]), self._settings.get("model"), self._settings.get("effort"))
+        return Settings(frozenset(self._settings["ai_channel_ids"]), frozenset(self._settings["allowed_role_ids"]), self._settings.get("model"), self._settings.get("effort"), self._settings.get("instructions"))
 
     async def settings(self) -> Settings:
         async with self.lock:
