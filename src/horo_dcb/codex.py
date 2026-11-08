@@ -263,7 +263,7 @@ class CodexClient:
             return self.thread_state(thread_id)
         return await self.resume_thread(thread_id)
 
-    async def start_turn(self, thread: ThreadState, turn: TurnState, inputs: list[dict], model: str | None = None, effort: str | None = None, summary: str = "auto", context: str | None = None) -> None:
+    async def start_turn(self, thread: ThreadState, turn: TurnState, inputs: list[dict], model: str | None = None, effort: str | None = None, summary: str = "auto", context: list[str] | None = None) -> None:
         if thread.active is not None:
             raise CodexError("thread_busy")
         thread.active = turn
@@ -274,7 +274,7 @@ class CodexClient:
         if effort is not None:
             params["effort"] = effort
         if context:
-            params["additionalContext"] = {"discord_channel": {"kind": "untrusted", "name": "discord_channel", "value": context}}
+            params["additionalContext"] = {f"discord_{index:05d}": {"kind": "untrusted", "name": "discord_channel", "value": value} for index, value in enumerate(context)}
         try:
             result = await self._request("turn/start", params)
         except CodexError as error:

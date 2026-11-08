@@ -71,6 +71,25 @@ def answer_chunks(text: str) -> list[str]:
     return chunks
 
 
+MAX_CONTEXT_BYTES = 3800
+
+
+def context_parts(text: str) -> list[str]:
+    parts = []
+    current = ""
+    size = 0
+    for char in text:
+        width = len(char.encode())
+        if size + width > MAX_CONTEXT_BYTES:
+            parts.append(current)
+            current = "（續）\n"
+            size = len(current.encode())
+        current += char
+        size += width
+    parts.append(current)
+    return parts
+
+
 FRAME_COLOUR = discord.Colour(0x7F77DD)
 MAX_FRAME_CHARS = 1500
 
@@ -363,7 +382,7 @@ class Chat:
                 items.append(item)
         return items
 
-    async def _inputs(self, channel_messages: list[discord.Message], trigger: discord.Message, replied: discord.Message | None) -> tuple[list[dict], str | None]:
+    async def _inputs(self, channel_messages: list[discord.Message], trigger: discord.Message, replied: discord.Message | None) -> tuple[list[dict], list[str]]:
         entries = [*channel_messages, trigger]
         images = await asyncio.gather(*(self._images(message) for message in entries))
         blocks = []
@@ -378,7 +397,7 @@ class Chat:
                 blocks.append(f"{message.author.display_name}　{message.created_at.astimezone(TAIPEI):%Y-%m-%d %H:%M}\n{content}")
         inputs = [{"type": "text", "text": f"<觸發訊息>\n{blocks[-1]}\n</觸發訊息>", "text_elements": []}]
         inputs.extend(item for items in images for item in items)
-        return inputs, "\n\n".join(blocks[:-1]) or None
+        return inputs, [part for block in blocks[:-1] for part in context_parts(block)]
 
     async def _serve(self, round_state: ChatRound) -> None:
         locked = False
