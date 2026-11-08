@@ -290,6 +290,7 @@ class ChatRound:
     thread: ThreadState | None = None
     turn: TurnState | None = None
     renderer: Renderer | None = None
+    cleaning: bool = False
     messages: list[discord.Message] = field(default_factory=list)
     pending_sends: set[asyncio.Task] = field(default_factory=set)
 
@@ -471,6 +472,7 @@ class Chat:
                 log_event("message_cleanup_error", error)
 
     async def _abort(self, round_state: ChatRound) -> None:
+        round_state.cleaning = True
         if round_state.renderer is not None:
             await round_state.renderer.close()
         cleanup = [self._delete_messages(round_state)]
@@ -506,9 +508,11 @@ class Chat:
 
     async def shutdown(self) -> None:
         self.accepting = False
-        tasks = [value.task for value in tuple(self.rounds.values()) if value.task is not None]
-        for task in tasks:
-            task.cancel()
+        rounds = [value for value in tuple(self.rounds.values()) if value.task is not None]
+        for value in rounds:
+            if not value.cleaning:
+                value.task.cancel()
+        tasks = [value.task for value in rounds]
         if tasks:
             await asyncio.gather(*tasks, return_exceptions=True)
         for task in tuple(self.drains):
