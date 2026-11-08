@@ -60,7 +60,6 @@ class HoroBot(commands.Bot):
         log_event("discord_event_error", sys.exception())
 
     async def shutdown(self, deadline: float) -> None:
-        self.chat.accepting = False
         try:
             async with asyncio.timeout_at(deadline - 5):
                 await self.chat.shutdown()

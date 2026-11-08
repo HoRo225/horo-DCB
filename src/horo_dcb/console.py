@@ -158,9 +158,8 @@ class ConsolePanel(ui.LayoutView):
         async def model_callback(interaction: discord.Interaction) -> None:
             selected = model_select.values[0] if model_select.values else None
             current = await self.console.bot.store.settings()
-            chosen, _ = choose_model(self.console.models, selected, None)
-            supported = [value["reasoningEffort"] for value in chosen.get("supportedReasoningEfforts", [])] if chosen is not None else []
-            await self.console.bot.store.update_settings(model=selected, effort=current.effort if current.effort in supported else None)
+            _, effort = choose_model(self.console.models, selected, current.effort)
+            await self.console.bot.store.update_settings(model=selected, effort=current.effort if effort == current.effort else None)
             await self.console.refresh_panels()
 
         model_select.callback = model_callback

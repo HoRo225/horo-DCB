@@ -1,7 +1,6 @@
 import asyncio
 import contextlib
 from dataclasses import dataclass, field
-from enum import Enum
 
 import aiohttp
 
@@ -13,13 +12,6 @@ class CodexError(Exception):
         super().__init__(code)
         self.code = code
         self.rpc_code = rpc_code
-
-
-class TurnPhase(Enum):
-    STARTING = "starting"
-    RUNNING = "running"
-    CANCELLING = "cancelling"
-    TERMINAL = "terminal"
 
 
 def choose_model(models: list[dict], model: str | None, effort: str | None) -> tuple[dict | None, str | None]:
@@ -34,17 +26,10 @@ def choose_model(models: list[dict], model: str | None, effort: str | None) -> t
 class TurnState:
     thread_id: str
     id: str | None = None
-    phase: TurnPhase = TurnPhase.STARTING
-    status: str | None = None
     terminal: asyncio.Event = field(default_factory=asyncio.Event)
     events: asyncio.Queue = field(default_factory=asyncio.Queue)
     usage_before: dict | None = None
     usage_after: dict | None = None
-
-    def finish(self, status: str) -> None:
-        self.status = status
-        self.phase = TurnPhase.TERMINAL
-        self.terminal.set()
 
 
 @dataclass
@@ -128,7 +113,6 @@ class CodexClient:
                         future.set_exception(CodexError("connection_lost"))
                 for thread in self.threads.values():
                     if thread.active is not None and not thread.active.terminal.is_set():
-                        thread.active.phase = TurnPhase.CANCELLING
                         thread.active.events.put_nowait(("client/disconnected", {}))
                 self._publish("client/disconnected", {})
             if not self._closing:
@@ -185,12 +169,8 @@ class CodexClient:
             if isinstance(total, dict):
                 thread.token_total = total.copy()
                 turn.usage_after = total.copy()
-        elif method == "turn/started" and turn.phase == TurnPhase.STARTING:
-            turn.phase = TurnPhase.RUNNING
-        elif method == "turn/completed":
-            status = turn_data.get("status")
-            if status in ("completed", "failed", "interrupted"):
-                turn.finish(status)
+        elif method == "turn/completed" and turn_data.get("status") in ("completed", "failed", "interrupted"):
+            turn.terminal.set()
         turn.events.put_nowait((method, params))
 
     async def _request(self, method: str, params: dict | None = None, *, wait_ready: bool = True) -> dict:
@@ -253,22 +233,17 @@ class CodexClient:
         self.loaded.add(thread.id)
         return thread
 
-    async def resume_thread(self, thread_id: str) -> ThreadState:
-        await self._request("thread/resume", {"threadId": thread_id, "approvalPolicy": "never", "sandbox": "read-only"})
-        self.loaded.add(thread_id)
-        return self.thread_state(thread_id)
+    async def load_thread(self, thread_id: str) -> None:
+        if thread_id not in self.loaded:
+            await self._request("thread/resume", {"threadId": thread_id, "approvalPolicy": "never", "sandbox": "read-only"})
+            self.loaded.add(thread_id)
 
-    async def load_thread(self, thread_id: str) -> ThreadState:
-        if thread_id in self.loaded:
-            return self.thread_state(thread_id)
-        return await self.resume_thread(thread_id)
-
-    async def start_turn(self, thread: ThreadState, turn: TurnState, inputs: list[dict], model: str | None = None, effort: str | None = None, summary: str = "auto", context: list[str] | None = None) -> None:
+    async def start_turn(self, thread: ThreadState, turn: TurnState, inputs: list[dict], model: str | None, effort: str | None, context: list[str]) -> None:
         if thread.active is not None:
             raise CodexError("thread_busy")
         thread.active = turn
         turn.usage_before = thread.token_total.copy() if thread.token_total is not None else None
-        params = {"threadId": thread.id, "input": inputs, "summary": summary}
+        params = {"threadId": thread.id, "input": inputs, "summary": "auto"}
         if model is not None:
             params["model"] = model
         if effort is not None:
@@ -279,16 +254,13 @@ class CodexClient:
             result = await self._request("turn/start", params)
         except CodexError as error:
             if error.code == "rpc_rejected":
-                turn.finish("failed")
+                turn.terminal.set()
             raise
         turn.id = result["turn"]["id"]
-        if turn.phase == TurnPhase.STARTING:
-            turn.phase = TurnPhase.RUNNING
 
     async def interrupt(self, turn: TurnState) -> None:
         if turn.terminal.is_set():
             return
-        turn.phase = TurnPhase.CANCELLING
         if turn.id is not None and self.ready.is_set():
             try:
                 await self._request("turn/interrupt", {"threadId": turn.thread_id, "turnId": turn.id})
@@ -330,13 +302,13 @@ class CodexClient:
             thread_data = result["thread"]
         for candidate in thread_data.get("turns", []):
             if candidate["id"] == turn.id and candidate["status"] in ("completed", "failed", "interrupted"):
-                turn.finish(candidate["status"])
+                turn.terminal.set()
                 turn.events.put_nowait(("client/recovered", {}))
                 return
             if turn.id is None and candidate["status"] == "inProgress":
                 turn.id = candidate["id"]
         if thread_data["status"]["type"] == "idle":
-            turn.finish("interrupted")
+            turn.terminal.set()
             turn.events.put_nowait(("client/recovered", {}))
         elif turn.id is not None and thread_data["status"]["type"] == "active":
             await self._request("turn/interrupt", {"threadId": turn.thread_id, "turnId": turn.id}, wait_ready=wait_ready)

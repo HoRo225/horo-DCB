@@ -18,7 +18,7 @@ from .codex import CodexError, ThreadState, TurnState, choose_model
 
 ALLOWED_MENTIONS = discord.AllowedMentions(everyone=False, roles=False, users=True, replied_user=False)
 TAIPEI = timezone(timedelta(hours=8))
-IMAGE_TYPES = ("image/png", "image/jpeg", "image/webp", "image/gif")
+IMAGE_TYPES = {"PNG": "image/png", "JPEG": "image/jpeg", "WEBP": "image/webp", "GIF": "image/gif"}
 IMAGE_SUFFIXES = ("png", "jpg", "jpeg", "webp", "gif")
 
 
@@ -26,7 +26,7 @@ def image_input(data: bytes) -> dict | None:
     try:
         with warnings.catch_warnings(record=True):
             with Image.open(io.BytesIO(data)) as image:
-                mime = {"PNG": "image/png", "JPEG": "image/jpeg", "WEBP": "image/webp", "GIF": "image/gif"}.get(image.format)
+                mime = IMAGE_TYPES.get(image.format)
                 if mime is None or (image.format == "GIF" and getattr(image, "is_animated", False)):
                     return None
         return {"type": "image", "url": f"data:{mime};base64,{base64.b64encode(data).decode('ascii')}"}
@@ -198,15 +198,22 @@ class Renderer:
         if key not in self.timeline:
             self.timeline.append(key)
 
+    def _agent(self, item: dict, completed: bool) -> None:
+        agent = self.agents.setdefault(item["id"], {"phase": None, "text": ""})
+        agent["phase"] = item.get("phase")
+        if completed:
+            agent["text"] = item.get("text") or ""
+        self._mark(("agent", item["id"]))
+
     def handle(self, method: str, params: dict) -> None:
         item = params.get("item") or {}
         kind = item.get("type")
         if method in ("item/started", "item/completed") and kind == "agentMessage":
-            agent = self.agents.setdefault(item["id"], {"phase": None, "text": ""})
-            agent["phase"] = item.get("phase")
-            if method == "item/completed":
-                agent["text"] = item.get("text") or ""
-            self._mark(("agent", item["id"]))
+            self._agent(item, method == "item/completed")
+        elif method == "turn/completed":
+            for value in params["turn"].get("items", []):
+                if value.get("type") == "agentMessage":
+                    self._agent(value, True)
         elif method in ("item/started", "item/completed") and kind == "reasoning":
             parts = self.reasoning.setdefault(item["id"], {})
             if method == "item/completed":
@@ -239,7 +246,7 @@ class Renderer:
             return {keys[-1]}
         return set()
 
-    def _answer_text(self) -> str:
+    def answer_text(self) -> str:
         answers = self._answer_keys()
         return "\n\n".join(self.agents[key[1]]["text"] for key in self.timeline if key[0] == "agent" and key[1] in answers)
 
@@ -269,8 +276,8 @@ class Renderer:
             size += len(line) + 1
         return "\n".join([header, *reversed(lines)])
 
-    def refresh(self, answer: str | None = None) -> None:
-        chunks = answer_chunks(self._answer_text() if answer is None else answer)
+    def refresh(self) -> None:
+        chunks = answer_chunks(self.answer_text())
         contents = [("answer", chunk) for chunk in chunks] or [("frame", self._frame())]
         while len(self.slots) < len(contents):
             self.slots.append(MessageSlot(self.round_state, self.slots[-1] if self.slots else None, self.failure))
@@ -372,7 +379,7 @@ class Chat:
         for attachment in message.attachments:
             mime = (attachment.content_type or "").split(";")[0].lower()
             suffix = attachment.filename.rsplit(".", 1)[-1].lower()
-            if mime not in IMAGE_TYPES and suffix not in IMAGE_SUFFIXES:
+            if mime not in IMAGE_TYPES.values() and suffix not in IMAGE_SUFFIXES:
                 continue
             try:
                 item = await asyncio.to_thread(image_input, await attachment.read())
@@ -425,13 +432,13 @@ class Chat:
                     renderer.refresh()
                     if thread_id is not None:
                         await renderer.guard(self.bot.codex.load_thread(thread_id))
-                    inputs, context = await renderer.guard(self._inputs(await renderer.guard(self._channel_messages(round_state, thread_id)), round_state.message, round_state.referenced if thread_id is None else None))
+                    channel_messages = await renderer.guard(self._channel_messages(round_state, thread_id))
+                    inputs, context = await renderer.guard(self._inputs(channel_messages, round_state.message, round_state.referenced if thread_id is None else None))
                     turn = TurnState(thread.id)
                     round_state.turn = turn
-                    await self.bot.codex.start_turn(thread, turn, inputs, model_id, effort, context=context)
+                    await self.bot.codex.start_turn(thread, turn, inputs, model_id, effort, context)
                     await self.bot.store.advance_cursor(thread.id, round_state.message.id)
-                    answer = await self._answer(turn, renderer)
-                    renderer.refresh(answer)
+                    await self._follow(turn, renderer)
                     await renderer.flush()
                     await self.bot.store.record_messages([slot.message.id for slot in renderer.slots], thread.id)
         except asyncio.CancelledError:
@@ -459,33 +466,17 @@ class Chat:
                     round_state.thread.lock.release()
             self.rounds.pop(round_state.message.id, None)
 
-    async def _answer(self, turn: TurnState, renderer: Renderer) -> str:
-        completed: dict[str, dict] = {}
+    async def _follow(self, turn: TurnState, renderer: Renderer) -> None:
         while True:
             method, params = await renderer.guard(turn.events.get())
             renderer.handle(method, params)
-            if method == "item/completed":
-                item = params.get("item", {})
-                if item.get("type") == "agentMessage":
-                    completed[item["id"]] = item
-            elif method == "turn/completed":
+            if method == "turn/completed":
                 if params["turn"]["status"] != "completed":
                     raise CodexError("turn_failed")
-                for item in params["turn"].get("items", []):
-                    if item.get("type") == "agentMessage":
-                        completed[item["id"]] = item
-                items = list(completed.values())
-                answers = [item["text"] for item in items if item.get("phase") == "final_answer"]
-                if answers:
-                    answer = "\n\n".join(answers)
-                elif items and items[-1].get("phase") is None:
-                    answer = items[-1].get("text", "")
-                else:
-                    answer = ""
-                if not answer.strip():
+                if not renderer.answer_text().strip():
                     raise CodexError("empty_answer")
-                return answer
-            elif method in ("error", "client/disconnected", "client/recovered", "client/unsupportedRequest"):
+                return
+            if method in ("error", "client/disconnected", "client/recovered", "client/unsupportedRequest"):
                 raise CodexError("turn_interrupted")
 
     async def _delete_messages(self, round_state: ChatRound) -> None:
