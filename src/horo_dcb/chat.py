@@ -363,7 +363,7 @@ class Chat:
                 items.append(item)
         return items
 
-    async def _inputs(self, channel_messages: list[discord.Message], trigger: discord.Message, replied: discord.Message | None) -> list[dict]:
+    async def _inputs(self, channel_messages: list[discord.Message], trigger: discord.Message, replied: discord.Message | None) -> tuple[list[dict], str | None]:
         entries = [*channel_messages, trigger]
         images = await asyncio.gather(*(self._images(message) for message in entries))
         blocks = []
@@ -376,12 +376,9 @@ class Chat:
                 content = f"（回覆 {replied.author.display_name}　{replied.created_at.astimezone(TAIPEI):%Y-%m-%d %H:%M} 的訊息：{message_text(replied)}）\n{content}"
             if content or message is trigger:
                 blocks.append(f"{message.author.display_name}　{message.created_at.astimezone(TAIPEI):%Y-%m-%d %H:%M}\n{content}")
-        inputs = []
-        if len(blocks) > 1:
-            inputs.append({"type": "text", "text": "<頻道訊息>\n" + "\n\n".join(blocks[:-1]) + "\n</頻道訊息>", "text_elements": []})
-        inputs.append({"type": "text", "text": f"<觸發訊息>\n{blocks[-1]}\n</觸發訊息>", "text_elements": []})
+        inputs = [{"type": "text", "text": f"<觸發訊息>\n{blocks[-1]}\n</觸發訊息>", "text_elements": []}]
         inputs.extend(item for items in images for item in items)
-        return inputs
+        return inputs, "\n\n".join(blocks[:-1]) or None
 
     async def _serve(self, round_state: ChatRound) -> None:
         locked = False
@@ -409,10 +406,10 @@ class Chat:
                     renderer.refresh()
                     if thread_id is not None:
                         await renderer.guard(self.bot.codex.load_thread(thread_id))
-                    inputs = await renderer.guard(self._inputs(await renderer.guard(self._channel_messages(round_state, thread_id)), round_state.message, round_state.referenced if thread_id is None else None))
+                    inputs, context = await renderer.guard(self._inputs(await renderer.guard(self._channel_messages(round_state, thread_id)), round_state.message, round_state.referenced if thread_id is None else None))
                     turn = TurnState(thread.id)
                     round_state.turn = turn
-                    await self.bot.codex.start_turn(thread, turn, inputs, model_id, effort)
+                    await self.bot.codex.start_turn(thread, turn, inputs, model_id, effort, context=context)
                     await self.bot.store.advance_cursor(thread.id, round_state.message.id)
                     answer = await self._answer(turn, renderer)
                     renderer.refresh(answer)
