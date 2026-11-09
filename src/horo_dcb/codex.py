@@ -134,9 +134,11 @@ class CodexClient:
                             else:
                                 future.set_result(message.get("result", {}))
                     elif "id" in message:
-                        await websocket.send_json({"id": message["id"], "error": {"code": -32601, "message": "Client operations are disabled"}})
-                        params = message.get("params", {})
-                        self._dispatch("client/unsupportedRequest", params)
+                        if message["method"] == "item/tool/call":
+                            await websocket.send_json({"id": message["id"], "result": {"contentItems": [{"type": "inputText", "text": "目前版本未提供此工具"}], "success": False}})
+                        else:
+                            await websocket.send_json({"id": message["id"], "error": {"code": -32601, "message": "Client operations are disabled"}})
+                            self._dispatch("client/unsupportedRequest", message.get("params", {}))
                     else:
                         self._dispatch(message.get("method", ""), message.get("params", {}))
                 elif frame.type in (aiohttp.WSMsgType.CLOSE, aiohttp.WSMsgType.CLOSED, aiohttp.WSMsgType.ERROR):
@@ -229,6 +231,15 @@ class CodexClient:
         result = await self._request("thread/start", params)
         thread = self.thread_state(result["thread"]["id"])
         thread.token_total = {key: 0 for key in ("inputTokens", "cachedInputTokens", "outputTokens", "reasoningOutputTokens", "totalTokens")}
+        self.loaded.add(thread.id)
+        return thread
+
+    async def fork_thread(self, source_id: str, turn_id: str, model: str | None = None) -> ThreadState:
+        params = {"threadId": source_id, "lastTurnId": turn_id, "ephemeral": False, "approvalPolicy": "never", "sandbox": "read-only", "excludeTurns": True}
+        if model is not None:
+            params["model"] = model
+        result = await self._request("thread/fork", params)
+        thread = self.thread_state(result["thread"]["id"])
         self.loaded.add(thread.id)
         return thread
 

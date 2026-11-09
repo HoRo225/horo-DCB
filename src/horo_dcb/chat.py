@@ -26,18 +26,20 @@ IMAGE_SUFFIXES = ("png", "jpg", "jpeg", "webp", "gif")
 WAITING_TEXT = "⏳ 等上一則回答完成後接著回答"
 STEER_LEAD = "原提問者在你回答途中送出以下補充。請立刻依照補充內容重新回答這次的問題，補充優先於原本的要求："
 
-Action = Literal["new", "continue", "queue", "steer"]
-Entered = Literal["new", "continue", "queue", "steered"]
+Action = Literal["new", "continue", "queue", "steer", "fork"]
+Entered = Literal["new", "continue", "queue", "steered", "fork"]
 
 
-def route(*, author: int, bot_reply: bool, active_asker: int | None, entry: Entry | None, busy: bool) -> Action:
+def route(*, author: int, bot_reply: bool, active_asker: int | None, entry: Entry | None, latest: str | None, busy: bool) -> Action:
     if not bot_reply:
         return "new"
     if active_asker is not None:
         return "steer" if active_asker == author else "queue"
     if entry is None:
         return "new"
-    return "queue" if busy else "continue"
+    if entry.turn is None or latest is None:
+        return "queue" if busy else "continue"
+    return "continue" if entry.turn == latest and not busy else "fork"
 
 
 def image_input(data: bytes) -> dict | None:
@@ -358,6 +360,7 @@ class ChatRound:
     message: discord.Message
     received_at: float
     referenced: discord.Message | None = None
+    source: str | None = None
     task: asyncio.Task | None = None
     thread: ThreadState | None = None
     turn: TurnState | None = None
@@ -413,6 +416,12 @@ class Chat:
         after = discord.Object(cursor) if cursor is not None else None
         messages = [message async for message in round_state.message.channel.history(limit=100, before=round_state.message, after=after, oldest_first=False)]
         messages.reverse()
+        if round_state.source is not None:
+            def in_source(message_id: int | None) -> bool:
+                return message_id is not None and (entry := self.bot.store.entry_for(message_id)) is not None and entry.thread == round_state.source
+
+            prompts = {message.reference.message_id for message in messages if message.reference is not None and message.author.id == self.bot.user.id and in_source(message.id)}
+            return [message for message in messages if not in_source(message.id) and message.id not in prompts and not (message.reference is not None and in_source(message.reference.message_id))]
         if thread_id is not None:
             return [message for message in messages if (entry := self.bot.store.entry_for(message.id)) is None or entry.thread != thread_id]
         referenced = round_state.referenced
@@ -522,12 +531,19 @@ class Chat:
                 bot_reply=bot_reply,
                 active_asker=active.message.author.id if active is not None else None,
                 entry=entry,
+                latest=self.bot.store.latest_turn(entry.thread) if entry is not None else None,
                 busy=entry is not None and entry.thread in self.lines,
             )
             if action == "new":
                 self._join(round_state, await self.bot.codex.new_thread(model_id, instructions))
                 await self.bot.store.add_thread(round_state.thread.id, round_state.message.id)
                 return "new"
+            if action == "fork":
+                thread = await self.bot.codex.fork_thread(entry.thread, entry.turn, model_id)
+                await self.bot.store.add_thread(thread.id, referenced.id)
+                round_state.source = entry.thread
+                self._join(round_state, thread)
+                return "fork"
             if action != "steer":
                 return self._join(round_state, active.thread if active is not None else self.bot.codex.thread_state(entry.thread))
             async with active.steering:
