@@ -450,7 +450,8 @@ class Chat:
                 blocks.append(f"{message.author.display_name}　{message.created_at.astimezone(TAIPEI):%Y-%m-%d %H:%M}\n{content}")
         text = f"{STEER_LEAD}\n<補充訊息>\n{blocks[-1]}\n</補充訊息>" if steer else f"<觸發訊息>\n{blocks[-1]}\n</觸發訊息>"
         inputs = [{"type": "text", "text": text, "text_elements": []}]
-        inputs.extend(item for items in images for item in items)
+        for number, item in enumerate((item for items in images for item in items), 1):
+            inputs += [{"type": "text", "text": f"〔圖片 {number}〕", "text_elements": []}, item]
         return inputs, [part for block in blocks[:-1] for part in context_parts(block)]
 
     async def _serve(self, round_state: ChatRound) -> None:
