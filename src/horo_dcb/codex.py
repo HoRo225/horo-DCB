@@ -35,7 +35,6 @@ class TurnState:
 @dataclass
 class ThreadState:
     id: str
-    lock: asyncio.Lock = field(default_factory=asyncio.Lock)
     active: TurnState | None = None
     token_total: dict | None = None
 
@@ -235,15 +234,15 @@ class CodexClient:
 
     async def load_thread(self, thread_id: str) -> None:
         if thread_id not in self.loaded:
-            await self._request("thread/resume", {"threadId": thread_id, "approvalPolicy": "never", "sandbox": "read-only"})
+            await self._request("thread/resume", {"threadId": thread_id, "approvalPolicy": "never", "sandbox": "read-only", "excludeTurns": True})
             self.loaded.add(thread_id)
 
-    async def start_turn(self, thread: ThreadState, turn: TurnState, inputs: list[dict], model: str | None, effort: str | None, context: list[str]) -> None:
+    async def start_turn(self, thread: ThreadState, turn: TurnState, inputs: list[dict], model: str | None, effort: str | None, context: list[str], message_id: int) -> None:
         if thread.active is not None:
             raise CodexError("thread_busy")
         thread.active = turn
         turn.usage_before = thread.token_total.copy() if thread.token_total is not None else None
-        params = {"threadId": thread.id, "input": inputs, "summary": "auto"}
+        params = {"threadId": thread.id, "input": inputs, "summary": "auto", "clientUserMessageId": str(message_id)}
         if model is not None:
             params["model"] = model
         if effort is not None:
@@ -257,6 +256,16 @@ class CodexClient:
                 turn.terminal.set()
             raise
         turn.id = result["turn"]["id"]
+
+    async def steer(self, turn: TurnState, inputs: list[dict], message_id: int) -> bool:
+        try:
+            await self._request("turn/steer", {"threadId": turn.thread_id, "expectedTurnId": turn.id, "input": inputs, "clientUserMessageId": str(message_id)})
+        except CodexError as error:
+            if error.code != "rpc_rejected":
+                raise
+            log_event("codex_steer_rejected", error, rpc_code=error.rpc_code)
+            return False
+        return True
 
     async def interrupt(self, turn: TurnState) -> None:
         if turn.terminal.is_set():
