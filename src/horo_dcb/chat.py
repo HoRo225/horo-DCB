@@ -24,6 +24,7 @@ TAIPEI = timezone(timedelta(hours=8))
 IMAGE_TYPES = {"PNG": "image/png", "JPEG": "image/jpeg", "WEBP": "image/webp", "GIF": "image/gif"}
 IMAGE_SUFFIXES = ("png", "jpg", "jpeg", "webp", "gif")
 WAITING_TEXT = "⏳ 等上一則回答完成後接著回答"
+STEER_LEAD = "原提問者在你回答途中送出以下補充。請立刻依照補充內容重新回答這次的問題，補充優先於原本的要求："
 
 Action = Literal["new", "continue", "queue", "steer"]
 Entered = Literal["new", "continue", "queue", "steered"]
@@ -434,7 +435,7 @@ class Chat:
                 items.append(item)
         return items
 
-    async def _inputs(self, channel_messages: list[discord.Message], trigger: discord.Message, replied: discord.Message | None, tag: str = "觸發訊息") -> tuple[list[dict], list[str]]:
+    async def _inputs(self, channel_messages: list[discord.Message], trigger: discord.Message, replied: discord.Message | None, steer: bool = False) -> tuple[list[dict], list[str]]:
         entries = [*channel_messages, trigger]
         images = await asyncio.gather(*(self._images(message) for message in entries))
         blocks = []
@@ -447,7 +448,8 @@ class Chat:
                 content = f"（回覆 {replied.author.display_name}　{replied.created_at.astimezone(TAIPEI):%Y-%m-%d %H:%M} 的訊息：{message_text(replied)}）\n{content}"
             if content or message is trigger:
                 blocks.append(f"{message.author.display_name}　{message.created_at.astimezone(TAIPEI):%Y-%m-%d %H:%M}\n{content}")
-        inputs = [{"type": "text", "text": f"<{tag}>\n{blocks[-1]}\n</{tag}>", "text_elements": []}]
+        text = f"{STEER_LEAD}\n<補充訊息>\n{blocks[-1]}\n</補充訊息>" if steer else f"<觸發訊息>\n{blocks[-1]}\n</觸發訊息>"
+        inputs = [{"type": "text", "text": text, "text_elements": []}]
         inputs.extend(item for items in images for item in items)
         return inputs, [part for block in blocks[:-1] for part in context_parts(block)]
 
@@ -528,7 +530,7 @@ class Chat:
             if action != "steer":
                 return self._join(round_state, active.thread if active is not None else self.bot.codex.thread_state(entry.thread))
             async with active.steering:
-                inputs, _ = await self._inputs([], round_state.message, None, "補充訊息")
+                inputs, _ = await self._inputs([], round_state.message, None, steer=True)
                 await active.settled.wait()
                 if not self._steerable(active):
                     continue
