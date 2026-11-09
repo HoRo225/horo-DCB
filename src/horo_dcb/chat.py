@@ -193,6 +193,18 @@ class Renderer:
         self.agents: dict[str, dict] = {}
         self.reasoning: dict[str, dict[int, str]] = {}
         self.searches: dict[str, dict] = {}
+        self.open: set[str] = set()
+
+    def _track(self, method: str, item_id: str) -> None:
+        if method == "item/completed":
+            self.open.discard(item_id)
+        elif item_id not in self.open:
+            for stale in self.open:
+                self.agents.pop(stale, None)
+                self.reasoning.pop(stale, None)
+                self.searches.pop(stale, None)
+            self.timeline = [key for key in self.timeline if key[0] == "reroute" or key[1] not in self.open]
+            self.open = {item_id}
 
     def _mark(self, key: tuple) -> None:
         if key not in self.timeline:
@@ -208,6 +220,8 @@ class Renderer:
     def handle(self, method: str, params: dict) -> None:
         item = params.get("item") or {}
         kind = item.get("type")
+        if method in ("item/started", "item/completed") and kind in ("agentMessage", "reasoning", "webSearch"):
+            self._track(method, item["id"])
         if method in ("item/started", "item/completed") and kind == "agentMessage":
             self._agent(item, method == "item/completed")
         elif method == "turn/completed":
