@@ -492,7 +492,7 @@ class Chat:
                 if not fresh:
                     await renderer.guard(self.bot.codex.load_thread(thread.id))
                 channel_messages = await renderer.guard(self._channel_messages(round_state, None if fresh else thread.id))
-                inputs, context = await renderer.guard(self._inputs(channel_messages, round_state.message, round_state.referenced if fresh else None))
+                inputs, context = await renderer.guard(self._inputs(channel_messages, round_state.message, round_state.referenced if fresh or channel_messages else None))
                 turn = TurnState(thread.id)
                 round_state.turn = turn
                 await self.bot.codex.start_turn(thread, turn, inputs, model_id, effort, context, round_state.message.id)
