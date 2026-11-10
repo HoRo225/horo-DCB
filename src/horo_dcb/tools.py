@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 
 import discord
-from discord.http import Route
+from discord.http import HTTPClient, Route
 
 
 TAIPEI = timezone(timedelta(hours=8))
@@ -20,6 +20,8 @@ READ_BYTES = 16000
 SEARCH_PAGE = 25
 SEARCH_TEXT_CHARS = 300
 SEARCH_OFFSET_MAX = 9975
+SEARCH_RETRY_MIN = 0.5
+SEARCH_RETRY_MAX = 5
 IMAGE_COUNT = 4
 IMAGE_BYTES = 8 * 1024 * 1024
 IMAGE_TOTAL_BYTES = 16 * 1024 * 1024
@@ -82,7 +84,7 @@ class ToolError(Exception):
 class ToolContext:
     channel: discord.TextChannel
     anchor: discord.Message
-    http: discord.http.HTTPClient
+    http: HTTPClient
     text_of: Callable[[discord.Message], str]
     decode_image: Callable[[bytes], dict | None]
 
@@ -212,7 +214,7 @@ async def search_messages(arguments: dict, context: ToolContext) -> ToolResult:
             break
         if attempt == 2:
             raise ToolError("Discord 的搜尋索引還沒準備好，請改用 read_messages 往回讀")
-        await asyncio.sleep(min(max(float(body.get("retry_after") or 1), 0.5), 5))
+        await asyncio.sleep(min(max(float(body.get("retry_after") or 1), SEARCH_RETRY_MIN), SEARCH_RETRY_MAX))
     total = int(body.get("total_results") or 0)
     hits = [next((value for value in group if value.get("hit")), group[0]) for group in body.get("messages") or () if group]
     result = {"total": total, "messages": [raw_entry(value) for value in hits[:SEARCH_PAGE]], "next_offset": None}

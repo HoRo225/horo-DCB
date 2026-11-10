@@ -115,6 +115,8 @@ def context_parts(text: str) -> list[str]:
 
 FRAME_COLOUR = discord.Colour(0x7F77DD)
 MAX_FRAME_CHARS = 1500
+EDIT_INTERVAL = 1
+ROUND_TIMEOUT = 900
 
 
 def shorten(text: str, limit: int) -> str:
@@ -171,8 +173,11 @@ class MessageSlot:
             self.dirty.set()
 
     def _done(self, task: asyncio.Task) -> None:
-        if not task.cancelled() and task.exception() is not None and not self.failure.done():
-            self.failure.set_exception(task.exception())
+        if task.cancelled():
+            return
+        error = task.exception()
+        if error is not None and not self.failure.done():
+            self.failure.set_exception(error)
 
     async def _run(self) -> None:
         if self.previous is not None:
@@ -180,7 +185,7 @@ class MessageSlot:
         round_state = self.round_state
         while True:
             await self.dirty.wait()
-            delay = self.last_edit + 1 - time.monotonic()
+            delay = self.last_edit + EDIT_INTERVAL - time.monotonic()
             if delay > 0:
                 await asyncio.sleep(delay)
             self.dirty.clear()
@@ -489,7 +494,7 @@ class Chat:
 
     async def _serve(self, round_state: ChatRound) -> None:
         try:
-            async with asyncio.timeout_at(round_state.received_at + 900):
+            async with asyncio.timeout_at(round_state.received_at + ROUND_TIMEOUT):
                 account = await self.bot.codex.account()
                 if account.get("account") is None:
                     raise CodexError("not_logged_in")
@@ -569,8 +574,8 @@ class Chat:
                 round_state.source = entry.thread
                 self._join(round_state, thread)
                 return "fork"
-            if action != "steer":
-                return self._join(round_state, active.thread if active is not None else self.bot.codex.thread_state(entry.thread))
+            if action != "steer" or active is None:
+                return self._join(round_state, active.thread if active is not None else self.bot.codex.thread_state(entry.thread))  # ty: ignore[invalid-argument-type]
             async with active.steering:
                 inputs, _ = await self._inputs([], round_state.message, None, steer=True)
                 await active.settled.wait()
@@ -578,7 +583,7 @@ class Chat:
                     continue
                 turn = active.turn
                 if not await self.bot.codex.steer(turn, inputs, round_state.message.id):
-                    return self._join(round_state, active.thread)
+                    return self._join(round_state, active.thread)  # ty: ignore[invalid-argument-type]
                 await self.bot.store.record_message(round_state.message.id, turn.thread_id, turn.id)
             try:
                 await round_state.message.add_reaction("✅")
@@ -621,7 +626,7 @@ class Chat:
     def _release(self, round_state: ChatRound) -> None:
         line = self.lines[round_state.thread.id]
         line.popleft()
-        round_state.thread.active = None
+        round_state.thread.active = None  # ty: ignore[invalid-assignment]
         if line:
             line[0].admitted.set()
         else:
@@ -646,7 +651,7 @@ class Chat:
                 raise CodexError("turn_interrupted")
 
     async def _run_tool(self, round_state: ChatRound, turn: TurnState, renderer: Renderer, call: ToolCall) -> None:
-        context = tools.ToolContext(round_state.message.channel, round_state.message, self.bot.http, message_text, image_input)
+        context = tools.ToolContext(round_state.message.channel, round_state.message, self.bot.http, message_text, image_input)  # ty: ignore[invalid-argument-type]
         try:
             result = await tools.run(call.tool, call.arguments, context)
             if result.images:
@@ -724,7 +729,7 @@ class Chat:
         for value in rounds:
             if not value.cleaning:
                 value.task.cancel()
-        tasks = [value.task for value in rounds]
+        tasks = [value.task for value in rounds if value.task is not None]
         if tasks:
             await asyncio.gather(*tasks, return_exceptions=True)
         for task in tuple(self.drains):

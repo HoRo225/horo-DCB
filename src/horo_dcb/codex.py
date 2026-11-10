@@ -7,6 +7,12 @@ import aiohttp
 from . import log_event
 
 
+REQUEST_TIMEOUT = 30
+TERMINAL_POLL = 10
+RECONNECT_FIRST = 1
+RECONNECT_MAX = 10
+
+
 class CodexError(Exception):
     def __init__(self, code: str, rpc_code: int | None = None) -> None:
         super().__init__(code)
@@ -55,8 +61,9 @@ class ThreadState:
 
 
 class CodexClient:
-    def __init__(self, socket_path: str = "/run/codex/app-server.sock") -> None:
+    def __init__(self, socket_path: str | None = "/run/codex/app-server.sock", url: str = "http://localhost/") -> None:
         self.socket_path = socket_path
+        self.url = url
         self.ready = asyncio.Event()
         self._closing = False
         self._runner: asyncio.Task | None = None
@@ -92,14 +99,14 @@ class CodexClient:
         return self.threads.setdefault(thread_id, ThreadState(thread_id))
 
     async def _connect_loop(self) -> None:
-        delay = 1
+        delay = RECONNECT_FIRST
         while not self._closing:
             reader = None
             try:
-                connector = aiohttp.UnixConnector(path=self.socket_path)
+                connector = aiohttp.UnixConnector(path=self.socket_path) if self.socket_path is not None else None
                 timeout = aiohttp.ClientTimeout(total=None, connect=10)
                 async with aiohttp.ClientSession(connector=connector, timeout=timeout) as session:
-                    async with session.ws_connect("http://localhost/", max_msg_size=0, heartbeat=30) as websocket:
+                    async with session.ws_connect(self.url, max_msg_size=0, heartbeat=30) as websocket:
                         self._ws = websocket
                         self.loaded.clear()
                         reader = asyncio.create_task(self._read(websocket))
@@ -108,7 +115,7 @@ class CodexClient:
                         self.ready.set()
                         self._publish("client/connected", {})
                         log_event("codex_connected")
-                        delay = 1
+                        delay = RECONNECT_FIRST
                         await self._recover_threads()
                         await reader
             except asyncio.CancelledError:
@@ -133,7 +140,7 @@ class CodexClient:
                 self._publish("client/disconnected", {})
             if not self._closing:
                 await asyncio.sleep(delay)
-                delay = min(delay * 2, 10)
+                delay = min(delay * 2, RECONNECT_MAX)
 
     async def _read(self, websocket: aiohttp.ClientWebSocketResponse) -> None:
         try:
@@ -177,7 +184,7 @@ class CodexClient:
         if not turn.accepts_tools or turn.terminal.is_set():
             await websocket.send_json(tool_response(request_id, False, "回答已停止，不再執行工具"))
             return
-        call = ToolCall(request_id, thread.id, turn_id, str(params.get("callId") or ""), str(params.get("tool") or ""), params.get("arguments"))
+        call = ToolCall(request_id, thread.id, turn_id, str(params.get("callId") or ""), str(params.get("tool") or ""), params.get("arguments"))  # ty: ignore[invalid-argument-type]
         self.tool_calls[request_id] = call
         turn.events.put_nowait(("client/toolCall", call))
 
@@ -235,7 +242,7 @@ class CodexClient:
         if params is not None:
             message["params"] = params
         try:
-            async with asyncio.timeout(30):
+            async with asyncio.timeout(REQUEST_TIMEOUT):
                 await self._ws.send_json(message)
                 return await future
         except TimeoutError:
@@ -346,7 +353,7 @@ class CodexClient:
     async def wait_terminal(self, turn: TurnState) -> None:
         while not turn.terminal.is_set():
             try:
-                async with asyncio.timeout(10):
+                async with asyncio.timeout(TERMINAL_POLL):
                     await turn.terminal.wait()
             except TimeoutError:
                 if self.ready.is_set():
