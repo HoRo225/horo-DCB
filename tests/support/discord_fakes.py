@@ -1,7 +1,9 @@
+import asyncio
 from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock, Mock
 
 import discord
+from discord.components import _component_factory
 
 GUILD_ID = 100
 CHANNEL_ID = 200
@@ -31,15 +33,66 @@ def attachment(data: bytes = b"", filename: str = "image.png", content_type: str
     return value
 
 
+def components_of(view: discord.ui.LayoutView) -> list:
+    return [component for component in (_component_factory(payload) for payload in view.to_components()) if component is not None]
+
+
+def view_text(view: discord.ui.LayoutView) -> str:
+    def walk(payloads: list[dict]) -> list[str]:
+        texts = []
+        for payload in payloads:
+            if payload.get("type") == 10:
+                texts.append(payload["content"])
+            texts.extend(walk(payload.get("components", [])))
+        return texts
+
+    return "\n".join(walk(view.to_components()))
+
+
 class Channel:
-    def __init__(self, channel_id: int = CHANNEL_ID, guild_id: int = GUILD_ID) -> None:
+    def __init__(self, channel_id: int = CHANNEL_ID, guild_id: int = GUILD_ID, bot: Mock | None = None, first_sent_id: int = 10_000) -> None:
         self.messages: list[Mock] = []
         self.sent: list[Mock] = []
+        self.deleted: list[int] = []
+        self.bot = bot or member(999, "樂奈", bot=True)
+        self.next_sent_id = first_sent_id
+        self.send_gate: asyncio.Event | None = None
         self.mock = Mock(spec=discord.TextChannel)
         self.mock.id = channel_id
         self.mock.guild = Mock(id=guild_id)
         self.mock.history = Mock(side_effect=self.history)
         self.mock.fetch_message = AsyncMock(side_effect=self.fetch_message)
+        self.mock.send = AsyncMock(side_effect=self.send)
+
+    async def send(self, *, view: discord.ui.LayoutView, reference: discord.MessageReference | None = None, **options) -> Mock:
+        if self.send_gate is not None:
+            await self.send_gate.wait()
+        self.next_sent_id += 1
+        sent = self.add(message(self.next_sent_id, self.bot, components=tuple(components_of(view)), reply_to=reference.message_id if reference is not None else None))
+        sent.views = [view]
+        sent.send_options = options
+        sent.edit = AsyncMock(side_effect=lambda *, view, **edit_options: self.edit(sent, view))
+        sent.delete = AsyncMock(side_effect=lambda: self.delete(sent))
+        self.sent.append(sent)
+        return sent
+
+    def edit(self, sent: Mock, view: discord.ui.LayoutView) -> None:
+        if sent.id in self.deleted:
+            raise http_error(discord.NotFound, 404)
+        sent.views.append(view)
+        sent.components = components_of(view)
+
+    def delete(self, sent: Mock) -> None:
+        if sent.id in self.deleted:
+            raise http_error(discord.NotFound, 404)
+        self.deleted.append(sent.id)
+        self.messages.remove(sent)
+
+    def live(self) -> list[Mock]:
+        return [value for value in self.sent if value.id not in self.deleted]
+
+    def texts(self) -> list[str]:
+        return [view_text(value.views[-1]) for value in self.live()]
 
     def add(self, message: Mock) -> Mock:
         message.channel = self.mock
