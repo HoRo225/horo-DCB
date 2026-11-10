@@ -1,5 +1,6 @@
+import asyncio
 import itertools
-from datetime import timedelta
+from datetime import datetime, timedelta
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
 
@@ -10,14 +11,16 @@ from horo_dcb.console import Console
 from horo_dcb.store import Store
 from horo_dcb.voice import Voice
 from tests.support.app_server import Reject
-from tests.support.discord_fakes import EPOCH, Guild, http_error, member, view_text
+from tests.support.discord_fakes import Guild, http_error, member, view_text
 from tests.support.waiting import until
 
 OWNER_ONLY = "只有擁有者能使用"
 NO_PLACEHOLDER = "\u200b"
 MODULES = ["AI 對話", "臨時語音"]
 DEVICE = {"loginId": "L1", "verificationUrl": "https://example.test/device", "userCode": "ABCD-EFGH"}
-FOOTER = f"-# 面板在 <t:{int((EPOCH + timedelta(minutes=15)).timestamp())}:R>失效"
+LIFETIME = timedelta(minutes=14, seconds=50)
+OPENED = discord.utils.utcnow()
+FOOTER = f"-# 面板在 <t:{int((OPENED + LIFETIME).timestamp())}:R>失效"
 SIGNED_IN = "🟢 已登入 ChatGPT，方案：plus"
 SIGNED_OUT = "🔴 尚未登入 ChatGPT"
 LOGIN_STEPS = "🟡 等待登入\n1. 按下「開啟登入頁」，用機器人專用的 ChatGPT 帳號登入\n2. 輸入下面的登入代碼\n# ABCD-EFGH\n-# 完成後面板會自動更新"
@@ -33,19 +36,19 @@ def logged_in(params: dict) -> dict:
 
 
 class Interaction:
-    def __init__(self, user: Mock | None = None, custom_id: str | None = None) -> None:
+    def __init__(self, user: Mock | None = None, custom_id: str | None = None, created_at: datetime = OPENED) -> None:
         self.user = user or member()
         self.data = {"custom_id": custom_id} if custom_id is not None else {}
-        self.created_at = EPOCH
+        self.created_at = created_at
         self.response = SimpleNamespace(defer=AsyncMock(), send_message=AsyncMock())
         self.followup = SimpleNamespace(send=AsyncMock())
-        self.expired = False
-        self.is_expired = Mock(side_effect=lambda: self.expired)
+        self.deleted = False
         self.contents: list[str] = []
         self.screens: list[str] = []
         self.views: list[discord.ui.LayoutView] = []
         self.colours: list[int | None] = []
         self.edit_original_response = AsyncMock(side_effect=self.edit)
+        self.delete_original_response = AsyncMock(side_effect=self.delete)
 
     async def edit(self, *, content: str | None = None, view: discord.ui.LayoutView | None = None) -> None:
         if content is not None:
@@ -54,6 +57,9 @@ class Interaction:
             self.views.append(view)
             self.screens.append(view_text(view))
             self.colours.append(view.to_components()[0]["accent_color"])
+
+    async def delete(self) -> None:
+        self.deleted = True
 
     @property
     def screen(self) -> str:
@@ -134,8 +140,12 @@ async def console(bot):
     await value.close()
 
 
-async def opened(console) -> Interaction:
-    interaction = Interaction()
+def expiring_in(seconds: float) -> datetime:
+    return discord.utils.utcnow() - LIFETIME + timedelta(seconds=seconds)
+
+
+async def opened(console, created_at: datetime = OPENED) -> Interaction:
+    interaction = Interaction(created_at=created_at)
     await console.open(interaction)
     return interaction
 
@@ -373,16 +383,41 @@ async def test_account_changes_refresh_the_panel(app_server, console):
     await until(lambda: SIGNED_OUT in interaction.screen)
 
 
-async def test_an_expired_panel_is_dropped(console):
-    stale = await opened(console)
+async def test_a_panel_deletes_itself_when_it_expires(console):
+    interaction = await opened(console, expiring_in(0.3))
+    await until(lambda: interaction.deleted)
+
+
+async def test_an_expired_panel_is_no_longer_edited(app_server, store, console):
+    stale = await opened(console, expiring_in(0))
+    await until(lambda: stale.deleted)
+    edits = len(stale.screens)
+    await store.update_settings(effort="high")
+    await console.refresh_panels()
+    await console.action("refresh")
+    reads = len(app_server.requests("account/read"))
+    await app_server.notify("account/updated", {})
+    await until(lambda: len(app_server.requests("account/read")) == reads + 1)
+    await switch(stale, "臨時語音")
+    assert len(stale.screens) == edits
+
+
+async def test_a_panel_that_has_not_expired_stays_and_refreshes(console):
+    stale = await opened(console, expiring_in(0))
     live = await opened(console)
-    stale.expired = True
+    await until(lambda: stale.deleted)
     await console.action("refresh")
-    stale_edits = len(stale.screens)
-    stale.expired = False
-    await console.action("refresh")
-    assert len(stale.screens) == stale_edits
-    assert len(live.screens) == 3
+    assert not live.deleted
+    assert len(live.screens) == 2
+
+
+async def test_shutdown_leaves_open_panels_on_screen(bot):
+    console = Console(bot)
+    console.start()
+    interaction = await opened(console, expiring_in(0.3))
+    await console.close()
+    await asyncio.sleep(0.5)
+    assert not interaction.deleted
 
 
 async def test_a_panel_that_cannot_be_edited_is_dropped(console):

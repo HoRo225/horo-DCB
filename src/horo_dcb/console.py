@@ -17,6 +17,7 @@ from .store import Settings
 EFFORT_NAMES = {"none": "不思考", "minimal": "最低", "low": "低", "medium": "中", "high": "高", "xhigh": "超高", "max": "最高", "ultra": "極限"}
 EMPTY_CELL = "⬛"
 NO_PLACEHOLDER = "\u200b"
+PANEL_LIFETIME = timedelta(minutes=14, seconds=50)
 
 
 class Level(Enum):
@@ -292,12 +293,13 @@ MODULES = {
 
 class ConsolePanel(ui.LayoutView):
     def __init__(self, console: Console, interaction: discord.Interaction) -> None:
-        super().__init__(timeout=900)
+        super().__init__(timeout=None)
         self.console = console
         self.interaction = interaction
         self.module = "ai"
-        self.expires_at = int((interaction.created_at + timedelta(minutes=15)).timestamp())
-        self.expired = False
+        self.deadline = interaction.created_at + PANEL_LIFETIME
+        self.expires_at = int(self.deadline.timestamp())
+        self.expiry: asyncio.Task | None = None
         self.render_lock = asyncio.Lock()
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
@@ -315,9 +317,15 @@ class ConsolePanel(ui.LayoutView):
     async def on_error(self, interaction: discord.Interaction, error: Exception, item: ui.Item) -> None:
         log_event("console_interaction_error", error)
 
-    async def on_timeout(self) -> None:
-        self.expired = True
+    async def expire(self) -> None:
+        await discord.utils.sleep_until(self.deadline)
+        self.stop()
         self.console.panels.discard(self)
+        try:
+            async with self.render_lock:
+                await self.interaction.delete_original_response()
+        except discord.HTTPException as error:
+            log_event("console_panel_error", error)
 
     async def rebuild(self) -> None:
         settings = await self.console.bot.store.settings()
@@ -333,11 +341,10 @@ class ConsolePanel(ui.LayoutView):
         self.add_item(ui.Container(ui.TextDisplay("## 控制台"), ui.ActionRow(switch), *page.items, ui.Separator(), ui.TextDisplay(f"-# 面板在 <t:{self.expires_at}:R>失效"), accent_colour=page.level.colour))
 
     async def refresh(self) -> None:
-        if self.expired or self.interaction.is_expired():
-            self.console.panels.discard(self)
-            return
         try:
             async with self.render_lock:
+                if self.is_finished():
+                    return
                 await self.rebuild()
                 await self.interaction.edit_original_response(view=self)
         except discord.HTTPException as error:
@@ -369,6 +376,8 @@ class Console:
                 await self.monitor
         for panel in tuple(self.panels):
             panel.stop()
+            if panel.expiry is not None:
+                panel.expiry.cancel()
         self.panels.clear()
 
     async def open(self, interaction: discord.Interaction) -> None:
@@ -385,6 +394,7 @@ class Console:
         panel = ConsolePanel(self, interaction)
         await panel.rebuild()
         await interaction.edit_original_response(view=panel)
+        panel.expiry = asyncio.create_task(panel.expire())
         self.panels.add(panel)
 
     async def _read_account(self) -> None:
