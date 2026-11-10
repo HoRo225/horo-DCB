@@ -14,7 +14,7 @@ from tests.support.discord_fakes import EPOCH, Guild, http_error, member, view_t
 from tests.support.waiting import until
 
 OWNER_ONLY = "只有擁有者能使用"
-NO_PLACEHOLDER = "​"
+NO_PLACEHOLDER = "200b"
 MODULES = ["AI 對話", "臨時語音"]
 DEVICE = {"loginId": "L1", "verificationUrl": "https://example.test/device", "userCode": "ABCD-EFGH"}
 FOOTER = f"-# 面板在 <t:{int((EPOCH + timedelta(minutes=15)).timestamp())}:R>失效"
