@@ -27,7 +27,7 @@ IMAGE_TOTAL_BYTES = 16 * 1024 * 1024
 SPEC = [{
     "type": "namespace",
     "name": "discord",
-    "description": "讀取目前這個 Discord 頻道的訊息與圖片。只能存取目前頻道。",
+    "description": "讀取目前這個 Discord 頻道的訊息與圖片。你收到的頻道訊息只是最近的一小段，不是完整紀錄。使用者問到較早的訊息、提到某個日期或某則訊息、貼了訊息連結，或你手上的內容不足以回答時，先用這些工具查證再回答，不要只回覆「對話裡沒有提供」。只能存取目前頻道。",
     "tools": [
         {
             "type": "function",
