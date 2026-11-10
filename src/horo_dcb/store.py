@@ -13,6 +13,7 @@ class Settings:
     model: str | None
     effort: str | None
     instructions: str | None
+    voice_hub_ids: frozenset[int]
 
 
 class Entry(NamedTuple):
@@ -54,18 +55,24 @@ def _validate_threads(value: dict) -> None:
         raise ValueError("storage_invalid")
 
 
+def _snowflake(value) -> bool:
+    return isinstance(value, str) and value.isascii() and value.isdigit()
+
+
 class Store:
     def __init__(self, directory: Path = Path("/data/bot")) -> None:
         self.directory = directory
         self.lock = asyncio.Lock()
         self._settings: dict = {}
         self._threads: dict = {"messages": {}, "threads": {}}
+        self._rooms: dict = {}
 
     async def open(self) -> None:
         async with self.lock:
             self.directory.mkdir(parents=True, exist_ok=True)
-            settings = self._load("settings.json", {"ai_channel_ids": [], "allowed_role_ids": [], "model": None, "effort": None, "instructions": None})
-            for key in ("ai_channel_ids", "allowed_role_ids"):
+            settings = self._load("settings.json", {"ai_channel_ids": [], "allowed_role_ids": [], "model": None, "effort": None, "instructions": None, "voice_hub_ids": []})
+            settings.setdefault("voice_hub_ids", [])
+            for key in ("ai_channel_ids", "allowed_role_ids", "voice_hub_ids"):
                 if not isinstance(settings.get(key), list) or not all(type(value) is int for value in settings[key]):
                     raise ValueError("storage_invalid")
             for key in ("model", "effort", "instructions"):
@@ -76,8 +83,12 @@ class Store:
             _validate_threads(threads)
             if threads is not stored:
                 self._write("threads.json", threads)
+            rooms = self._load("rooms.json", {})
+            if not all(_snowflake(room) and _snowflake(owner) for room, owner in rooms.items()):
+                raise ValueError("storage_invalid")
             self._settings = settings
             self._threads = threads
+            self._rooms = rooms
 
     def _load(self, filename: str, default: dict) -> dict:
         path = self.directory / filename
@@ -104,7 +115,7 @@ class Store:
         self._threads = updated
 
     def _snapshot(self) -> Settings:
-        return Settings(frozenset(self._settings["ai_channel_ids"]), frozenset(self._settings["allowed_role_ids"]), self._settings.get("model"), self._settings.get("effort"), self._settings.get("instructions"))
+        return Settings(frozenset(self._settings["ai_channel_ids"]), frozenset(self._settings["allowed_role_ids"]), self._settings.get("model"), self._settings.get("effort"), self._settings.get("instructions"), frozenset(self._settings["voice_hub_ids"]))
 
     async def settings(self) -> Settings:
         async with self.lock:
@@ -159,3 +170,19 @@ class Store:
             keys = {str(value) for value in message_ids} & self._threads["messages"].keys()
             if keys:
                 self._commit({key: record for key, record in self._threads["messages"].items() if key not in keys}, self._threads["threads"])
+
+    def rooms(self) -> dict[int, int]:
+        return {int(room): int(owner) for room, owner in self._rooms.items()}
+
+    async def set_room(self, channel_id: int, owner_id: int) -> None:
+        async with self.lock:
+            self._save_rooms(self._rooms | {str(channel_id): str(owner_id)})
+
+    async def remove_room(self, channel_id: int) -> None:
+        async with self.lock:
+            if str(channel_id) in self._rooms:
+                self._save_rooms({room: owner for room, owner in self._rooms.items() if room != str(channel_id)})
+
+    def _save_rooms(self, rooms: dict) -> None:
+        self._write("rooms.json", rooms)
+        self._rooms = rooms

@@ -22,16 +22,56 @@ async def opened(directory) -> Store:
 async def test_first_open_creates_empty_files(tmp_path):
     directory = tmp_path / "bot"
     store = await opened(directory)
-    assert await store.settings() == Settings(frozenset(), frozenset(), None, None, None)
-    assert read(directory, "settings.json") == {"ai_channel_ids": [], "allowed_role_ids": [], "model": None, "effort": None, "instructions": None}
+    assert await store.settings() == Settings(frozenset(), frozenset(), None, None, None, frozenset())
+    assert store.rooms() == {}
+    assert read(directory, "settings.json") == {"ai_channel_ids": [], "allowed_role_ids": [], "model": None, "effort": None, "instructions": None, "voice_hub_ids": []}
     assert read(directory, "threads.json") == {"messages": {}, "threads": {}}
+    assert read(directory, "rooms.json") == {}
 
 
 async def test_settings_changes_survive_a_reopen(tmp_path):
     store = await opened(tmp_path)
-    await store.update_settings(ai_channel_ids=[11, 12], allowed_role_ids=[21], model="m", effort="high", instructions="喵")
+    await store.update_settings(ai_channel_ids=[11, 12], allowed_role_ids=[21], model="m", effort="high", instructions="喵", voice_hub_ids=[31])
     reopened = await opened(tmp_path)
-    assert await reopened.settings() == Settings(frozenset({11, 12}), frozenset({21}), "m", "high", "喵")
+    assert await reopened.settings() == Settings(frozenset({11, 12}), frozenset({21}), "m", "high", "喵", frozenset({31}))
+
+
+async def test_settings_without_voice_hubs_open_with_none(tmp_path):
+    old = {"ai_channel_ids": [11], "allowed_role_ids": [21], "model": None, "effort": None, "instructions": None}
+    write(tmp_path, "settings.json", old)
+    store = await opened(tmp_path)
+    assert await store.settings() == Settings(frozenset({11}), frozenset({21}), None, None, None, frozenset())
+    await store.update_settings(voice_hub_ids=[31])
+    assert read(tmp_path, "settings.json") == old | {"voice_hub_ids": [31]}
+
+
+async def test_rooms_survive_a_reopen(tmp_path):
+    store = await opened(tmp_path)
+    await store.set_room(500, 1)
+    await store.set_room(501, 2)
+    await store.set_room(500, 3)
+    await store.remove_room(501)
+    await store.remove_room(404)
+    assert read(tmp_path, "rooms.json") == {"500": "3"}
+    reopened = await opened(tmp_path)
+    assert reopened.rooms() == {500: 3}
+
+
+@pytest.mark.parametrize(
+    "rooms",
+    [
+        [],
+        {"500": 1},
+        {"room": "1"},
+        {"500": "-1"},
+    ],
+    ids=["not-an-object", "numeric-owner", "non-digit-room", "negative-owner"],
+)
+async def test_invalid_rooms_file_is_refused(tmp_path, rooms):
+    write(tmp_path, "rooms.json", rooms)
+    with pytest.raises(ValueError):
+        await opened(tmp_path)
+    assert read(tmp_path, "rooms.json") == rooms
 
 
 async def test_conversation_state_survives_a_reopen(tmp_path):
@@ -114,8 +154,10 @@ async def test_invalid_threads_file_is_refused(tmp_path, threads):
         {"ai_channel_ids": ["1"], "allowed_role_ids": []},
         {"ai_channel_ids": [], "allowed_role_ids": [True]},
         {"ai_channel_ids": [], "allowed_role_ids": [], "model": 5},
+        {"ai_channel_ids": [], "allowed_role_ids": [], "voice_hub_ids": None},
+        {"ai_channel_ids": [], "allowed_role_ids": [], "voice_hub_ids": ["1"]},
     ],
-    ids=["string-channel", "boolean-role", "numeric-model"],
+    ids=["string-channel", "boolean-role", "numeric-model", "null-voice-hubs", "string-voice-hub"],
 )
 async def test_invalid_settings_file_is_refused(tmp_path, settings):
     write(tmp_path, "settings.json", settings)
