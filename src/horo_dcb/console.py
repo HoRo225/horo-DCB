@@ -151,6 +151,16 @@ class ConsolePanel(ui.LayoutView):
 
         roles.callback = role_callback
         self.add_item(ui.ActionRow(roles))
+        hubs = ui.ChannelSelect(channel_types=[discord.ChannelType.voice], placeholder="選擇臨時語音入口，清空即停用", min_values=0, max_values=25, default_values=[discord.Object(value) for value in settings.voice_hub_ids])
+
+        async def hub_callback(interaction: discord.Interaction) -> None:
+            await self.console.bot.store.update_settings(voice_hub_ids=[value.id for value in hubs.values])
+            await self.console.refresh_panels()
+            if interaction.guild is not None:
+                await self.console.bot.voice.settle(interaction.guild)
+
+        hubs.callback = hub_callback
+        self.add_item(ui.ActionRow(hubs))
         if model is None:
             return
         model_select = ui.Select(placeholder="選擇模型，清空即用預設", min_values=0, max_values=1, options=[discord.SelectOption(label=value["displayName"], value=value["id"], description=(value.get("description") or "")[:100] or None, default=value["id"] == settings.model) for value in models[:25]])

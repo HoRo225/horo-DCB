@@ -7,11 +7,13 @@ import pytest
 
 from horo_dcb.console import Console
 from horo_dcb.store import Store
+from horo_dcb.voice import Voice
 from tests.support.app_server import Reject
-from tests.support.discord_fakes import http_error, member, view_text
+from tests.support.discord_fakes import Guild, http_error, member, view_text
 from tests.support.waiting import until
 
 OWNER_ONLY = "只有擁有者能使用"
+VOICE_HUBS = "選擇臨時語音入口，清空即停用"
 DEVICE = {"loginId": "L1", "verificationUrl": "https://example.test/device", "userCode": "ABCD-EFGH"}
 LOGIN_BLOCK = "請用機器人專用的 ChatGPT 帳號開啟 https://example.test/device\n登入代碼：`ABCD-EFGH`"
 
@@ -318,6 +320,45 @@ async def test_a_non_owner_pressing_a_button_is_refused(bot, console):
     presser = Interaction()
     assert not await panel.interaction_check(presser)
     presser.followup.send.assert_awaited_once_with(OWNER_ONLY, ephemeral=True)
+
+
+def menu(view: discord.ui.LayoutView, placeholder: str) -> discord.ui.ChannelSelect:
+    return next(item for item in view.walk_children() if isinstance(item, discord.ui.ChannelSelect) and item.placeholder == placeholder)
+
+
+async def test_the_voice_hub_menu_saves_hubs_and_seats_whoever_waits(bot, store, console):
+    guild = Guild()
+    hub = guild.voice_channel(300)
+    guild.join(member(1, "愛麗絲"), hub)
+    bot.get_channel = guild.mock.get_channel
+    bot.voice = Voice(bot)
+    interaction = await opened(console)
+    hubs = menu(interaction.views[-1], VOICE_HUBS)
+    assert hubs.to_component_dict()["channel_types"] == [discord.ChannelType.voice.value]
+    hubs._values = [discord.Object(300)]
+    presser = Interaction()
+    presser.guild = guild.mock
+    await hubs.callback(presser)
+    assert (await store.settings()).voice_hub_ids == {300}
+    assert [int(value["id"]) for value in menu(interaction.views[-1], VOICE_HUBS).to_component_dict()["default_values"]] == [300]
+    assert [room.name for room in guild.created] == ["▍愛麗絲的房間"]
+    assert guild.moves == [(1, guild.created[0].id)]
+
+
+async def test_clearing_the_voice_hub_menu_stops_opening_rooms(bot, store, console):
+    await store.update_settings(voice_hub_ids=[300])
+    guild = Guild()
+    guild.join(member(1, "愛麗絲"), guild.voice_channel(300))
+    bot.get_channel = guild.mock.get_channel
+    bot.voice = Voice(bot)
+    interaction = await opened(console)
+    hubs = menu(interaction.views[-1], VOICE_HUBS)
+    hubs._values = []
+    presser = Interaction()
+    presser.guild = guild.mock
+    await hubs.callback(presser)
+    assert (await store.settings()).voice_hub_ids == frozenset()
+    assert guild.created == []
 
 
 async def test_a_non_owner_opening_the_instructions_is_refused(bot, console):
