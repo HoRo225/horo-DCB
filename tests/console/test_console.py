@@ -14,8 +14,7 @@ from tests.support.discord_fakes import EPOCH, Guild, http_error, member, view_t
 from tests.support.waiting import until
 
 OWNER_ONLY = "只有擁有者能使用"
-VOICE_HUBS = "選擇語音頻道當作入口"
-UNSELECTED = "未選擇，AI 停用中"
+NO_PLACEHOLDER = "​"
 MODULES = ["AI 對話", "臨時語音"]
 DEVICE = {"loginId": "L1", "verificationUrl": "https://example.test/device", "userCode": "ABCD-EFGH"}
 FOOTER = f"-# 面板在 <t:{int((EPOCH + timedelta(minutes=15)).timestamp())}:R>失效"
@@ -105,8 +104,8 @@ def account_buttons(view: discord.ui.LayoutView) -> list[str]:
     return [item.label for item in buttons(view) if item.label != "編輯"]
 
 
-def menu(view: discord.ui.LayoutView, placeholder: str) -> discord.ui.ChannelSelect:
-    return next(item for item in view.walk_children() if isinstance(item, discord.ui.ChannelSelect) and item.placeholder == placeholder)
+def menu(view: discord.ui.LayoutView, kind: discord.ChannelType) -> discord.ui.ChannelSelect:
+    return next(item for item in view.walk_children() if isinstance(item, discord.ui.ChannelSelect) and item.channel_types == [kind])
 
 
 async def switch(interaction: Interaction, name: str) -> None:
@@ -168,7 +167,7 @@ async def test_the_owner_sees_account_quota_targets_model_and_instructions(app_s
     ]
     view = interaction.views[-1]
     assert selects(view) == [MODULES, ["GPT Test"], ["低", "中", "高"]]
-    assert placeholders(view) == [None, UNSELECTED, UNSELECTED, "預設：GPT Test", "預設：中"]
+    assert placeholders(view) == [None, NO_PLACEHOLDER, NO_PLACEHOLDER, "預設：GPT Test", "預設：中"]
     assert chosen(view) == [["AI 對話"], [], []]
     assert account_buttons(view) == ["登出", "重新整理"]
     assert interaction.colour == GREEN
@@ -452,7 +451,7 @@ async def test_switching_modules_changes_only_that_panel(console):
     assert first.screen.splitlines() == ["## 控制台", "⚪ 未設定入口，功能停用中", "-# 入口頻道", FOOTER]
     assert first.colour == GREY
     assert chosen(first.views[-1]) == [["臨時語音"]]
-    assert placeholders(first.views[-1]) == [None, VOICE_HUBS]
+    assert placeholders(first.views[-1]) == [None, NO_PLACEHOLDER]
     assert len(second.screens) == untouched
     await console.action("refresh")
     assert "⚪ 未設定入口，功能停用中" in first.screen
@@ -495,14 +494,14 @@ async def test_the_voice_hub_menu_saves_hubs_and_seats_whoever_waits(bot, store,
     bot.voice = Voice(bot)
     interaction = await opened(console)
     await switch(interaction, "臨時語音")
-    hubs = menu(interaction.views[-1], VOICE_HUBS)
+    hubs = menu(interaction.views[-1], discord.ChannelType.voice)
     assert hubs.to_component_dict()["channel_types"] == [discord.ChannelType.voice.value]
     hubs._values = [discord.Object(300)]
     presser = Interaction()
     presser.guild = guild.mock
     await hubs.callback(presser)
     assert (await store.settings()).voice_hub_ids == {300}
-    assert [int(value["id"]) for value in menu(interaction.views[-1], VOICE_HUBS).to_component_dict()["default_values"]] == [300]
+    assert [int(value["id"]) for value in menu(interaction.views[-1], discord.ChannelType.voice).to_component_dict()["default_values"]] == [300]
     assert "🟢 已啟用，1 個入口" in interaction.screen
     assert [room.name for room in guild.created] == ["▍愛麗絲的房間"]
     assert guild.moves == [(1, guild.created[0].id)]
@@ -516,7 +515,7 @@ async def test_clearing_the_voice_hub_menu_stops_opening_rooms(bot, store, conso
     bot.voice = Voice(bot)
     interaction = await opened(console)
     await switch(interaction, "臨時語音")
-    hubs = menu(interaction.views[-1], VOICE_HUBS)
+    hubs = menu(interaction.views[-1], discord.ChannelType.voice)
     hubs._values = []
     presser = Interaction()
     presser.guild = guild.mock

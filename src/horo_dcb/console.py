@@ -16,7 +16,7 @@ from .store import Settings
 
 EFFORT_NAMES = {"none": "不思考", "minimal": "最低", "low": "低", "medium": "中", "high": "高", "xhigh": "超高", "max": "最高", "ultra": "極限"}
 EMPTY_CELL = "⬛"
-UNSELECTED = "未選擇，AI 停用中"
+NO_PLACEHOLDER = "​"
 
 
 class Level(Enum):
@@ -205,14 +205,14 @@ def account_section(console: Console) -> list[ui.Item]:
 
 
 def targets_section(console: Console, settings: Settings) -> list[ui.Item]:
-    channels = ui.ChannelSelect(channel_types=[discord.ChannelType.text], placeholder=UNSELECTED, min_values=0, max_values=25, default_values=[discord.Object(value) for value in settings.ai_channel_ids])
+    channels = ui.ChannelSelect(channel_types=[discord.ChannelType.text], placeholder=NO_PLACEHOLDER, min_values=0, max_values=25, default_values=[discord.Object(value) for value in settings.ai_channel_ids])
 
     async def channel_callback(interaction: discord.Interaction) -> None:
         await console.bot.store.update_settings(ai_channel_ids=[value.id for value in channels.values])
         await console.refresh_panels()
 
     channels.callback = channel_callback
-    roles = ui.RoleSelect(placeholder=UNSELECTED, min_values=0, max_values=25, default_values=[discord.Object(value) for value in settings.allowed_role_ids])
+    roles = ui.RoleSelect(placeholder=NO_PLACEHOLDER, min_values=0, max_values=25, default_values=[discord.Object(value) for value in settings.allowed_role_ids])
 
     async def role_callback(interaction: discord.Interaction) -> None:
         await console.bot.store.update_settings(allowed_role_ids=[value.id for value in roles.values])
@@ -269,7 +269,7 @@ def ai_page(panel: ConsolePanel, settings: Settings) -> Page:
 def voice_page(panel: ConsolePanel, settings: Settings) -> Page:
     console = panel.console
     level, status = voice_status(settings)
-    hubs = ui.ChannelSelect(channel_types=[discord.ChannelType.voice], placeholder="選擇語音頻道當作入口", min_values=0, max_values=25, default_values=[discord.Object(value) for value in settings.voice_hub_ids])
+    hubs = ui.ChannelSelect(channel_types=[discord.ChannelType.voice], placeholder=NO_PLACEHOLDER, min_values=0, max_values=25, default_values=[discord.Object(value) for value in settings.voice_hub_ids])
 
     async def hub_callback(interaction: discord.Interaction) -> None:
         await console.bot.store.update_settings(voice_hub_ids=[value.id for value in hubs.values])
