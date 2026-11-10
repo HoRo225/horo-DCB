@@ -16,7 +16,7 @@ from .store import Settings
 
 EFFORT_NAMES = {"none": "不思考", "minimal": "最低", "low": "低", "medium": "中", "high": "高", "xhigh": "超高", "max": "最高", "ultra": "極限"}
 EMPTY_CELL = "⬛"
-NO_PLACEHOLDER = "200b"
+NO_PLACEHOLDER = "\u200b"
 
 
 class Level(Enum):
