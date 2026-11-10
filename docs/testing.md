@@ -27,6 +27,16 @@ uv run python scripts/check.py
 
 新增模組時，同一個 commit 要包含 `tests/<模組>/` 的測試，以及本文件 Discord 驗收清單裡該模組段落的項目。
 
+## 重錄 Codex 協定事件
+
+Codex 相關測試用 `tests/support/app_server.py` 的假 app-server，正常流程重播 `tests/fixtures/codex/recording.jsonl` 裡錄下的真實事件，邊界情況用 `tests/support/codex_messages.py` 手寫。升級 Codex CLI 時在主機重錄一次，比對事件格式有沒有改變。
+
+```bash
+ssh horo-dcb 'docker exec -i horo-dcb-bot-1 python -' < scripts/record_codex.py > recording.jsonl
+```
+
+腳本另開一條連線，錄一般回答、工具呼叫與分支三個情境，結束時刪除測試對話。錄製會消耗少量 ChatGPT 額度。輸出已把 ID 換成代號並遮蔽路徑與主機名稱，進版控前仍要逐則讀過，確認沒有帳號資訊。
+
 ## 決定每次部署要跑的 Discord 項目
 
 只改 `tests/`、`docs/`、`scripts/` 或開發用相依套件時不部署，也不跑 Discord 實測。
