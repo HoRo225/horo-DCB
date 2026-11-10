@@ -30,6 +30,21 @@ class TurnState:
     events: asyncio.Queue = field(default_factory=asyncio.Queue)
     usage_before: dict | None = None
     usage_after: dict | None = None
+    accepts_tools: bool = True
+
+
+@dataclass(frozen=True)
+class ToolCall:
+    request_id: int | str
+    thread_id: str
+    turn_id: str
+    call_id: str
+    tool: str
+    arguments: object
+
+
+def tool_response(request_id: int | str, success: bool, text: str) -> dict:
+    return {"id": request_id, "result": {"contentItems": [{"type": "inputText", "text": text}], "success": success}}
 
 
 @dataclass
@@ -51,6 +66,7 @@ class CodexClient:
         self._subscribers: set[asyncio.Queue] = set()
         self.threads: dict[str, ThreadState] = {}
         self.loaded: set[str] = set()
+        self.tool_calls: dict[int | str, ToolCall] = {}
 
     async def start(self) -> None:
         self._runner = asyncio.create_task(self._connect_loop())
@@ -103,6 +119,7 @@ class CodexClient:
                 self.ready.clear()
                 self._ws = None
                 self.loaded.clear()
+                self.tool_calls.clear()
                 if reader is not None:
                     reader.cancel()
                     with contextlib.suppress(asyncio.CancelledError, Exception):
@@ -135,7 +152,7 @@ class CodexClient:
                                 future.set_result(message.get("result", {}))
                     elif "id" in message:
                         if message["method"] == "item/tool/call":
-                            await websocket.send_json({"id": message["id"], "result": {"contentItems": [{"type": "inputText", "text": "目前版本未提供此工具"}], "success": False}})
+                            await self._tool_call(websocket, message["id"], message.get("params", {}))
                         else:
                             await websocket.send_json({"id": message["id"], "error": {"code": -32601, "message": "Client operations are disabled"}})
                             self._dispatch("client/unsupportedRequest", message.get("params", {}))
@@ -147,6 +164,37 @@ class CodexClient:
             for future in tuple(self._pending.values()):
                 if not future.done():
                     future.set_exception(CodexError("connection_lost"))
+
+    async def _tool_call(self, websocket: aiohttp.ClientWebSocketResponse, request_id: int | str, params: dict) -> None:
+        thread = self.threads.get(params.get("threadId"))
+        turn = thread.active if thread is not None else None
+        turn_id = params.get("turnId")
+        if turn is not None and turn.id is None and turn_id is not None:
+            turn.id = turn_id
+        if turn is None or turn.id != turn_id:
+            await websocket.send_json(tool_response(request_id, False, "目前版本未提供此工具"))
+            return
+        if not turn.accepts_tools or turn.terminal.is_set():
+            await websocket.send_json(tool_response(request_id, False, "回答已停止，不再執行工具"))
+            return
+        call = ToolCall(request_id, thread.id, turn_id, str(params.get("callId") or ""), str(params.get("tool") or ""), params.get("arguments"))
+        self.tool_calls[request_id] = call
+        turn.events.put_nowait(("client/toolCall", call))
+
+    async def respond(self, call: ToolCall, success: bool, text: str) -> bool:
+        if self.tool_calls.pop(call.request_id, None) is None or self._ws is None:
+            return False
+        try:
+            await self._ws.send_json(tool_response(call.request_id, success, text))
+        except Exception as error:
+            log_event("codex_tool_response_error", error)
+            return False
+        return True
+
+    async def reject_tools(self, turn: TurnState) -> None:
+        turn.accepts_tools = False
+        for call in [value for value in self.tool_calls.values() if value.thread_id == turn.thread_id and value.turn_id == turn.id]:
+            await self.respond(call, False, "回答已停止，不再執行工具")
 
     def _publish(self, method: str, params: dict) -> None:
         for queue in self._subscribers:
@@ -222,8 +270,10 @@ class CodexClient:
             if not cursor:
                 return result
 
-    async def new_thread(self, model: str | None = None, instructions: str | None = None) -> ThreadState:
+    async def new_thread(self, model: str | None = None, instructions: str | None = None, tools: list[dict] | None = None) -> ThreadState:
         params = {"ephemeral": False, "approvalPolicy": "never", "sandbox": "read-only"}
+        if tools:
+            params["dynamicTools"] = tools
         if model is not None:
             params["model"] = model
         if instructions:
@@ -268,7 +318,7 @@ class CodexClient:
             raise
         turn.id = result["turn"]["id"]
 
-    async def steer(self, turn: TurnState, inputs: list[dict], message_id: int) -> bool:
+    async def steer(self, turn: TurnState, inputs: list[dict], message_id: int | str) -> bool:
         try:
             await self._request("turn/steer", {"threadId": turn.thread_id, "expectedTurnId": turn.id, "input": inputs, "clientUserMessageId": str(message_id)})
         except CodexError as error:
@@ -279,6 +329,7 @@ class CodexClient:
         return True
 
     async def interrupt(self, turn: TurnState) -> None:
+        await self.reject_tools(turn)
         if turn.terminal.is_set():
             return
         if turn.id is not None and self.ready.is_set():

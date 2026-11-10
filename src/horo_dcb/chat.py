@@ -14,15 +14,17 @@ import aiohttp
 import discord
 from PIL import Image, UnidentifiedImageError
 
-from . import log_event
-from .codex import CodexError, ThreadState, TurnState, choose_model
+from . import log_event, tools
+from .codex import CodexError, ThreadState, ToolCall, TurnState, choose_model
 from .store import Entry, Store
 
 
 ALLOWED_MENTIONS = discord.AllowedMentions(everyone=False, roles=False, users=True, replied_user=False)
 TAIPEI = timezone(timedelta(hours=8))
 IMAGE_TYPES = {"PNG": "image/png", "JPEG": "image/jpeg", "WEBP": "image/webp", "GIF": "image/gif"}
-IMAGE_SUFFIXES = ("png", "jpg", "jpeg", "webp", "gif")
+TOOL_IMAGE_LABEL = "〔工具附上的圖片〕"
+TOOL_ICONS = {"read_messages": "📖", "search_messages": "🔎", "view_message_images": "🖼️"}
+TOOL_PENDING = {"read_messages": "讀取頻道訊息", "search_messages": "搜尋頻道訊息", "view_message_images": "查看圖片"}
 WAITING_TEXT = "⏳ 等上一則回答完成後接著回答"
 STEER_LEAD = "原提問者在你回答途中送出以下補充。請立刻依照補充內容重新回答這次的問題，補充優先於原本的要求："
 
@@ -221,6 +223,8 @@ class Renderer:
         self.agents: dict[str, dict] = {}
         self.reasoning: dict[str, dict[int, str]] = {}
         self.searches: dict[str, dict] = {}
+        self.tool_items: dict[str, dict] = {}
+        self.tool_notes: dict[str, str] = {}
         self.open: set[str] = set()
 
     def _track(self, method: str, item_id: str) -> None:
@@ -265,6 +269,9 @@ class Renderer:
         elif method in ("item/started", "item/completed") and kind == "webSearch":
             self.searches[item["id"]] = {"text": search_text(item), "done": method == "item/completed"}
             self._mark(("search", item["id"]))
+        elif method in ("item/started", "item/completed") and kind == "dynamicToolCall":
+            self.tool_items[item["id"]] = {"tool": item.get("tool") or "", "done": method == "item/completed", "success": item.get("success")}
+            self._mark(("tool", item["id"]))
         elif method == "item/agentMessage/delta":
             self.agents.setdefault(params["itemId"], {"phase": None, "text": ""})["text"] += params.get("delta", "")
             self._mark(("agent", params["itemId"]))
@@ -292,6 +299,14 @@ class Renderer:
         answers = self._answer_keys()
         return "\n\n".join(self.agents[key[1]]["text"] for key in self.timeline if key[0] == "agent" and key[1] in answers)
 
+    def _tool_entry(self, call_id: str) -> tuple[str, str]:
+        tool = self.tool_items[call_id]
+        icon = TOOL_ICONS.get(tool["tool"], "🧰")
+        label = TOOL_PENDING.get(tool["tool"], "使用工具")
+        if not tool["done"]:
+            return icon, f"{label}中"
+        return icon, self.tool_notes.get(call_id) or (label if tool["success"] else f"{label}失敗")
+
     def _frame(self) -> str:
         answers = self._answer_keys()
         entries = []
@@ -302,10 +317,17 @@ class Renderer:
                 entries.append(("💭", summary_title(self.reasoning[key[1]][key[2]])))
             elif key[0] == "search":
                 entries.append(("🔍", self.searches[key[1]]["text"]))
+            elif key[0] == "tool":
+                entries.append(self._tool_entry(key[1]))
             elif key[0] == "reroute":
                 entries.append(("🔀", f"模型已由 {key[1]} 改用 {key[2]}"))
-        searching = any(not search["done"] for search in self.searches.values())
-        header = f"{'🔍 **搜尋中**' if searching else '💭 **思考中**'} · <t:{self.started_at}:R>"
+        if any(not tool["done"] for tool in self.tool_items.values()):
+            status = "📖 **查看頻道中**"
+        elif any(not search["done"] for search in self.searches.values()):
+            status = "🔍 **搜尋中**"
+        else:
+            status = "💭 **思考中**"
+        header = f"{status} · <t:{self.started_at}:R>"
         lines = []
         size = len(header)
         for index, (icon, text) in enumerate(reversed(entries)):
@@ -368,6 +390,7 @@ class ChatRound:
     cleaning: bool = False
     messages: list[discord.Message] = field(default_factory=list)
     pending_sends: set[asyncio.Task] = field(default_factory=set)
+    tool_tasks: set[asyncio.Task] = field(default_factory=set)
     admitted: asyncio.Event = field(default_factory=asyncio.Event)
     settled: asyncio.Event = field(default_factory=asyncio.Event)
     steering: asyncio.Lock = field(default_factory=asyncio.Lock)
@@ -432,9 +455,7 @@ class Chat:
     async def _images(self, message: discord.Message) -> list[dict]:
         items = []
         for attachment in message.attachments:
-            mime = (attachment.content_type or "").split(";")[0].lower()
-            suffix = attachment.filename.rsplit(".", 1)[-1].lower()
-            if mime not in IMAGE_TYPES.values() and suffix not in IMAGE_SUFFIXES:
+            if not tools.is_image(attachment):
                 continue
             try:
                 item = await asyncio.to_thread(image_input, await attachment.read())
@@ -498,7 +519,7 @@ class Chat:
                 await self.bot.codex.start_turn(thread, turn, inputs, model_id, effort, context, round_state.message.id)
                 await self.bot.store.begin_turn(thread.id, turn.id, [message.id for message in round_state.messages], round_state.message.id)
                 round_state.settled.set()
-                await self._follow(turn, renderer)
+                await self._follow(round_state, turn, renderer)
                 await renderer.flush()
                 await self.bot.store.set_latest_turn(thread.id, turn.id)
         except asyncio.CancelledError:
@@ -513,6 +534,7 @@ class Chat:
             await self._abort(round_state)
         finally:
             round_state.settled.set()
+            self._stop_tools(round_state)
             if round_state.renderer is not None:
                 await round_state.renderer.close()
             if round_state.turn is not None:
@@ -535,7 +557,7 @@ class Chat:
                 busy=entry is not None and entry.thread in self.lines,
             )
             if action == "new":
-                self._join(round_state, await self.bot.codex.new_thread(model_id, instructions))
+                self._join(round_state, await self.bot.codex.new_thread(model_id, instructions, tools.SPEC))
                 await self.bot.store.add_thread(round_state.thread.id, round_state.message.id)
                 return "new"
             if action == "fork":
@@ -602,9 +624,14 @@ class Chat:
         else:
             del self.lines[round_state.thread.id]
 
-    async def _follow(self, turn: TurnState, renderer: Renderer) -> None:
+    async def _follow(self, round_state: ChatRound, turn: TurnState, renderer: Renderer) -> None:
         while True:
             method, params = await renderer.guard(turn.events.get())
+            if method == "client/toolCall":
+                task = asyncio.create_task(self._run_tool(round_state, turn, renderer, params))
+                round_state.tool_tasks.add(task)
+                task.add_done_callback(round_state.tool_tasks.discard)
+                continue
             renderer.handle(method, params)
             if method == "turn/completed":
                 if params["turn"]["status"] != "completed":
@@ -614,6 +641,26 @@ class Chat:
                 return
             if method in ("error", "client/disconnected", "client/recovered", "client/unsupportedRequest"):
                 raise CodexError("turn_interrupted")
+
+    async def _run_tool(self, round_state: ChatRound, turn: TurnState, renderer: Renderer, call: ToolCall) -> None:
+        context = tools.ToolContext(round_state.message.channel, round_state.message, self.bot.http, message_text, image_input)
+        try:
+            result = await tools.run(call.tool, call.arguments, context)
+            if result.images:
+                inputs = [{"type": "text", "text": TOOL_IMAGE_LABEL, "text_elements": []}, *result.images]
+                if not await self.bot.codex.steer(turn, inputs, f"tool-{call.call_id}"):
+                    result = tools.ToolResult(False, "圖片無法附加到這次回答", "查看圖片失敗：無法附加圖片")
+        except Exception as error:
+            log_event("tool_error", error)
+            result = tools.ToolResult(False, "工具執行失敗", "工具執行失敗")
+        renderer.tool_notes[call.call_id] = result.note
+        await self.bot.codex.respond(call, result.success, result.text)
+
+    def _stop_tools(self, round_state: ChatRound) -> None:
+        if round_state.turn is not None:
+            round_state.turn.accepts_tools = False
+        for task in tuple(round_state.tool_tasks):
+            task.cancel()
 
     async def _delete_messages(self, round_state: ChatRound) -> None:
         gone = []
@@ -635,6 +682,7 @@ class Chat:
 
     async def _abort(self, round_state: ChatRound) -> None:
         round_state.cleaning = True
+        self._stop_tools(round_state)
         if round_state.renderer is not None:
             await round_state.renderer.close()
         cleanup = [self._delete_messages(round_state)]
