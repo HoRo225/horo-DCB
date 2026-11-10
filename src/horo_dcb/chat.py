@@ -23,6 +23,7 @@ ALLOWED_MENTIONS = discord.AllowedMentions(everyone=False, roles=False, users=Tr
 TAIPEI = timezone(timedelta(hours=8))
 IMAGE_TYPES = {"PNG": "image/png", "JPEG": "image/jpeg", "WEBP": "image/webp", "GIF": "image/gif"}
 TOOL_IMAGE_LABEL = "〔工具附上的圖片〕"
+LINK_HINT = "（這則訊息含有 Discord 訊息連結。連結指向的訊息可能不在上面的頻道訊息裡，上面附的圖片也不屬於它。請先用 discord 工具讀取或查看連結指向的訊息，再回答。）"
 TOOL_ICONS = {"read_messages": "📖", "search_messages": "🔎", "view_message_images": "🖼️"}
 TOOL_PENDING = {"read_messages": "讀取頻道訊息", "search_messages": "搜尋頻道訊息", "view_message_images": "查看圖片"}
 WAITING_TEXT = "⏳ 等上一則回答完成後接著回答"
@@ -474,6 +475,8 @@ class Chat:
             labels = "".join(f"〔圖片 {count + index}〕" for index in range(1, len(items) + 1))
             count += len(items)
             content = "\n".join(part for part in (message_text(message), labels) if part)
+            if message is trigger and tools.LINK.search(content):
+                content = f"{content}\n{LINK_HINT}"
             if message is trigger and replied is not None:
                 content = f"（回覆 {replied.author.display_name}　{replied.created_at.astimezone(TAIPEI):%Y-%m-%d %H:%M} 的訊息：{message_text(replied)}）\n{content}"
             if content or message is trigger:
