@@ -1,33 +1,33 @@
 import pytest
 
-from horo_dcb.console import Level, QuotaRow, bar, quota_level, quota_rows
+from horo_dcb.console import QuotaRow, quota_line, quota_rows
 
 
 def window(minutes: int | None, used: float | None = None, reset: int | None = None) -> dict:
     return {"windowDurationMins": minutes, "usedPercent": used, "resetsAt": reset}
 
 
-@pytest.mark.parametrize(("used", "level"), [(0, Level.OK), (74, Level.OK), (75, Level.WARN), (89, Level.WARN), (90, Level.BAD), (100, Level.BAD)])
-def test_quota_levels_switch_at_75_and_90(used, level):
-    assert quota_level(used) is level
-
-
 @pytest.mark.parametrize(
-    ("used", "cells"),
+    ("used", "remaining"),
     [
-        (0, "⬛⬛⬛⬛⬛⬛⬛⬛⬛⬛"),
-        (0.4, "🟩⬛⬛⬛⬛⬛⬛⬛⬛⬛"),
-        (3, "🟩⬛⬛⬛⬛⬛⬛⬛⬛⬛"),
-        (25, "🟩🟩🟩⬛⬛⬛⬛⬛⬛⬛"),
-        (75, "🟨🟨🟨🟨🟨🟨🟨🟨⬛⬛"),
-        (98, "🟥🟥🟥🟥🟥🟥🟥🟥🟥⬛"),
-        (99.9, "🟥🟥🟥🟥🟥🟥🟥🟥🟥⬛"),
-        (100, "🟥🟥🟥🟥🟥🟥🟥🟥🟥🟥"),
-        (120, "🟥🟥🟥🟥🟥🟥🟥🟥🟥🟥"),
+        (0, "▰▰▰▰▰▰▰▰▰▰ 100%"),
+        (0.4, "▰▰▰▰▰▰▰▰▰▱ 99%"),
+        (3, "▰▰▰▰▰▰▰▰▰▱ 97%"),
+        (25, "▰▰▰▰▰▰▰▰▱▱ 75%"),
+        (50, "▰▰▰▰▰▱▱▱▱▱ 50%"),
+        (78, "▰▰▱▱▱▱▱▱▱▱ 22%"),
+        (98, "▰▱▱▱▱▱▱▱▱▱ 2%"),
+        (99.9, "▰▱▱▱▱▱▱▱▱▱ 1%"),
+        (100, "▱▱▱▱▱▱▱▱▱▱ 0%"),
+        (120, "▱▱▱▱▱▱▱▱▱▱ 0%"),
     ],
 )
-def test_the_bar_has_ten_cells_and_fills_only_at_100(used, cells):
-    assert bar(used) == cells
+def test_a_quota_line_shows_what_is_left_and_empties_only_when_used_up(used, remaining):
+    assert quota_line(QuotaRow("5 小時額度", used, 1800000000)) == f"{remaining}\u30005 小時額度，<t:1800000000:R>重置"
+
+
+def test_a_quota_line_without_a_reset_time_ends_at_the_name():
+    assert quota_line(QuotaRow("長期額度", 25, None)) == "▰▰▰▰▰▰▰▰▱▱ 75%\u3000長期額度"
 
 
 def test_a_single_bucket_has_no_prefix():

@@ -15,21 +15,21 @@ from .store import Settings
 
 
 EFFORT_NAMES = {"none": "不思考", "minimal": "最低", "low": "低", "medium": "中", "high": "高", "xhigh": "超高", "max": "最高", "ultra": "極限"}
-EMPTY_CELL = "⬛"
+FILLED_CELL = "▰"
+EMPTY_CELL = "▱"
 NO_PLACEHOLDER = "\u200b"
 PANEL_LIFETIME = timedelta(minutes=14, seconds=50)
 
 
 class Level(Enum):
-    OK = ("🟢", 0x23A55A, "🟩")
-    WARN = ("🟡", 0xF0B232, "🟨")
-    BAD = ("🔴", 0xF23F43, "🟥")
-    UNKNOWN = ("⚪", 0x80848E, "")
+    OK = ("🟢", 0x23A55A)
+    WARN = ("🟡", 0xF0B232)
+    BAD = ("🔴", 0xF23F43)
+    UNKNOWN = ("⚪", 0x80848E)
 
-    def __init__(self, light: str, colour: int, block: str) -> None:
+    def __init__(self, light: str, colour: int) -> None:
         self.light = light
         self.colour = colour
-        self.block = block
 
 
 @dataclass(frozen=True)
@@ -62,23 +62,23 @@ def quota_rows(limits: dict) -> list[QuotaRow]:
     return rows
 
 
-def quota_level(used: float) -> Level:
-    if used >= 90:
-        return Level.BAD
-    if used >= 75:
-        return Level.WARN
-    return Level.OK
+def remaining_percent(used: float) -> int:
+    if used >= 100:
+        return 0
+    if used <= 0:
+        return 100
+    return min(99, max(1, math.floor(100 - used + 0.5)))
 
 
-def bar(used: float) -> str:
-    filled = 10 if used >= 100 else 0 if used <= 0 else min(9, max(1, math.floor(used / 10 + 0.5)))
-    return quota_level(used).block * filled + EMPTY_CELL * (10 - filled)
+def bar(remaining: int) -> str:
+    filled = 0 if remaining == 0 else 10 if remaining == 100 else min(9, max(1, math.floor(remaining / 10 + 0.5)))
+    return FILLED_CELL * filled + EMPTY_CELL * (10 - filled)
 
 
-def quota_lines(row: QuotaRow) -> list[str]:
-    title = row.name if row.resets_at is None else f"{row.name}，<t:{row.resets_at}:R>重置"
-    usage = "已用完" if row.used >= 100 else f"已用 {row.used}%"
-    return [title, f"{bar(row.used)} {usage}"]
+def quota_line(row: QuotaRow) -> str:
+    remaining = remaining_percent(row.used)
+    reset = "" if row.resets_at is None else f"，<t:{row.resets_at}:R>重置"
+    return f"{bar(remaining)} {remaining}%\u3000{row.name}{reset}"
 
 
 @dataclass(frozen=True)
@@ -189,7 +189,7 @@ def account_section(console: Console) -> list[ui.Item]:
         lines += ["1. 按下「開啟登入頁」，用機器人專用的 ChatGPT 帳號登入", "2. 輸入下面的登入代碼", f"# {attempt.code}", "-# 完成後面板會自動更新"]
     if state is AccountState.SIGNED_IN:
         rows = quota_rows(console.limits)
-        lines += [line for row in rows for line in quota_lines(row)] if rows else ["-# 額度資料暫時無法取得"]
+        lines += [quota_line(row) for row in rows] if rows else ["-# 額度資料暫時無法取得"]
     actions = ui.ActionRow()
     for spec in state.buttons:
         if spec.operation is None:

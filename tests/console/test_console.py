@@ -165,8 +165,7 @@ async def test_the_owner_sees_account_quota_targets_model_and_instructions(app_s
     assert interaction.screen.splitlines() == [
         "## 控制台",
         SIGNED_IN,
-        "5 小時額度，<t:1800000000:R>重置",
-        "🟩⬛⬛⬛⬛⬛⬛⬛⬛⬛ 已用 12%",
+        "▰▰▰▰▰▰▰▰▰▱ 88%\u30005 小時額度，<t:1800000000:R>重置",
         "-# 可使用的頻道",
         "-# 可使用的身分組",
         "-# 模型",
@@ -183,11 +182,11 @@ async def test_the_owner_sees_account_quota_targets_model_and_instructions(app_s
     assert interaction.colour == GREEN
 
 
-async def test_quota_rows_take_two_lines_each(app_server, console):
+async def test_quota_rows_take_one_line_each(app_server, console):
     limits = {"primary": {"windowDurationMins": 43200, "usedPercent": 98, "resetsAt": 1800000000}, "secondary": {"windowDurationMins": None, "usedPercent": 100, "resetsAt": None}}
     app_server.handlers["account/rateLimits/read"] = lambda params: {"rateLimits": limits}
     interaction = await opened(console)
-    assert f"{SIGNED_IN}\n30 天額度，<t:1800000000:R>重置\n🟥🟥🟥🟥🟥🟥🟥🟥🟥⬛ 已用 98%\n長期額度\n🟥🟥🟥🟥🟥🟥🟥🟥🟥🟥 已用完\n-# 可使用的頻道" in interaction.screen
+    assert f"{SIGNED_IN}\n▰▱▱▱▱▱▱▱▱▱ 2%\u300030 天額度，<t:1800000000:R>重置\n▱▱▱▱▱▱▱▱▱▱ 0%\u3000長期額度\n-# 可使用的頻道" in interaction.screen
     assert interaction.colour == GREEN
 
 
@@ -364,7 +363,7 @@ async def test_quota_updates_reach_an_open_panel(app_server, console):
     reads = len(app_server.requests("account/rateLimits/read"))
     app_server.handlers["account/rateLimits/read"] = lambda params: {"rateLimits": {"primary": {"windowDurationMins": 300, "usedPercent": 50, "resetsAt": 1800000000}}}
     await app_server.notify("account/rateLimits/updated", {"rateLimits": {}})
-    await until(lambda: "5 小時額度，<t:1800000000:R>重置\n🟩🟩🟩🟩🟩⬛⬛⬛⬛⬛ 已用 50%" in interaction.screen)
+    await until(lambda: "▰▰▰▰▰▱▱▱▱▱ 50%\u30005 小時額度，<t:1800000000:R>重置" in interaction.screen)
     assert len(app_server.requests("account/rateLimits/read")) == reads + 1
 
 
