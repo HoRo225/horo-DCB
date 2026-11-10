@@ -1,6 +1,6 @@
 import asyncio
 from datetime import datetime, timedelta, timezone
-from unittest.mock import AsyncMock, Mock
+from unittest.mock import AsyncMock, Mock, PropertyMock
 
 import discord
 from discord.components import _component_factory
@@ -127,6 +127,76 @@ class Channel:
             if value.id == message_id:
                 return value
         raise http_error(discord.NotFound, 404)
+
+
+class Guild:
+    def __init__(self, guild_id: int = GUILD_ID, first_channel_id: int = 5000) -> None:
+        self.me = member(999, "樂奈", bot=True)
+        self.channels: dict[int, Mock] = {}
+        self.people: dict[int, Mock] = {}
+        self.voice: dict[int, int] = {}
+        self.pending: list[tuple[int, int]] = []
+        self.moves: list[tuple[int, int]] = []
+        self.created: list[Mock] = []
+        self.deleted: list[int] = []
+        self.next_channel_id = first_channel_id
+        self.mock = Mock(spec=discord.Guild)
+        self.mock.id = guild_id
+        self.mock.me = self.me
+        self.mock.get_channel = Mock(side_effect=self.channels.get)
+        self.mock.create_voice_channel = AsyncMock(side_effect=self.create)
+
+    def voice_channel(self, channel_id: int, name: str = "語音", *, category: Mock | None = None, bitrate: int = 64000, user_limit: int = 0, overwrites: dict | None = None) -> Mock:
+        value = Mock(spec=discord.VoiceChannel)
+        value.id = channel_id
+        value.name = name
+        value.guild = self.mock
+        value.category = category
+        value.bitrate = bitrate
+        value.user_limit = user_limit
+        value.overwrites = dict(overwrites or {})
+        value.edits = []
+        type(value).members = PropertyMock(side_effect=lambda: [self.people[person] for person, channel in self.voice.items() if channel == channel_id])
+        value.edit = AsyncMock(side_effect=lambda **options: self.edit(value, options))
+        value.delete = AsyncMock(side_effect=lambda **options: self.delete(value))
+        self.channels[channel_id] = value
+        return value
+
+    def join(self, person: Mock, channel: Mock) -> Mock:
+        self.people[person.id] = person
+        self.voice[person.id] = channel.id
+        person.guild = self.mock
+        person.move_to = AsyncMock(side_effect=lambda target, **options: self.move(person, target))
+        return person
+
+    def leave(self, person: Mock) -> None:
+        self.voice.pop(person.id, None)
+
+    def move(self, person: Mock, target: Mock) -> None:
+        self.moves.append((person.id, target.id))
+        self.pending.append((person.id, target.id))
+
+    def deliver(self) -> None:
+        for person, channel in self.pending:
+            if channel in self.channels:
+                self.voice[person] = channel
+        self.pending.clear()
+
+    async def create(self, name: str, **options) -> Mock:
+        self.next_channel_id += 1
+        value = self.voice_channel(self.next_channel_id, name, category=options.get("category"), bitrate=options.get("bitrate", 64000), user_limit=options.get("user_limit", 0), overwrites=options.get("overwrites"))
+        self.created.append(value)
+        return value
+
+    def edit(self, channel: Mock, options: dict) -> None:
+        channel.edits.append(options)
+        for key, value in options.items():
+            setattr(channel, key, dict(value) if key == "overwrites" else value)
+
+    def delete(self, channel: Mock) -> None:
+        self.deleted.append(channel.id)
+        del self.channels[channel.id]
+        self.voice = {person: where for person, where in self.voice.items() if where != channel.id}
 
 
 def message(message_id: int, author: Mock, content: str = "", *, attachments: tuple[Mock, ...] = (), reply_to: int | None = None, components: tuple = (), mentions: tuple[Mock, ...] = ()) -> Mock:

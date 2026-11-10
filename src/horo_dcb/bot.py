@@ -10,6 +10,7 @@ from .chat import ALLOWED_MENTIONS, Chat
 from .codex import CodexClient
 from .console import Console
 from .store import Store
+from .voice import Voice
 
 
 class HoroBot(commands.Bot):
@@ -18,11 +19,13 @@ class HoroBot(commands.Bot):
         intents.guilds = True
         intents.guild_messages = True
         intents.message_content = True
+        intents.voice_states = True
         super().__init__(command_prefix=commands.when_mentioned, help_command=None, intents=intents, allowed_mentions=ALLOWED_MENTIONS)
         self.store = Store()
         self.codex = CodexClient()
         self.console = Console(self)
         self.chat = Chat(self)
+        self.voice = Voice(self)
         self.synced_guilds: set[int] = set()
 
         @self.tree.command(name="控制台", description="登入 ChatGPT 與調整機器人設定")
@@ -43,9 +46,18 @@ class HoroBot(commands.Bot):
         for guild in self.guilds:
             await self._sync_guild(guild)
         log_event("discord_ready")
+        for guild in self.guilds:
+            await self.voice.settle(guild)
 
     async def on_guild_join(self, guild: discord.Guild) -> None:
         await self._sync_guild(guild)
+
+    async def on_voice_state_update(self, member: discord.Member, before: discord.VoiceState, after: discord.VoiceState) -> None:
+        if before.channel != after.channel:
+            await self.voice.settle(member.guild)
+
+    async def on_guild_channel_delete(self, channel: discord.abc.GuildChannel) -> None:
+        await self.voice.settle(channel.guild)
 
     async def _sync_guild(self, guild: discord.Guild) -> None:
         if guild.id not in self.synced_guilds:
