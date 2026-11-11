@@ -1,10 +1,17 @@
 import pytest
 
-from horo_dcb.console import QuotaRow, quota_line, quota_rows
+from horo_dcb.console import quota_line, quota_rows
+
+THREE_QUARTERS = "▰▰▰▰▰▰▰▰▱▱ 75%　"
+HALF = "▰▰▰▰▰▱▱▱▱▱ 50%　"
 
 
 def window(minutes: int | None, used: float | None = None, reset: int | None = None) -> dict:
     return {"windowDurationMins": minutes, "usedPercent": used, "resetsAt": reset}
+
+
+def lines(limits: dict) -> list[str]:
+    return [quota_line(row) for row in quota_rows(limits)]
 
 
 @pytest.mark.parametrize(
@@ -23,38 +30,34 @@ def window(minutes: int | None, used: float | None = None, reset: int | None = N
     ],
 )
 def test_a_quota_line_shows_what_is_left_and_empties_only_when_used_up(used, remaining):
-    assert quota_line(QuotaRow("5 小時額度", used, 1800000000)) == f"{remaining}\u30005 小時額度，<t:1800000000:R>重置"
-
-
-def test_a_quota_line_without_a_reset_time_ends_at_the_name():
-    assert quota_line(QuotaRow("長期額度", 25, None)) == "▰▰▰▰▰▰▰▰▱▱ 75%\u3000長期額度"
+    assert lines({"rateLimits": {"primary": window(300, used, 1800000000)}}) == [f"{remaining}　5 小時額度，<t:1800000000:R>重置"]
 
 
 def test_a_single_bucket_has_no_prefix():
-    limits = {"rateLimits": {"primary": window(300, 12, 1800000000), "secondary": window(10080, 40, 1800500000)}}
-    assert quota_rows(limits) == [QuotaRow("5 小時額度", 12, 1800000000), QuotaRow("7 天額度", 40, 1800500000)]
+    limits = {"rateLimits": {"primary": window(300, 25, 1800000000), "secondary": window(10080, 50, 1800500000)}}
+    assert lines(limits) == [f"{THREE_QUARTERS}5 小時額度，<t:1800000000:R>重置", f"{HALF}7 天額度，<t:1800500000:R>重置"]
 
 
 def test_windows_without_usage_are_left_out():
-    assert quota_rows({"rateLimits": {}}) == []
-    assert quota_rows({"rateLimits": {"primary": window(45), "secondary": None}}) == []
+    assert lines({"rateLimits": {}}) == []
+    assert lines({"rateLimits": {"primary": window(45), "secondary": None}}) == []
 
 
-def test_odd_window_lengths_and_missing_lengths():
-    limits = {"rateLimits": {"primary": window(45, 1), "secondary": window(None, 3)}}
-    assert quota_rows(limits) == [QuotaRow("45 分鐘額度", 1, None), QuotaRow("長期額度", 3, None)]
-    assert quota_rows({"rateLimits": {"primary": window(None, 5)}}) == [QuotaRow("短期額度", 5, None)]
+def test_odd_window_lengths_missing_lengths_and_missing_reset_times():
+    limits = {"rateLimits": {"primary": window(45, 25), "secondary": window(None, 50)}}
+    assert lines(limits) == [f"{THREE_QUARTERS}45 分鐘額度", f"{HALF}長期額度"]
+    assert lines({"rateLimits": {"primary": window(None, 25)}}) == [f"{THREE_QUARTERS}短期額度"]
 
 
 def test_multiple_buckets_are_prefixed_with_their_names():
     limits = {
         "rateLimitsByLimitId": {
-            "codex": {"limitName": "Codex", "primary": window(300, 1, 1), "secondary": None},
-            "other": {"primary": window(1440, 2, 2), "secondary": window(10080, None, 3)},
+            "codex": {"limitName": "Codex", "primary": window(300, 25, 1), "secondary": None},
+            "other": {"primary": window(1440, 50, 2), "secondary": window(10080, None, 3)},
         }
     }
-    assert quota_rows(limits) == [QuotaRow("Codex · 5 小時額度", 1, 1), QuotaRow("other · 1 天額度", 2, 2)]
+    assert lines(limits) == [f"{THREE_QUARTERS}Codex · 5 小時額度，<t:1:R>重置", f"{HALF}other · 1 天額度，<t:2:R>重置"]
 
 
 def test_no_buckets_at_all():
-    assert quota_rows({"rateLimitsByLimitId": {}, "rateLimits": {}}) == []
+    assert lines({"rateLimitsByLimitId": {}, "rateLimits": {}}) == []
