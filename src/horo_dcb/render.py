@@ -133,7 +133,7 @@ def render_view(content: Content) -> discord.ui.LayoutView:
         case Waiting():
             view.add_item(card(Status.WAITING, discord.ui.TextDisplay(Status.WAITING.line())))
         case Frame(status=status, steps=steps, started_at=started_at):
-            lines = [status.line(), *(f"-# {step.line()}" for step in steps[:-1]), *(step.line() for step in steps[-1:])]
+            lines = [status.line(), *(f"-# {step.line()}" for step in steps)]
             view.add_item(card(status, discord.ui.TextDisplay("\n".join(lines)), discord.ui.Separator(), discord.ui.TextDisplay(f"-# 開始於 <t:{started_at}:R>")))
         case Answer(text=text):
             view.add_item(discord.ui.TextDisplay(text))

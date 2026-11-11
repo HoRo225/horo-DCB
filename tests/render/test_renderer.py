@@ -88,9 +88,9 @@ async def test_the_frame_shows_the_status_and_only_the_last_three_steps(harness)
         *answer(thread, turn, "晴天"),
     ])
     trigger = await harness.ask(harness.person(), "台北天氣？", mention=True)
-    await until(lambda: frame_of(harness, trigger) == (PURPLE, ["🔍 - **搜尋中**\n-# `說明` 我先查天氣\n-# `思考` 規劃回答\n`搜尋` 台北天氣", "---", timer(trigger)]))
+    await until(lambda: frame_of(harness, trigger) == (PURPLE, ["🔍 - **搜尋中**\n-# `說明` 我先查天氣\n-# `思考` 規劃回答\n-# `搜尋` 台北天氣", "---", timer(trigger)]))
     searching.set()
-    await until(lambda: frame_of(harness, trigger) == (PURPLE, ["💭 - **思考中**\n-# `搜尋` 台北天氣\n-# `瀏覽` weather.example.com\n`模型` gpt-5.1 改用 gpt-5.1-mini", "---", timer(trigger)]))
+    await until(lambda: frame_of(harness, trigger) == (PURPLE, ["💭 - **思考中**\n-# `搜尋` 台北天氣\n-# `瀏覽` weather.example.com\n-# `模型` gpt-5.1 改用 gpt-5.1-mini", "---", timer(trigger)]))
     hold.set()
     await harness.settle()
     assert harness.answer_text(trigger) == "晴天"
@@ -108,9 +108,9 @@ async def test_the_frame_shows_a_tool_call_pending_then_its_note(harness):
     ])
     harness.post(harness.person(2, "路人"), "早先的訊息")
     trigger = await harness.ask(harness.person(), "讀一下頻道", mention=True)
-    await until(lambda: frame_of(harness, trigger) == (PURPLE, ["📖 - **讀取中**\n`讀取` 頻道訊息", "---", timer(trigger)]))
+    await until(lambda: frame_of(harness, trigger) == (PURPLE, ["📖 - **讀取中**\n-# `讀取` 頻道訊息", "---", timer(trigger)]))
     pending.set()
-    await until(lambda: frame_of(harness, trigger) == (PURPLE, ["💭 - **思考中**\n`讀取` 1 則較早的訊息", "---", timer(trigger)]))
+    await until(lambda: frame_of(harness, trigger) == (PURPLE, ["💭 - **思考中**\n-# `讀取` 1 則較早的訊息", "---", timer(trigger)]))
     noted.set()
     await harness.settle()
     assert harness.answer_text(trigger) == "讀完了"
