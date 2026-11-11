@@ -7,7 +7,7 @@ import warnings
 from collections import deque
 from dataclasses import dataclass, field
 from datetime import timedelta, timezone
-from typing import Literal
+from typing import TYPE_CHECKING, Literal
 from urllib.parse import urlsplit
 
 import aiohttp
@@ -17,6 +17,9 @@ from PIL import Image, UnidentifiedImageError
 from . import log_event, tools
 from .codex import CodexError, ThreadState, ToolCall, TurnState, choose_model
 from .store import Entry, Store
+
+if TYPE_CHECKING:
+    from .bot import HoroBot
 
 
 ALLOWED_MENTIONS = discord.AllowedMentions(everyone=False, roles=False, users=True, replied_user=False)
@@ -403,7 +406,7 @@ class ChatRound:
 
 
 class Chat:
-    def __init__(self, bot) -> None:
+    def __init__(self, bot: HoroBot) -> None:
         self.bot = bot
         self.accepting = True
         self.rounds: dict[int, ChatRound] = {}
@@ -524,12 +527,12 @@ class Chat:
                 inputs, context = await renderer.guard(self._inputs(channel_messages, round_state.message, round_state.referenced if fresh or channel_messages else None))
                 turn = TurnState(thread.id)
                 round_state.turn = turn
-                await self.bot.codex.start_turn(thread, turn, inputs, model_id, effort, context, round_state.message.id)
-                await self.bot.store.begin_turn(thread.id, turn.id, [message.id for message in round_state.messages], round_state.message.id)
+                turn_id = await self.bot.codex.start_turn(thread, turn, inputs, model_id, effort, context, round_state.message.id)  # ty: ignore[invalid-argument-type]
+                await self.bot.store.begin_turn(thread.id, turn_id, [message.id for message in round_state.messages], round_state.message.id)
                 round_state.settled.set()
                 await self._follow(round_state, turn, renderer)
                 await renderer.flush()
-                await self.bot.store.set_latest_turn(thread.id, turn.id)
+                await self.bot.store.set_latest_turn(thread.id, turn_id)
         except asyncio.CancelledError:
             log_event("turn_stopped")
             await self._abort(round_state)
@@ -569,7 +572,7 @@ class Chat:
                 await self.bot.store.add_thread(round_state.thread.id, round_state.message.id)
                 return "new"
             if action == "fork":
-                thread = await self.bot.codex.fork_thread(entry.thread, entry.turn, model_id)
+                thread = await self.bot.codex.fork_thread(entry.thread, entry.turn, model_id)  # ty: ignore[invalid-argument-type]
                 await self.bot.store.add_thread(thread.id, referenced.id)
                 round_state.source = entry.thread
                 self._join(round_state, thread)
@@ -579,9 +582,9 @@ class Chat:
             async with active.steering:
                 inputs, _ = await self._inputs([], round_state.message, None, steer=True)
                 await active.settled.wait()
-                if not self._steerable(active):
+                turn = self._steerable(active)
+                if turn is None:
                     continue
-                turn = active.turn
                 if not await self.bot.codex.steer(turn, inputs, round_state.message.id):
                     return self._join(round_state, active.thread)  # ty: ignore[invalid-argument-type]
                 await self.bot.store.record_message(round_state.message.id, turn.thread_id, turn.id)
@@ -607,17 +610,19 @@ class Chat:
     def _active_round(self, message_id: int) -> ChatRound | None:
         return next((line[0] for line in self.lines.values() if self._live(line[0]) and any(message.id == message_id for message in line[0].messages)), None)
 
-    def _steerable(self, round_state: ChatRound) -> bool:
-        return self._live(round_state) and round_state.turn is not None and round_state.turn.id is not None
+    def _steerable(self, round_state: ChatRound) -> TurnState | None:
+        turn = round_state.turn
+        return turn if self._live(round_state) and turn is not None and turn.id is not None else None
 
     def _leave(self, round_state: ChatRound) -> None:
         line = self.lines.get(round_state.thread.id) if round_state.thread is not None else None
         if line is None or round_state not in line:
             return
+        turn = round_state.turn
         if line[0] is not round_state:
             line.remove(round_state)
-        elif round_state.turn is not None and not round_state.turn.terminal.is_set():
-            task = asyncio.create_task(self._drain(round_state))
+        elif turn is not None and not turn.terminal.is_set():
+            task = asyncio.create_task(self._drain(round_state, turn))
             self.drains.add(task)
             task.add_done_callback(self.drains.discard)
         else:
@@ -626,7 +631,7 @@ class Chat:
     def _release(self, round_state: ChatRound) -> None:
         line = self.lines[round_state.thread.id]
         line.popleft()
-        round_state.thread.active = None  # ty: ignore[invalid-assignment]
+        self.bot.codex.end_turn(round_state.thread.id)
         if line:
             line[0].admitted.set()
         else:
@@ -706,11 +711,11 @@ class Chat:
             round_state.pending_sends.clear()
             await self._delete_messages(round_state)
 
-    async def _drain(self, round_state: ChatRound) -> None:
+    async def _drain(self, round_state: ChatRound, turn: TurnState) -> None:
         try:
-            await self.bot.codex.wait_terminal(round_state.turn)
+            await self.bot.codex.wait_terminal(turn)
         finally:
-            if round_state.turn.terminal.is_set():
+            if turn.terminal.is_set():
                 self._release(round_state)
 
     def _log_usage(self, round_state: ChatRound) -> None:

@@ -305,7 +305,7 @@ class CodexClient:
             await self._request("thread/resume", {"threadId": thread_id, "approvalPolicy": "never", "sandbox": "read-only", "excludeTurns": True})
             self.loaded.add(thread_id)
 
-    async def start_turn(self, thread: ThreadState, turn: TurnState, inputs: list[dict], model: str | None, effort: str | None, context: list[str], message_id: int) -> None:
+    async def start_turn(self, thread: ThreadState, turn: TurnState, inputs: list[dict], model: str | None, effort: str | None, context: list[str], message_id: int) -> str:
         if thread.active is not None:
             raise CodexError("thread_busy")
         thread.active = turn
@@ -324,6 +324,10 @@ class CodexClient:
                 turn.terminal.set()
             raise
         turn.id = result["turn"]["id"]
+        return turn.id
+
+    def end_turn(self, thread_id: str) -> None:
+        self.thread_state(thread_id).active = None
 
     async def steer(self, turn: TurnState, inputs: list[dict], message_id: int | str) -> bool:
         try:

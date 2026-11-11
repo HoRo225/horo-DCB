@@ -1,9 +1,13 @@
 import asyncio
 from enum import Enum, auto
+from typing import TYPE_CHECKING
 
 import discord
 
 from . import log_event
+
+if TYPE_CHECKING:
+    from .bot import HoroBot
 
 
 BOT_GRANTS = {"view_channel": True, "connect": True, "manage_channels": True, "move_members": True}
@@ -50,7 +54,7 @@ async def attempt(code: str, request) -> bool:
 
 
 class Voice:
-    def __init__(self, bot) -> None:
+    def __init__(self, bot: HoroBot) -> None:
         self.bot = bot
         self.lock = asyncio.Lock()
 

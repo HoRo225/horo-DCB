@@ -5,6 +5,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import timedelta
 from enum import Enum
+from typing import TYPE_CHECKING
 
 import discord
 from discord import ui
@@ -12,6 +13,9 @@ from discord import ui
 from . import log_event
 from .codex import choose_model
 from .store import Settings
+
+if TYPE_CHECKING:
+    from .bot import HoroBot
 
 
 EFFORT_NAMES = {"none": "不思考", "minimal": "最低", "low": "低", "medium": "中", "high": "高", "xhigh": "超高", "max": "最高", "ultra": "極限"}
@@ -161,7 +165,7 @@ class Module:
 
 
 class InstructionsModal(ui.Modal):
-    def __init__(self, console, current: str | None) -> None:
+    def __init__(self, console: Console, current: str | None) -> None:
         super().__init__(title="AI 指示", timeout=900)
         self.console = console
         self.text = ui.TextInput(label="給 AI 的固定指示，只套用到新對話", style=discord.TextStyle.paragraph, required=False, max_length=4000, default=current or "")
@@ -169,7 +173,7 @@ class InstructionsModal(ui.Modal):
 
     async def on_submit(self, interaction: discord.Interaction) -> None:
         await interaction.response.defer()
-        if not await self.console.bot.is_owner(interaction.user):
+        if not await self.console.bot.is_owner(interaction.user):  # ty: ignore[invalid-argument-type]
             await interaction.followup.send("只有擁有者能使用", ephemeral=True)
             return
         await self.console.bot.store.update_settings(instructions=self.text.value.strip() or None)
@@ -304,12 +308,12 @@ class ConsolePanel(ui.LayoutView):
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         if (interaction.data or {}).get("custom_id") == "instructions":
-            if not await self.console.bot.is_owner(interaction.user):
+            if not await self.console.bot.is_owner(interaction.user):  # ty: ignore[invalid-argument-type]
                 await interaction.response.send_message("只有擁有者能使用", ephemeral=True)
                 return False
             return True
         await interaction.response.defer()
-        if not await self.console.bot.is_owner(interaction.user):
+        if not await self.console.bot.is_owner(interaction.user):  # ty: ignore[invalid-argument-type]
             await interaction.followup.send("只有擁有者能使用", ephemeral=True)
             return False
         return True
@@ -353,7 +357,7 @@ class ConsolePanel(ui.LayoutView):
 
 
 class Console:
-    def __init__(self, bot) -> None:
+    def __init__(self, bot: HoroBot) -> None:
         self.bot = bot
         self.panels: set[ConsolePanel] = set()
         self.login_attempt: LoginAttempt | None = None
@@ -382,7 +386,7 @@ class Console:
 
     async def open(self, interaction: discord.Interaction) -> None:
         await interaction.response.defer(ephemeral=True, thinking=True)
-        if not await self.bot.is_owner(interaction.user):
+        if not await self.bot.is_owner(interaction.user):  # ty: ignore[invalid-argument-type]
             await interaction.edit_original_response(content="只有擁有者能使用")
             return
         async with self.lock:
