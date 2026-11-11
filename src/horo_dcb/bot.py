@@ -40,7 +40,7 @@ class HoroBot(commands.Bot):
 
     async def setup_hook(self) -> None:
         await self.store.open()
-        await self.codex.start()
+        self.codex.start()
         self.console.start()
 
     async def on_ready(self) -> None:

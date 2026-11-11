@@ -23,17 +23,14 @@ FILLED_CELL = "▰"
 EMPTY_CELL = "▱"
 NO_PLACEHOLDER = "\u200b"
 PANEL_LIFETIME = timedelta(minutes=14, seconds=50)
+RECONNECTING = "-# 正在自動重連，連上後面板會自動更新。這段期間收到的提問會在連上後回答。"
 
 
 class Level(Enum):
-    OK = ("🟢", 0x23A55A)
-    WARN = ("🟡", 0xF0B232)
-    BAD = ("🔴", 0xF23F43)
-    UNKNOWN = ("⚪", 0x80848E)
-
-    def __init__(self, light: str, colour: int) -> None:
-        self.light = light
-        self.colour = colour
+    OK = 0x23A55A
+    WARN = 0xF0B232
+    BAD = 0xF23F43
+    UNKNOWN = 0x80848E
 
 
 @dataclass(frozen=True)
@@ -98,7 +95,7 @@ class Note:
     failed: bool = False
 
     def render(self) -> str:
-        return f"🔴 {self.text}" if self.failed else f"-# {self.text}"
+        return self.text if self.failed else f"-# {self.text}"
 
 
 @dataclass(frozen=True)
@@ -112,6 +109,7 @@ REFRESH = AccountButton("重新整理", "refresh")
 
 
 class AccountState(Enum):
+    DISCONNECTED = (Level.BAD, "Codex 未連線", (REFRESH,))
     SIGNED_OUT = (Level.BAD, "尚未登入 ChatGPT", (AccountButton("登入 ChatGPT", "login", discord.ButtonStyle.primary), REFRESH))
     PENDING = (Level.WARN, "等待登入", (AccountButton("開啟登入頁"), AccountButton("取消登入", "cancel"), REFRESH))
     SIGNED_IN = (Level.OK, "已登入 ChatGPT，方案：{plan}", (AccountButton("登出", "logout"), REFRESH))
@@ -124,6 +122,8 @@ class AccountState(Enum):
 
 
 def account_state(console: Console) -> AccountState:
+    if not console.bot.codex.ready.is_set():
+        return AccountState.DISCONNECTED
     if console.login_attempt is not None:
         return AccountState.PENDING
     if console.account is None:
@@ -186,10 +186,12 @@ class InstructionsModal(ui.Modal):
 def account_section(console: Console) -> list[ui.Item]:
     state = account_state(console)
     attempt = console.login_attempt
-    lines = [f"{state.level.light} {account_status(console)}"]
+    lines = [account_status(console)]
     if console.note is not None:
         lines.append(console.note.render())
-    if attempt is not None:
+    if state is AccountState.DISCONNECTED:
+        lines.append(RECONNECTING)
+    if state is AccountState.PENDING:
         lines += ["1. 按下「開啟登入頁」，用機器人專用的 ChatGPT 帳號登入", "2. 輸入下面的登入代碼", f"# {attempt.code}", "-# 完成後面板會自動更新"]
     if state is AccountState.SIGNED_IN:
         rows = quota_rows(console.limits)
@@ -283,7 +285,7 @@ def voice_page(panel: ConsolePanel, settings: Settings) -> Page:
             await console.bot.voice.settle(interaction.guild)
 
     hubs.callback = hub_callback
-    return Page(level, [ui.TextDisplay(f"{level.light} {status}"), ui.TextDisplay("-# 入口頻道"), ui.ActionRow(hubs)])
+    return Page(level, [ui.TextDisplay(status), ui.TextDisplay("-# 入口頻道"), ui.ActionRow(hubs)])
 
 
 MODULES = {
@@ -342,7 +344,7 @@ class ConsolePanel(ui.LayoutView):
             await self.refresh()
 
         switch.callback = switch_callback
-        self.add_item(ui.Container(ui.TextDisplay("## 控制台"), ui.ActionRow(switch), *page.items, ui.Separator(), ui.TextDisplay(f"-# 面板在 <t:{self.expires_at}:R>失效"), accent_colour=page.level.colour))
+        self.add_item(ui.Container(ui.TextDisplay("## 控制台"), ui.ActionRow(switch), *page.items, ui.Separator(), ui.TextDisplay(f"-# 面板在 <t:{self.expires_at}:R>失效"), accent_colour=page.level.value))
 
     async def refresh(self) -> None:
         try:
@@ -405,6 +407,8 @@ class Console:
         self.account = None
         self.limits = {}
         self.models = []
+        if not self.bot.codex.ready.is_set():
+            return
         self.account = await self.bot.codex.account()
         if self.account.get("account") is not None:
             try:
@@ -458,7 +462,7 @@ class Console:
                     async with self.lock:
                         self.limits = await self.bot.codex.rate_limits()
                     await self.refresh_panels()
-                elif method in ("client/connected", "account/updated"):
+                elif method in ("client/connected", "client/disconnected", "account/updated"):
                     async with self.lock:
                         await self._read_account()
                     await self.refresh_panels()

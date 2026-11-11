@@ -75,9 +75,8 @@ class CodexClient:
         self.loaded: set[str] = set()
         self.tool_calls: dict[int | str, ToolCall] = {}
 
-    async def start(self) -> None:
+    def start(self) -> None:
         self._runner = asyncio.create_task(self._connect_loop())
-        await self.ready.wait()
 
     async def close(self) -> None:
         self._closing = True
@@ -123,6 +122,7 @@ class CodexClient:
             except Exception as error:
                 log_event("codex_connection_error", error)
             finally:
+                was_connected = self.ready.is_set()
                 self.ready.clear()
                 self._ws = None
                 self.loaded.clear()
@@ -137,7 +137,8 @@ class CodexClient:
                 for thread in self.threads.values():
                     if thread.active is not None and not thread.active.terminal.is_set():
                         thread.active.events.put_nowait(("client/disconnected", {}))
-                self._publish("client/disconnected", {})
+                if was_connected:
+                    self._publish("client/disconnected", {})
             if not self._closing:
                 await asyncio.sleep(delay)
                 delay = min(delay * 2, RECONNECT_MAX)

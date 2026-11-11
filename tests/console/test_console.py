@@ -21,9 +21,10 @@ DEVICE = {"loginId": "L1", "verificationUrl": "https://example.test/device", "us
 LIFETIME = timedelta(minutes=14, seconds=50)
 OPENED = discord.utils.utcnow()
 FOOTER = f"-# 面板在 <t:{int((OPENED + LIFETIME).timestamp())}:R>失效"
-SIGNED_IN = "🟢 已登入 ChatGPT，方案：plus"
-SIGNED_OUT = "🔴 尚未登入 ChatGPT"
-LOGIN_STEPS = "🟡 等待登入\n1. 按下「開啟登入頁」，用機器人專用的 ChatGPT 帳號登入\n2. 輸入下面的登入代碼\n# ABCD-EFGH\n-# 完成後面板會自動更新"
+SIGNED_IN = "已登入 ChatGPT，方案：plus"
+SIGNED_OUT = "尚未登入 ChatGPT"
+LOGIN_STEPS = "等待登入\n1. 按下「開啟登入頁」，用機器人專用的 ChatGPT 帳號登入\n2. 輸入下面的登入代碼\n# ABCD-EFGH\n-# 完成後面板會自動更新"
+DISCONNECTED = ["Codex 未連線", "-# 正在自動重連，連上後面板會自動更新。這段期間收到的提問會在連上後回答。"]
 GREEN, YELLOW, RED, GREY = 0x23A55A, 0xF0B232, 0xF23F43, 0x80848E
 
 
@@ -232,7 +233,7 @@ async def test_a_logged_out_account_offers_login_and_hides_the_model(app_server,
 async def test_an_unreadable_account_is_reported(app_server, console):
     app_server.handlers["account/read"] = lambda params: Reject()
     interaction = await opened(console)
-    assert interaction.screen.splitlines()[1:3] == ["⚪ 帳號狀態無法確認", "🔴 暫時無法讀取帳號狀態，請稍後重新整理。"]
+    assert interaction.screen.splitlines()[1:3] == ["帳號狀態無法確認", "暫時無法讀取帳號狀態，請稍後重新整理。"]
     assert account_buttons(interaction.views[-1]) == ["重新整理"]
     assert interaction.colour == GREY
 
@@ -310,7 +311,7 @@ async def test_a_failed_operation_is_reported(app_server, console):
     interaction = await opened(console)
     await console.action("login")
     assert "登入代碼" not in interaction.screen
-    assert f"{SIGNED_IN}\n🔴 操作失敗，請稍後重新整理。\n" in interaction.screen
+    assert f"{SIGNED_IN}\n操作失敗，請稍後重新整理。\n" in interaction.screen
 
 
 async def test_refresh_clears_the_last_note(app_server, console):
@@ -327,8 +328,8 @@ async def test_refresh_clears_the_last_note(app_server, console):
     ("success", "account", "status", "note"),
     [
         (True, {"type": "chatgpt", "planType": "plus"}, SIGNED_IN, "-# 登入完成。"),
-        (False, {"type": "chatgpt", "planType": "plus"}, SIGNED_IN, "🔴 登入未完成，請重新登入。"),
-        (True, None, SIGNED_OUT, "🔴 登入未完成，請重新登入。"),
+        (False, {"type": "chatgpt", "planType": "plus"}, SIGNED_IN, "登入未完成，請重新登入。"),
+        (True, None, SIGNED_OUT, "登入未完成，請重新登入。"),
     ],
     ids=["completed", "failed", "still-logged-out"],
 )
@@ -380,6 +381,66 @@ async def test_account_changes_refresh_the_panel(app_server, console):
     app_server.handlers["account/read"] = logged_out
     await app_server.notify("account/updated", {})
     await until(lambda: SIGNED_OUT in interaction.screen)
+
+
+async def disconnect(app_server, codex) -> None:
+    app_server.accepting = False
+    await app_server.drop()
+    await until(lambda: not codex.ready.is_set())
+
+
+def summaries(view: discord.ui.LayoutView) -> list[str | None]:
+    options = next(payload["options"] for payload in select_payloads(view) if payload["type"] == 3)
+    return [option.get("description") for option in options]
+
+
+async def test_a_console_opened_while_codex_is_down_explains_the_outage(app_server, codex, console):
+    await disconnect(app_server, codex)
+    async with asyncio.timeout(3):
+        interaction = await opened(console)
+    assert interaction.screen.splitlines() == ["## 控制台", *DISCONNECTED, "-# 可使用的頻道", "-# 可使用的身分組", "-# 固定指示", "未設定", FOOTER]
+    view = interaction.views[-1]
+    assert summaries(view) == ["Codex 未連線", "未設定入口，功能停用中"]
+    assert selects(view) == [MODULES]
+    assert account_buttons(view) == ["重新整理"]
+    assert interaction.colour == RED
+
+
+async def test_an_open_panel_follows_codex_going_down_and_coming_back(app_server, codex, console):
+    interaction = await opened(console)
+    assert interaction.screen.splitlines()[1] == SIGNED_IN
+    await disconnect(app_server, codex)
+    await until(lambda: interaction.screen.splitlines()[1:3] == DISCONNECTED)
+    assert interaction.colour == RED
+    assert selects(interaction.views[-1]) == [MODULES]
+    assert account_buttons(interaction.views[-1]) == ["重新整理"]
+    app_server.accepting = True
+    await until(lambda: interaction.screen.splitlines()[1] == SIGNED_IN)
+    assert interaction.colour == GREEN
+    assert selects(interaction.views[-1]) == [MODULES, ["GPT Test"], ["低", "中", "高"]]
+    assert account_buttons(interaction.views[-1]) == ["登出", "重新整理"]
+    await disconnect(app_server, codex)
+    await until(lambda: interaction.screen.splitlines()[1:3] == DISCONNECTED)
+    assert interaction.colour == RED
+
+
+async def test_failed_reconnects_leave_an_open_panel_alone(app_server, codex, console):
+    interaction = await opened(console)
+    await disconnect(app_server, codex)
+    await until(lambda: interaction.screen.splitlines()[1:3] == DISCONNECTED)
+    edits = len(interaction.screens)
+    await asyncio.sleep(0.3)
+    assert len(interaction.screens) == edits
+
+
+async def test_a_pending_login_is_hidden_while_codex_is_down(app_server, codex, console):
+    app_server.handlers["account/login/start"] = lambda params: DEVICE
+    interaction = await opened(console)
+    await console.action("login")
+    await disconnect(app_server, codex)
+    await until(lambda: interaction.screen.splitlines()[1:3] == DISCONNECTED)
+    assert "ABCD-EFGH" not in interaction.screen
+    assert account_buttons(interaction.views[-1]) == ["重新整理"]
 
 
 async def test_a_panel_deletes_itself_when_it_expires(console):
@@ -482,13 +543,13 @@ async def test_switching_modules_changes_only_that_panel(console):
     second = await opened(console)
     untouched = len(second.screens)
     await switch(first, "臨時語音")
-    assert first.screen.splitlines() == ["## 控制台", "⚪ 未設定入口，功能停用中", "-# 入口頻道", FOOTER]
+    assert first.screen.splitlines() == ["## 控制台", "未設定入口，功能停用中", "-# 入口頻道", FOOTER]
     assert first.colour == GREY
     assert chosen(first.views[-1]) == [["臨時語音"]]
     assert placeholders(first.views[-1]) == [None, NO_PLACEHOLDER]
     assert len(second.screens) == untouched
     await console.action("refresh")
-    assert "⚪ 未設定入口，功能停用中" in first.screen
+    assert "未設定入口，功能停用中" in first.screen
     assert SIGNED_IN in second.screen
     await switch(first, "AI 對話")
     assert SIGNED_IN in first.screen
@@ -507,7 +568,7 @@ async def test_the_voice_page_counts_its_hubs(store, console):
     await store.update_settings(voice_hub_ids=[300, 301])
     interaction = await opened(console)
     await switch(interaction, "臨時語音")
-    assert interaction.screen.splitlines()[1] == "🟢 已啟用，2 個入口"
+    assert interaction.screen.splitlines()[1] == "已啟用，2 個入口"
     assert interaction.screen.endswith(FOOTER)
     assert interaction.colour == GREEN
 
@@ -536,7 +597,7 @@ async def test_the_voice_hub_menu_saves_hubs_and_seats_whoever_waits(bot, store,
     await hubs.callback(presser)
     assert (await store.settings()).voice_hub_ids == {300}
     assert [int(value["id"]) for value in menu(interaction.views[-1], discord.ChannelType.voice).to_component_dict()["default_values"]] == [300]
-    assert "🟢 已啟用，1 個入口" in interaction.screen
+    assert "已啟用，1 個入口" in interaction.screen
     assert [room.name for room in guild.created] == ["▍愛麗絲的房間"]
     assert guild.moves == [(1, guild.created[0].id)]
 
@@ -555,5 +616,5 @@ async def test_clearing_the_voice_hub_menu_stops_opening_rooms(bot, store, conso
     presser.guild = guild.mock
     await hubs.callback(presser)
     assert (await store.settings()).voice_hub_ids == frozenset()
-    assert "⚪ 未設定入口，功能停用中" in interaction.screen
+    assert "未設定入口，功能停用中" in interaction.screen
     assert guild.created == []

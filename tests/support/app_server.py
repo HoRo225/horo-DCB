@@ -35,6 +35,7 @@ class FakeAppServer:
         self.received: list[dict] = []
         self.handlers: dict[str, Handler] = {}
         self.after: dict[str, Callable[[dict, dict], Awaitable[None]]] = {}
+        self.accepting = True
         self.connections = 0
         self.connected = asyncio.Event()
         self.socket: web.WebSocketResponse | None = None
@@ -67,7 +68,9 @@ class FakeAppServer:
     def responses(self) -> list[dict]:
         return [message for message in self.received if "method" not in message]
 
-    async def handle(self, request: web.Request) -> web.WebSocketResponse:
+    async def handle(self, request: web.Request) -> web.StreamResponse:
+        if not self.accepting:
+            return web.Response(status=503)
         socket = web.WebSocketResponse(max_msg_size=0)
         await socket.prepare(request)
         self.socket = socket
