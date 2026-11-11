@@ -1,6 +1,6 @@
 import pytest
 
-from horo_dcb.render import answer_chunks, search_text, shorten, summary_title
+from horo_dcb.render import Step, answer_chunks, search_text, shorten, summary_title
 
 
 def test_short_answer_is_one_chunk():
@@ -69,12 +69,12 @@ def test_summary_title_is_at_most_100_characters():
 @pytest.mark.parametrize(
     ("item", "expected"),
     [
-        ({"action": {"type": "openPage", "url": "https://www.cwa.gov.tw/V8/C/W/County/index.html"}}, "瀏覽 www.cwa.gov.tw"),
-        ({"action": {"type": "findInPage", "pattern": "氣溫"}}, "在網頁中尋找「氣溫」"),
-        ({"action": {"type": "search", "query": "台北 天氣"}}, "搜尋「台北 天氣」"),
-        ({"action": {"type": "search", "queries": ["第一個", "第二個"]}}, "搜尋「第一個」"),
-        ({"query": "舊格式查詢"}, "搜尋「舊格式查詢」"),
-        ({}, "搜尋網路"),
+        ({"action": {"type": "openPage", "url": "https://www.cwa.gov.tw/V8/C/W/County/index.html"}}, Step("瀏覽", "www.cwa.gov.tw")),
+        ({"action": {"type": "findInPage", "pattern": "氣溫"}}, Step("尋找", "氣溫")),
+        ({"action": {"type": "search", "query": "台北 天氣"}}, Step("搜尋", "台北 天氣")),
+        ({"action": {"type": "search", "queries": ["第一個", "第二個"]}}, Step("搜尋", "第一個")),
+        ({"query": "舊格式查詢"}, Step("搜尋", "舊格式查詢")),
+        ({}, Step("搜尋", "網路")),
     ],
     ids=["open-page", "find-in-page", "query", "queries", "item-query", "nothing"],
 )

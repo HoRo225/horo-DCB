@@ -5,10 +5,22 @@ import pytest
 from tests.support import chat_harness
 from tests.support.chat_harness import server_request
 from tests.support.codex_messages import agent, answer, completed, delta, note, reasoning, recorded_answer, recorded_turn, started, tool_item, turn_completed, web_search
-from tests.support.discord_fakes import view_text
+from tests.support.discord_fakes import card_of
 from tests.support.waiting import until
 
 harness = chat_harness.harness
+
+
+PURPLE = 0x7F77DD
+
+
+def timer(trigger) -> str:
+    return f"-# 開始於 <t:{int(trigger.created_at.timestamp())}:R>"
+
+
+def frame_of(harness, trigger):
+    replies = harness.answers(trigger)
+    return card_of(replies[0].views[-1]) if replies else None
 
 
 async def test_the_thinking_frame_becomes_the_answer_in_one_message(harness):
@@ -17,7 +29,7 @@ async def test_the_thinking_frame_becomes_the_answer_in_one_message(harness):
     await harness.settle()
     assert len(harness.channel.sent) == 1
     reply = harness.channel.sent[0]
-    assert "思考中" in view_text(reply.views[0])
+    assert card_of(reply.views[0]) == (PURPLE, ["💭 - **思考中**", "---", timer(trigger)])
     assert harness.answers(trigger) == [reply]
     assert harness.text(reply) == recorded_answer("answer")
 
@@ -35,12 +47,39 @@ async def test_a_long_answer_is_split_across_messages_in_order(harness, line):
     assert [value.id for value in replies] == sorted(value.id for value in replies)
 
 
-async def test_the_frame_lists_summaries_searches_and_reroutes(harness):
+async def test_later_chunks_of_an_uninterrupted_answer_are_not_replies(harness):
+    harness.script(lambda thread, turn: answer(thread, turn, "長" * 5000))
+    trigger = await harness.ask(harness.person(), "寫長一點", mention=True)
+    await harness.settle()
+    first, second = harness.channel.live()
+    assert first.reference.message_id == trigger.id
+    assert second.reference is None
+    assert harness.answers(trigger) == [first, second]
+
+
+async def test_a_chunk_after_someone_else_spoke_replies_to_the_chunk_before_it(harness):
     hold = asyncio.Event()
+    harness.script(lambda thread, turn: [hold, *answer(thread, turn, "長" * 5000)])
+    trigger = await harness.ask(harness.person(), "寫長一點", mention=True)
+    await until(lambda: harness.answers(trigger))
+    harness.post(harness.person(2, "路人"), "插話")
+    hold.set()
+    await harness.settle()
+    first, second = harness.channel.live()
+    assert first.reference.message_id == trigger.id
+    assert second.reference.message_id == first.id
+    assert harness.answer_text(trigger) == "長" * 5000
+
+
+async def test_the_frame_shows_the_status_and_only_the_last_three_steps(harness):
+    searching, hold = asyncio.Event(), asyncio.Event()
     harness.script(lambda thread, turn: [
+        started(thread, turn, agent("c1", phase="commentary")),
+        completed(thread, turn, agent("c1", "我先查天氣", phase="commentary")),
         started(thread, turn, reasoning("r1")),
         completed(thread, turn, reasoning("r1", ["**規劃回答**\n先查天氣再整理"])),
         started(thread, turn, web_search("s1", {"type": "search", "query": "台北天氣"})),
+        searching,
         completed(thread, turn, web_search("s1", {"type": "search", "query": "台北天氣"})),
         started(thread, turn, web_search("s2", {"type": "openPage", "url": "https://weather.example.com/taipei"})),
         completed(thread, turn, web_search("s2", {"type": "openPage", "url": "https://weather.example.com/taipei"})),
@@ -49,10 +88,9 @@ async def test_the_frame_lists_summaries_searches_and_reroutes(harness):
         *answer(thread, turn, "晴天"),
     ])
     trigger = await harness.ask(harness.person(), "台北天氣？", mention=True)
-    expected = ["規劃回答", "搜尋「台北天氣」", "瀏覽 weather.example.com", "模型已由 gpt-5.1 改用 gpt-5.1-mini"]
-    await until(lambda: harness.answers(trigger) and all(line in harness.text(harness.answers(trigger)[0]) for line in expected))
-    frame = harness.text(harness.answers(trigger)[0])
-    assert [frame.index(line) for line in expected] == sorted(frame.index(line) for line in expected)
+    await until(lambda: frame_of(harness, trigger) == (PURPLE, ["🔍 - **搜尋中**\n-# `說明` 我先查天氣\n-# `思考` 規劃回答\n`搜尋` 台北天氣", "---", timer(trigger)]))
+    searching.set()
+    await until(lambda: frame_of(harness, trigger) == (PURPLE, ["💭 - **思考中**\n-# `搜尋` 台北天氣\n-# `瀏覽` weather.example.com\n`模型` gpt-5.1 改用 gpt-5.1-mini", "---", timer(trigger)]))
     hold.set()
     await harness.settle()
     assert harness.answer_text(trigger) == "晴天"
@@ -70,10 +108,9 @@ async def test_the_frame_shows_a_tool_call_pending_then_its_note(harness):
     ])
     harness.post(harness.person(2, "路人"), "早先的訊息")
     trigger = await harness.ask(harness.person(), "讀一下頻道", mention=True)
-    await until(lambda: harness.answers(trigger) and "讀取頻道訊息中" in harness.text(harness.answers(trigger)[0]))
+    await until(lambda: frame_of(harness, trigger) == (PURPLE, ["📖 - **讀取中**\n`讀取` 頻道訊息", "---", timer(trigger)]))
     pending.set()
-    await until(lambda: "讀取了 1 則較早的訊息" in harness.text(harness.answers(trigger)[0]))
-    assert "讀取頻道訊息中" not in harness.text(harness.answers(trigger)[0])
+    await until(lambda: frame_of(harness, trigger) == (PURPLE, ["💭 - **思考中**\n`讀取` 1 則較早的訊息", "---", timer(trigger)]))
     noted.set()
     await harness.settle()
     assert harness.answer_text(trigger) == "讀完了"

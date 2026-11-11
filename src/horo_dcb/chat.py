@@ -11,7 +11,7 @@ import discord
 from . import log_event, tools
 from .codex import CodexError, ThreadState, ToolCall, TurnState, choose_model
 from .content import image_input, is_image, message_text, stamp
-from .render import Renderer
+from .render import ALLOWED_MENTIONS, Failure, FailureReason, Renderer, render_view
 from .store import Entry
 
 if TYPE_CHECKING:
@@ -24,8 +24,18 @@ STEER_LEAD = "原提問者在你回答途中送出以下補充。請立刻依照
 MAX_CONTEXT_BYTES = 3800
 ROUND_TIMEOUT = 900
 
+CODEX_FAILURES = {"not_logged_in": FailureReason.SIGNED_OUT, "empty_answer": FailureReason.EMPTY}
+
 Action = Literal["new", "continue", "queue", "steer", "fork"]
 Entered = Literal["new", "continue", "queue", "steered", "fork"]
+
+
+def failure_reason(error: Exception) -> FailureReason | None:
+    if isinstance(error, CodexError):
+        return CODEX_FAILURES.get(error.code, FailureReason.DISCONNECTED)
+    if isinstance(error, discord.NotFound):
+        return None
+    return FailureReason.ERROR
 
 
 def route(*, author: int, bot_reply: bool, active_asker: int | None, entry: Entry | None, latest: str | None, busy: bool) -> Action:
@@ -205,14 +215,14 @@ class Chat:
                 await self.bot.store.set_latest_turn(thread.id, turn_id)
         except asyncio.CancelledError:
             log_event("turn_stopped")
-            await self._abort(round_state)
+            await self._abort(round_state, FailureReason.RESTARTING)
         except TimeoutError:
             log_event("turn_timeout")
-            await self._abort(round_state)
+            await self._abort(round_state, FailureReason.TIMEOUT)
         except Exception as error:
             metrics = {"rpc_code": error.rpc_code} if isinstance(error, CodexError) and error.rpc_code is not None else {}
             log_event(error.code if isinstance(error, CodexError) else "turn_error", error, **metrics)
-            await self._abort(round_state)
+            await self._abort(round_state, failure_reason(error))
         finally:
             round_state.settled.set()
             self._stop_tools(round_state)
@@ -332,10 +342,10 @@ class Chat:
             if result.images:
                 inputs = [{"type": "text", "text": TOOL_IMAGE_LABEL, "text_elements": []}, *result.images]
                 if not await self.bot.codex.steer(turn, inputs, f"tool-{call.call_id}"):
-                    result = tools.ToolResult(False, "圖片無法附加到這次回答", "查看圖片失敗：無法附加圖片")
+                    result = tools.ToolResult(False, "圖片無法附加到這次回答", "失敗，無法附加圖片")
         except Exception as error:
             log_event("tool_error", error)
-            result = tools.ToolResult(False, "工具執行失敗", "工具執行失敗")
+            result = tools.ToolResult(False, "工具執行失敗", "失敗，發生錯誤")
         renderer.tool_notes[call.call_id] = result.note
         await self.bot.codex.respond(call, result.success, result.text)
 
@@ -363,7 +373,7 @@ class Chat:
             except Exception as error:
                 log_event("message_forget_error", error)
 
-    async def _abort(self, round_state: ChatRound) -> None:
+    async def _abort(self, round_state: ChatRound, reason: FailureReason | None) -> None:
         round_state.cleaning = True
         self._stop_tools(round_state)
         if round_state.renderer is not None:
@@ -380,6 +390,13 @@ class Chat:
                     round_state.messages.append(result)
             round_state.pending_sends.clear()
             await self._delete_messages(round_state)
+        if reason is None:
+            return
+        message = round_state.message
+        try:
+            await message.channel.send(view=render_view(Failure(reason)), reference=message.to_reference(fail_if_not_exists=False), allowed_mentions=ALLOWED_MENTIONS, mention_author=False)
+        except Exception as error:
+            log_event("failure_card_error", error)
 
     async def _drain(self, round_state: ChatRound, turn: TurnState) -> None:
         try:

@@ -76,7 +76,9 @@ SPEC = [{
 
 
 class ToolError(Exception):
-    pass
+    def __init__(self, message: str, short: str) -> None:
+        super().__init__(message)
+        self.short = short
 
 
 @dataclass(frozen=True)
@@ -114,10 +116,10 @@ def target_id(value, context: ToolContext) -> int:
         return int(text)
     match = LINK.search(text)
     if match is None:
-        raise ToolError("看不懂這個訊息 ID 或連結")
+        raise ToolError("看不懂這個訊息 ID 或連結", "看不懂連結")
     guild, channel, message = match.groups()
     if guild != str(context.channel.guild.id) or channel != str(context.channel.id):
-        raise ToolError("這個連結指向其他頻道，只能讀取目前頻道的訊息")
+        raise ToolError("這個連結指向其他頻道，只能讀取目前頻道的訊息", "連結在其他頻道")
     return int(message)
 
 
@@ -172,7 +174,7 @@ async def read_messages(arguments: dict, context: ToolContext) -> ToolResult:
         fetched = sorted([message async for message in context.channel.history(limit=limit, around=discord.Object(target))], key=lambda value: value.id)
         position = next((index for index, value in enumerate(fetched) if value.id == target), None)
         if position is None:
-            raise ToolError("找不到這則訊息")
+            raise ToolError("找不到這則訊息", "找不到訊息")
         ordered = [value for _, value in sorted(enumerate(fetched), key=lambda pair: abs(pair[0] - position))]
         older, newer = fetched[:position], fetched[position + 1:]
         kept, result = fit(ordered, context, lambda entries: {"messages": entries, "next_before": None, "next_after": None})
@@ -180,19 +182,19 @@ async def read_messages(arguments: dict, context: ToolContext) -> ToolResult:
             result["next_before"] = str(kept[0].id)
         if newer and (len(newer) >= limit - limit // 2 - 1 or newer[-1] not in kept):
             result["next_after"] = str(kept[-1].id)
-        return ToolResult(True, dump(result), f"讀取了一則訊息前後共 {len(kept)} 則訊息")
+        return ToolResult(True, dump(result), f"指定訊息前後共 {len(kept)} 則")
     anchor = target_id(arguments["before"], context) if arguments.get("before") else context.anchor.id
     fetched = [message async for message in context.channel.history(limit=limit, before=discord.Object(anchor))]
     kept, result = fit(fetched, context, lambda entries: {"messages": entries, "next_before": None})
     if kept and (len(fetched) == limit or len(kept) < len(fetched)):
         result["next_before"] = str(kept[0].id)
-    return ToolResult(True, dump(result), f"讀取了 {len(kept)} 則較早的訊息")
+    return ToolResult(True, dump(result), f"{len(kept)} 則較早的訊息")
 
 
 async def search_messages(arguments: dict, context: ToolContext) -> ToolResult:
     content = str(arguments.get("content") or "").strip()
     if not content:
-        raise ToolError("請提供要搜尋的關鍵字")
+        raise ToolError("請提供要搜尋的關鍵字", "沒有關鍵字")
     offset = clamp(arguments.get("offset"), 0, SEARCH_OFFSET_MAX, 0)
     params = {"channel_id": str(context.channel.id), "content": content[:1024], "offset": offset, "limit": SEARCH_PAGE}
     route = Route("GET", "/guilds/{guild_id}/messages/search", guild_id=context.channel.guild.id)
@@ -201,14 +203,14 @@ async def search_messages(arguments: dict, context: ToolContext) -> ToolResult:
         if not (isinstance(body, dict) and body.get("code") == 110000):
             break
         if attempt == 2:
-            raise ToolError("Discord 的搜尋索引還沒準備好，請改用 read_messages 往回讀")
+            raise ToolError("Discord 的搜尋索引還沒準備好，請改用 read_messages 往回讀", "搜尋索引未就緒")
         await asyncio.sleep(min(max(float(body.get("retry_after") or 1), SEARCH_RETRY_MIN), SEARCH_RETRY_MAX))
     total = int(body.get("total_results") or 0)
     hits = [next((value for value in group if value.get("hit")), group[0]) for group in body.get("messages") or () if group]
     result = {"total": total, "messages": [raw_entry(value) for value in hits[:SEARCH_PAGE]], "next_offset": None}
     if offset + SEARCH_PAGE < total and offset + SEARCH_PAGE <= SEARCH_OFFSET_MAX:
         result["next_offset"] = offset + SEARCH_PAGE
-    return ToolResult(True, dump(result), f"搜尋「{content[:40]}」，找到 {total} 則")
+    return ToolResult(True, dump(result), f"{content[:40]}，找到 {total} 則")
 
 
 async def view_message_images(arguments: dict, context: ToolContext) -> ToolResult:
@@ -237,8 +239,8 @@ async def view_message_images(arguments: dict, context: ToolContext) -> ToolResu
             skipped.append({"id": str(attachment.id), "filename": attachment.filename, "reason": reason})
     result = {"message_id": str(message.id), "author": message.author.display_name, "time": stamp(message.created_at), "attached": shown, "skipped": skipped}
     if not images:
-        return ToolResult(False, dump(result | {"error": "這則訊息沒有可查看的圖片"}), "這則訊息沒有可查看的圖片")
-    return ToolResult(True, dump(result | {"note": "圖片已接在「〔工具附上的圖片〕」之後送進對話"}), f"查看了 {len(images)} 張圖片", tuple(images))
+        return ToolResult(False, dump(result | {"error": "這則訊息沒有可查看的圖片"}), "失敗，沒有圖片")
+    return ToolResult(True, dump(result | {"note": "圖片已接在「〔工具附上的圖片〕」之後送進對話"}), f"{len(images)} 張圖片", tuple(images))
 
 
 HANDLERS: dict[str, Callable[[dict, ToolContext], Awaitable[ToolResult]]] = {
@@ -246,26 +248,24 @@ HANDLERS: dict[str, Callable[[dict, ToolContext], Awaitable[ToolResult]]] = {
     "search_messages": search_messages,
     "view_message_images": view_message_images,
 }
-FAILURE_NOTES = {"read_messages": "讀取訊息失敗", "search_messages": "搜尋訊息失敗", "view_message_images": "查看圖片失敗"}
 
 
 async def run(name: str, arguments, context: ToolContext) -> ToolResult:
     handler = HANDLERS.get(name)
     if handler is None:
-        return ToolResult(False, "目前版本未提供此工具", "使用了不存在的工具")
-    note = FAILURE_NOTES[name]
+        return ToolResult(False, "目前版本未提供此工具", "失敗，沒有這個工具")
     try:
         async with asyncio.timeout(TIMEOUT):
             return await handler(arguments if isinstance(arguments, dict) else {}, context)
     except TimeoutError:
-        return ToolResult(False, "工具執行超過 15 秒，已停止", f"{note}：逾時")
+        return ToolResult(False, "工具執行超過 15 秒，已停止", "失敗，逾時")
     except ToolError as error:
-        return ToolResult(False, str(error), f"{note}：{error}")
+        return ToolResult(False, str(error), f"失敗，{error.short}")
     except discord.NotFound:
-        return ToolResult(False, "找不到這則訊息", f"{note}：找不到訊息")
+        return ToolResult(False, "找不到這則訊息", "失敗，找不到訊息")
     except discord.Forbidden:
-        return ToolResult(False, "機器人沒有權限讀取", f"{note}：沒有權限")
+        return ToolResult(False, "機器人沒有權限讀取", "失敗，沒有權限")
     except discord.HTTPException as error:
-        return ToolResult(False, f"Discord 回應錯誤（{error.status}）", f"{note}：Discord 錯誤")
+        return ToolResult(False, f"Discord 回應錯誤（{error.status}）", "失敗，Discord 錯誤")
     except (ValueError, TypeError, KeyError):
-        return ToolResult(False, "參數格式不正確", f"{note}：參數錯誤")
+        return ToolResult(False, "參數格式不正確", "失敗，參數錯誤")

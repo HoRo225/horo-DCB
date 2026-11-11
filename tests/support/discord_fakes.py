@@ -49,6 +49,13 @@ def view_text(view: discord.ui.LayoutView) -> str:
     return "\n".join(walk(view.to_components()))
 
 
+def card_of(view: discord.ui.LayoutView) -> tuple[int | None, list[str]]:
+    [payload] = view.to_components()
+    if payload["type"] != 17:
+        return None, [payload["content"]]
+    return payload.get("accent_color"), ["---" if child["type"] == 14 else child["content"] for child in payload["components"]]
+
+
 class Channel:
     def __init__(self, channel_id: int = CHANNEL_ID, guild_id: int = GUILD_ID, bot: Mock | None = None, first_sent_id: int = 10_000) -> None:
         self.messages: list[Mock] = []
@@ -60,6 +67,7 @@ class Channel:
         self.mock = Mock(spec=discord.TextChannel)
         self.mock.id = channel_id
         self.mock.guild = Mock(id=guild_id)
+        self.mock.last_message_id = None
         self.mock.history = Mock(side_effect=self.history)
         self.mock.fetch_message = AsyncMock(side_effect=self.fetch_message)
         self.mock.send = AsyncMock(side_effect=self.send)
@@ -96,6 +104,7 @@ class Channel:
 
     def add(self, message: Mock) -> Mock:
         message.channel = self.mock
+        self.mock.last_message_id = max(message.id, self.mock.last_message_id or 0)
         self.messages.append(message)
         self.messages.sort(key=lambda value: value.id)
         return message

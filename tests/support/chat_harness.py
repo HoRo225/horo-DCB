@@ -89,7 +89,16 @@ class ChatHarness:
         await until(lambda: not self.chat.rounds and not self.chat.drains)
 
     def answers(self, trigger: Mock) -> list[Mock]:
-        return [value for value in self.channel.live() if value.reference is not None and value.reference.message_id == trigger.id]
+        owners: dict[int, int | None] = {}
+        above: Mock | None = None
+        for value in self.channel.messages:
+            if value.author is self.bot:
+                if value.reference is not None:
+                    owners[value.id] = owners.get(value.reference.message_id, value.reference.message_id)
+                else:
+                    owners[value.id] = owners.get(above.id) if above is not None else None
+            above = value
+        return [value for value in self.channel.live() if owners.get(value.id) == trigger.id]
 
     def text(self, message: Mock) -> str:
         return view_text(message.views[-1])

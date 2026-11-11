@@ -69,7 +69,7 @@ async def test_reading_without_arguments_starts_before_the_trigger():
     assert result.success
     assert ids(body) == list(range(40, 60))
     assert body["next_before"] == "40"
-    assert result.note == "讀取了 20 則較早的訊息"
+    assert result.note == "20 則較早的訊息"
 
 
 async def test_reading_before_a_link_pages_backwards():
@@ -114,7 +114,7 @@ async def test_reading_around_a_message_returns_both_sides():
     result, body = await call("read_messages", {"around": link(30), "limit": 5}, context)
     assert ids(body) == [28, 29, 30, 31, 32]
     assert (body["next_before"], body["next_after"]) == ("28", "32")
-    assert result.note == "讀取了一則訊息前後共 5 則訊息"
+    assert result.note == "指定訊息前後共 5 則"
 
 
 async def test_reading_around_the_newest_message_has_no_newer_cursor():
@@ -128,7 +128,7 @@ async def test_reading_around_a_missing_message_fails():
     _, context = setup()
     result, _ = await call("read_messages", {"around": "999"}, context)
     assert not result.success
-    assert result.note == "讀取訊息失敗：找不到這則訊息"
+    assert result.note == "失敗，找不到訊息"
 
 
 def search_hit(message_id: int, content: str) -> list[dict]:
@@ -145,7 +145,7 @@ async def test_search_sends_the_channel_query_and_pages():
     assert (route.method, route.url.endswith(f"/guilds/{GUILD_ID}/messages/search")) == ("GET", True)
     assert http.request.await_args.kwargs["params"] == {"channel_id": str(CHANNEL_ID), "content": "紫色長頸鹿", "offset": 0, "limit": 25}
     assert body == {"total": 30, "messages": [{"id": "9", "author": "Alice", "time": "2026-11-10 12:00", "text": "紫色長頸鹿\n〔圖片〕", "reply_to": "1"}], "next_offset": 25}
-    assert result.note == "搜尋「紫色長頸鹿」，找到 30 則"
+    assert result.note == "紫色長頸鹿，找到 30 則"
 
 
 async def test_search_has_no_next_page_on_the_last_page():
@@ -181,7 +181,7 @@ async def test_search_gives_up_after_three_index_errors(monkeypatch):
     http.request = AsyncMock(return_value={"code": 110000})
     _, context = setup(http=http)
     result, _ = await call("search_messages", {"content": "x"}, context)
-    assert not result.success
+    assert (result.success, result.note) == (False, "失敗，搜尋索引未就緒")
     assert http.request.await_count == 3
 
 
@@ -190,7 +190,7 @@ async def test_search_needs_a_keyword():
     http.request = AsyncMock()
     _, context = setup(http=http)
     result, _ = await call("search_messages", {"content": "  "}, context)
-    assert not result.success
+    assert (result.success, result.note) == (False, "失敗，沒有關鍵字")
     http.request.assert_not_awaited()
 
 
@@ -209,7 +209,7 @@ async def test_viewing_images_returns_at_most_four():
     assert all(item["url"].startswith("data:image/png;base64,") for item in result.images)
     assert body["attached"] == ["1.png", "2.png", "3.png", "4.png"]
     assert body["skipped"] == [{"id": "5", "filename": "5.png", "reason": "超過一次 4 張的上限"}]
-    assert result.note == "查看了 4 張圖片"
+    assert result.note == "4 張圖片"
 
 
 async def test_viewing_images_skips_oversized_and_over_budget_files():
@@ -230,7 +230,7 @@ async def test_viewing_images_skips_oversized_and_over_budget_files():
 async def test_message_without_images_is_a_failure():
     context = with_attachments(attachment(b"text", "notes.txt", "text/plain"))
     result, body = await call("view_message_images", {"message": "5"}, context)
-    assert not result.success
+    assert (result.success, result.note) == (False, "失敗，沒有圖片")
     assert result.images == ()
     assert body["error"] == "這則訊息沒有可查看的圖片"
 
@@ -238,13 +238,20 @@ async def test_message_without_images_is_a_failure():
 async def test_viewing_a_missing_message_reports_not_found():
     context = with_attachments()
     result, _ = await call("view_message_images", {"message": "404"}, context)
-    assert (result.success, result.note) == (False, "查看圖片失敗：找不到訊息")
+    assert (result.success, result.note) == (False, "失敗，找不到訊息")
+
+
+@pytest.mark.parametrize(("value", "note"), [("不是連結", "失敗，看不懂連結"), (link(5, channel_id=999), "失敗，連結在其他頻道")])
+async def test_bad_links_are_reported_with_a_short_reason(value, note):
+    context = with_attachments()
+    result, _ = await call("view_message_images", {"message": value}, context)
+    assert (result.success, result.note) == (False, note)
 
 
 async def test_unknown_tool_is_refused():
     _, context = setup()
     result, _ = await call("delete_messages", {}, context)
-    assert (result.success, result.note) == (False, "使用了不存在的工具")
+    assert (result.success, result.note) == (False, "失敗，沒有這個工具")
 
 
 async def test_slow_tool_times_out(monkeypatch):
@@ -257,12 +264,12 @@ async def test_slow_tool_times_out(monkeypatch):
     http.request = AsyncMock(side_effect=slow)
     _, context = setup(http=http)
     result, _ = await call("search_messages", {"content": "x"}, context)
-    assert (result.success, result.note) == (False, "搜尋訊息失敗：逾時")
+    assert (result.success, result.note) == (False, "失敗，逾時")
 
 
 @pytest.mark.parametrize(
     ("error", "note"),
-    [(http_error(discord.Forbidden, 403), "搜尋訊息失敗：沒有權限"), (http_error(discord.HTTPException, 500), "搜尋訊息失敗：Discord 錯誤")],
+    [(http_error(discord.Forbidden, 403), "失敗，沒有權限"), (http_error(discord.HTTPException, 500), "失敗，Discord 錯誤")],
 )
 async def test_discord_errors_are_reported(error, note):
     http = Mock()
@@ -275,7 +282,7 @@ async def test_discord_errors_are_reported(error, note):
 async def test_bad_arguments_are_reported():
     _, context = setup()
     result, _ = await call("read_messages", {"limit": "很多"}, context)
-    assert (result.success, result.note) == (False, "讀取訊息失敗：參數錯誤")
+    assert (result.success, result.note) == (False, "失敗，參數錯誤")
 
 
 async def test_non_object_arguments_fall_back_to_defaults():

@@ -2,15 +2,15 @@ import asyncio
 
 from horo_dcb import tools
 from horo_dcb.chat import LINK_HINT, STEER_LEAD
-from horo_dcb.render import WAITING_TEXT
 from horo_dcb.store import Entry
 from tests.support import chat_harness
 from tests.support.chat_harness import context_text, data_url, default_answer, input_text, picture, png
 from tests.support.codex_messages import agent, completed, delta, recorded_answer, recorded_turn, started, turn_completed
-from tests.support.discord_fakes import view_text
+from tests.support.discord_fakes import card_of
 from tests.support.waiting import until
 
 harness = chat_harness.harness
+WAITING_CARD = (0x80848E, ["⏳ - **等待中**"])
 
 
 def streaming(hold: asyncio.Event, first: str, rest: str):
@@ -115,12 +115,12 @@ async def test_another_user_waits_for_the_streaming_answer(harness):
     queued = await harness.ask(harness.person(2, "第二位"), "我也想問", reply_to=reply.id)
     await until(lambda: harness.answers(queued))
     waiting = harness.answers(queued)[0]
-    assert harness.text(waiting) == WAITING_TEXT
+    assert card_of(waiting.views[-1]) == WAITING_CARD
     assert len(harness.server.requests("turn/start")) == 1
     hold.set()
     await harness.settle()
     assert harness.answers(queued) == [waiting]
-    assert view_text(waiting.views[0]) == WAITING_TEXT
+    assert card_of(waiting.views[0]) == WAITING_CARD
     assert harness.text(waiting) == default_answer("turn-2")
     assert harness.text(reply) == "第一段第二段"
     assert harness.log.index(("turn/completed", "turn-1")) < harness.log.index(("turn/start", "turn-2"))

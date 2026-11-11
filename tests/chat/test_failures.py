@@ -3,73 +3,106 @@ import json
 
 import pytest
 
+from horo_dcb import chat as chat_module
 from horo_dcb.chat import TOOL_IMAGE_LABEL
-from horo_dcb.render import WAITING_TEXT
 from tests.support import chat_harness
 from tests.support.app_server import Reject
 from tests.support.chat_harness import data_url, default_answer, picture, png, server_request
 from tests.support.codex_messages import agent, answer, completed, delta, note, recorded_answer, recorded_turn, started, tool_item, turn_completed
+from tests.support.discord_fakes import card_of
 from tests.support.waiting import until
 
 harness = chat_harness.harness
+DISCONNECTED = "連線中斷，請再問一次"
+RESTARTING = "機器人重新啟動，請再問一次"
 
 
 def partial(thread, turn):
     return [started(thread, turn, agent("a")), delta(thread, turn, "a", "半截")]
 
 
-def assert_cleaned_up(harness):
-    assert harness.channel.sent
-    assert harness.channel.live() == []
+def assert_failure_card(harness, trigger, reason):
+    [card] = harness.answers(trigger)
+    assert card.reference.message_id == trigger.id
+    assert card_of(card.views[-1]) == (0xF23F43, [f"❌ - **回答失敗**\n`原因` {reason}"])
+    assert harness.store.entry_for(card.id) is None
+    threads = harness.store.directory / "threads.json"
+    assert not threads.exists() or str(card.id) not in json.loads(threads.read_text(encoding="utf-8"))["messages"]
+
+
+def assert_failed(harness, trigger, reason):
+    assert_failure_card(harness, trigger, reason)
+    assert harness.channel.live() == harness.answers(trigger)
     assert all(harness.store.entry_for(value.id) is None for value in harness.channel.sent)
 
 
-@pytest.mark.parametrize("ending", [
-    lambda thread, turn: [*partial(thread, turn), turn_completed(thread, turn, "failed")],
-    lambda thread, turn: [turn_completed(thread, turn)],
+@pytest.mark.parametrize(("ending", "reason"), [
+    (lambda thread, turn: [*partial(thread, turn), turn_completed(thread, turn, "failed")], DISCONNECTED),
+    (lambda thread, turn: [turn_completed(thread, turn)], "沒有產生回答，請再問一次"),
 ], ids=["failed", "empty"])
-async def test_a_turn_that_ends_without_an_answer_is_cleaned_up(harness, ending):
+async def test_a_turn_that_ends_without_an_answer_leaves_a_failure_card(harness, ending, reason):
     harness.script(ending)
-    await harness.ask(harness.person(), "嗨", mention=True)
+    trigger = await harness.ask(harness.person(), "嗨", mention=True)
     await harness.settle()
-    assert_cleaned_up(harness)
+    assert len(harness.channel.sent) == 2
+    assert_failed(harness, trigger, reason)
     assert harness.store.latest_turn("thread-1") is None
+
+
+async def test_a_signed_out_bot_leaves_a_failure_card_without_starting_a_turn(harness):
+    harness.server.handlers["account/read"] = lambda params: {"account": None, "requiresOpenaiAuth": True}
+    trigger = await harness.ask(harness.person(), "嗨", mention=True)
+    await harness.settle()
+    assert harness.server.requests("turn/start") == []
+    assert_failed(harness, trigger, "機器人尚未登入，請通知擁有者")
+
+
+async def test_a_round_past_the_time_limit_leaves_a_failure_card(harness, monkeypatch):
+    monkeypatch.setattr(chat_module, "ROUND_TIMEOUT", 0.5)
+    never = asyncio.Event()
+    harness.script(lambda thread, turn: [*partial(thread, turn), never])
+    trigger = await harness.ask(harness.person(), "嗨", mention=True)
+    await harness.settle()
+    assert harness.server.requests("turn/interrupt") == [{"threadId": "thread-1", "turnId": "turn-1"}]
+    assert_failed(harness, trigger, "逾時，請再問一次")
 
 
 @pytest.mark.parametrize("ending", [
     lambda thread, turn: [*partial(thread, turn), note("error", thread, turn, error={"message": "stream disconnected"}, willRetry=False)],
     lambda thread, turn: [*partial(thread, turn), server_request("item/commandExecution/requestApproval", threadId=thread, turnId=turn, itemId="cmd")],
 ], ids=["error", "unsupported-request"])
-async def test_a_running_turn_that_breaks_is_interrupted_and_cleaned_up(harness, ending):
+async def test_a_running_turn_that_breaks_is_interrupted_and_leaves_a_failure_card(harness, ending):
     harness.script(ending)
-    await harness.ask(harness.person(), "嗨", mention=True)
+    trigger = await harness.ask(harness.person(), "嗨", mention=True)
     await harness.settle()
-    assert_cleaned_up(harness)
+    assert len(harness.channel.sent) == 2
+    assert_failed(harness, trigger, DISCONNECTED)
     assert harness.server.requests("turn/interrupt") == [{"threadId": "thread-1", "turnId": "turn-1"}]
     assert harness.store.latest_turn("thread-1") is None
 
 
-async def test_a_disconnect_mid_answer_is_cleaned_up(harness):
+async def test_a_disconnect_mid_answer_leaves_a_failure_card(harness):
     harness.script(lambda thread, turn: [*partial(thread, turn), harness.server.drop])
-    await harness.ask(harness.person(), "嗨", mention=True)
+    trigger = await harness.ask(harness.person(), "嗨", mention=True)
     await harness.settle()
-    assert_cleaned_up(harness)
+    assert len(harness.channel.sent) == 2
+    assert_failed(harness, trigger, DISCONNECTED)
     assert harness.server.connections == 2
 
 
 async def test_a_message_still_being_sent_when_the_round_aborts_is_deleted(harness):
     harness.channel.send_gate = asyncio.Event()
     harness.script(lambda thread, turn: [note("error", thread, turn, error={"message": "boom"}, willRetry=False)])
-    await harness.ask(harness.person(), "嗨", mention=True)
+    trigger = await harness.ask(harness.person(), "嗨", mention=True)
     await until(lambda: harness.server.requests("turn/interrupt"))
     assert harness.channel.sent == []
     harness.channel.send_gate.set()
     await harness.settle()
-    assert len(harness.channel.sent) == 1
-    assert_cleaned_up(harness)
+    assert len(harness.channel.sent) == 2
+    assert_failed(harness, trigger, DISCONNECTED)
 
 
-async def test_a_frame_deleted_by_a_moderator_stops_the_round(harness):
+async def test_a_frame_deleted_by_a_moderator_stops_the_round_without_a_failure_card(harness):
     resume, never = asyncio.Event(), asyncio.Event()
     harness.script(lambda thread, turn: [*partial(thread, turn), resume, delta(thread, turn, "a", "後半"), never])
     trigger = await harness.ask(harness.person(), "嗨", mention=True)
@@ -81,6 +114,7 @@ async def test_a_frame_deleted_by_a_moderator_stops_the_round(harness):
     assert harness.server.requests("turn/interrupt") == [{"threadId": "thread-1", "turnId": "turn-1"}]
     assert harness.store.entry_for(frame.id) is None
     assert harness.channel.live() == []
+    assert harness.channel.sent == [frame]
 
 
 async def test_the_cursor_advances_only_after_turn_start_succeeds(harness):
@@ -89,11 +123,12 @@ async def test_the_cursor_advances_only_after_turn_start_succeeds(harness):
     await harness.settle()
     assert harness.store.cursor("thread-1") == first.id
     harness.start_reply = lambda params: Reject()
-    await harness.ask(asker, "第二問", reply_to=harness.answers(first)[0].id)
+    second = await harness.ask(asker, "第二問", reply_to=harness.answers(first)[0].id)
     await harness.settle()
     assert len(harness.server.requests("turn/start")) == 2
     assert harness.store.cursor("thread-1") == first.id
-    assert len(harness.channel.live()) == 1
+    assert harness.channel.live() == [*harness.answers(first), *harness.answers(second)]
+    assert_failure_card(harness, second, DISCONNECTED)
 
 
 async def test_a_recorded_tool_call_reads_the_channel_and_answers(harness):
@@ -155,7 +190,7 @@ async def test_a_cancelled_queued_round_does_not_admit_the_next_one_early(harnes
     await until(lambda: harness.answers(leaving) and harness.answers(staying))
     harness.chat.rounds[leaving.id].task.cancel()
     await until(lambda: leaving.id not in harness.chat.rounds)
-    assert harness.answers(leaving) == []
+    assert_failure_card(harness, leaving, RESTARTING)
     hold.set()
     await harness.settle()
     assert harness.text(reply) == "第一段"
@@ -178,22 +213,23 @@ async def test_an_aborted_head_blocks_the_queue_until_its_turn_ends(harness):
     await until(lambda: first.id not in harness.chat.rounds)
     polls = len(harness.server.requests("thread/read"))
     await until(lambda: len(harness.server.requests("thread/read")) >= polls + 3)
-    assert harness.text(harness.answers(queued)[0]) == WAITING_TEXT
+    assert card_of(harness.answers(queued)[0].views[-1]) == (0x80848E, ["⏳ - **等待中**"])
     assert len(harness.server.requests("turn/start")) == 1
     await harness.server.send(turn_completed("thread-1", "turn-1", "interrupted"))
     await harness.settle()
-    assert harness.answers(first) == []
+    assert_failure_card(harness, first, DISCONNECTED)
     assert harness.answer_text(queued) == default_answer("turn-2")
 
 
-async def test_shutdown_stops_running_rounds_and_removes_their_messages(harness):
+async def test_shutdown_stops_running_rounds_and_leaves_a_restart_card(harness):
     hold = asyncio.Event()
     harness.script(lambda thread, turn: [*partial(thread, turn), hold])
     trigger = await harness.ask(harness.person(), "嗨", mention=True)
     await until(lambda: harness.answers(trigger) and harness.text(harness.answers(trigger)[0]) == "半截")
     await asyncio.wait_for(harness.chat.shutdown(), 3)
     assert harness.chat.rounds == {}
-    assert_cleaned_up(harness)
+    assert len(harness.channel.sent) == 2
+    assert_failed(harness, trigger, RESTARTING)
     assert harness.server.requests("turn/interrupt") == [{"threadId": "thread-1", "turnId": "turn-1"}]
     late = await harness.ask(harness.person(), "還在嗎", mention=True)
     assert late.id not in harness.chat.rounds
