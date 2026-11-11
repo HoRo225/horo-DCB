@@ -3,15 +3,14 @@ import json
 import re
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import datetime
 
 import discord
 from discord.http import HTTPClient, Route
 
+from .content import IMAGE_TYPES, image_input, is_image, message_text, stamp
 
-TAIPEI = timezone(timedelta(hours=8))
-IMAGE_MIMES = ("image/png", "image/jpeg", "image/webp", "image/gif")
-IMAGE_SUFFIXES = ("png", "jpg", "jpeg", "webp", "gif")
+
 LINK = re.compile(r"https?://(?:(?:ptb|canary)\.)?discord(?:app)?\.com/channels/(\d+|@me)/(\d+)/(\d+)")
 TIMEOUT = 15
 READ_LIMIT = 50
@@ -85,8 +84,6 @@ class ToolContext:
     channel: discord.TextChannel
     anchor: discord.Message
     http: HTTPClient
-    text_of: Callable[[discord.Message], str]
-    decode_image: Callable[[bytes], dict | None]
 
 
 @dataclass(frozen=True)
@@ -95,11 +92,6 @@ class ToolResult:
     text: str
     note: str
     images: tuple[dict, ...] = ()
-
-
-def is_image(attachment: discord.Attachment) -> bool:
-    mime = (attachment.content_type or "").split(";")[0].lower()
-    return mime in IMAGE_MIMES or attachment.filename.rsplit(".", 1)[-1].lower() in IMAGE_SUFFIXES
 
 
 def dump(value: dict) -> str:
@@ -129,13 +121,9 @@ def target_id(value, context: ToolContext) -> int:
     return int(message)
 
 
-def stamp(moment: datetime) -> str:
-    return moment.astimezone(TAIPEI).strftime("%Y-%m-%d %H:%M")
-
-
 def message_entry(message: discord.Message, context: ToolContext) -> dict:
     images = sum(1 for attachment in message.attachments if is_image(attachment))
-    text = "\n".join(part for part in (clip(context.text_of(message), READ_TEXT_CHARS), "〔圖片〕" * images) if part)
+    text = "\n".join(part for part in (clip(message_text(message), READ_TEXT_CHARS), "〔圖片〕" * images) if part)
     entry = {"id": str(message.id), "author": message.author.display_name, "time": stamp(message.created_at), "text": text}
     if message.reference is not None and message.reference.message_id is not None:
         entry["reply_to"] = str(message.reference.message_id)
@@ -155,7 +143,7 @@ def raw_texts(components: list | None) -> list[str]:
 
 def raw_entry(message: dict) -> dict:
     author = message.get("author") or {}
-    images = sum(1 for attachment in message.get("attachments") or () if (attachment.get("content_type") or "").split(";")[0].lower() in IMAGE_MIMES)
+    images = sum(1 for attachment in message.get("attachments") or () if (attachment.get("content_type") or "").split(";")[0].lower() in IMAGE_TYPES.values())
     text = "\n".join(text for text in [message.get("content") or "", *raw_texts(message.get("components"))] if text.strip())
     text = "\n".join(part for part in (clip(text, SEARCH_TEXT_CHARS), "〔圖片〕" * images) if part)
     entry = {"id": str(message.get("id")), "author": author.get("global_name") or author.get("username") or "", "time": stamp(datetime.fromisoformat(message["timestamp"])), "text": text}
@@ -238,7 +226,7 @@ async def view_message_images(arguments: dict, context: ToolContext) -> ToolResu
             reason = "超過這次 16 MiB 的總量"
         else:
             data = await attachment.read()
-            item = None if len(data) > min(IMAGE_BYTES, budget) else await asyncio.to_thread(context.decode_image, data)
+            item = None if len(data) > min(IMAGE_BYTES, budget) else await asyncio.to_thread(image_input, data)
             budget -= min(len(data), budget)
             if item is None:
                 reason = "圖片格式不支援或實際大小超過上限"

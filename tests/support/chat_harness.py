@@ -9,7 +9,7 @@ from unittest.mock import Mock
 import pytest
 from PIL import Image
 
-from horo_dcb import chat as chat_module
+from horo_dcb import render as render_module
 from horo_dcb.chat import Chat
 from horo_dcb.store import Store
 from tests.support.app_server import FakeAppServer
@@ -126,7 +126,7 @@ class ChatHarness:
 
 @pytest.fixture
 async def harness(app_server, codex, tmp_path, monkeypatch):
-    monkeypatch.setattr(chat_module, "EDIT_INTERVAL", 0)
+    monkeypatch.setattr(render_module, "EDIT_INTERVAL", 0)
     store = Store(tmp_path)
     await store.open()
     await store.update_settings(ai_channel_ids=[CHANNEL_ID], allowed_role_ids=[ROLE], instructions=INSTRUCTIONS)

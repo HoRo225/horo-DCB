@@ -3,7 +3,8 @@ import json
 
 import pytest
 
-from horo_dcb.chat import TOOL_IMAGE_LABEL, WAITING_TEXT
+from horo_dcb.chat import TOOL_IMAGE_LABEL
+from horo_dcb.render import WAITING_TEXT
 from tests.support import chat_harness
 from tests.support.app_server import Reject
 from tests.support.chat_harness import data_url, default_answer, picture, png, server_request

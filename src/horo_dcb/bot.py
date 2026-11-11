@@ -6,9 +6,10 @@ from discord import app_commands
 from discord.ext import commands
 
 from . import log_event
-from .chat import ALLOWED_MENTIONS, Chat
+from .chat import Chat
 from .codex import CodexClient
 from .console import Console
+from .render import ALLOWED_MENTIONS
 from .store import Store
 from .voice import Voice
 

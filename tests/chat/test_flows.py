@@ -1,7 +1,8 @@
 import asyncio
 
 from horo_dcb import tools
-from horo_dcb.chat import LINK_HINT, STEER_LEAD, WAITING_TEXT
+from horo_dcb.chat import LINK_HINT, STEER_LEAD
+from horo_dcb.render import WAITING_TEXT
 from horo_dcb.store import Entry
 from tests.support import chat_harness
 from tests.support.chat_harness import context_text, data_url, default_answer, input_text, picture, png

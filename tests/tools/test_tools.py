@@ -8,7 +8,6 @@ import pytest
 from PIL import Image
 
 from horo_dcb import tools
-from horo_dcb.chat import image_input, message_text
 from tests.support.discord_fakes import CHANNEL_ID, GUILD_ID, Channel, attachment, http_error, member
 
 ALICE = member(1, "Alice")
@@ -30,7 +29,7 @@ def setup(count: int = 70, anchor_id: int = 60, http=None) -> tuple[Channel, too
     for message_id in range(1, count + 1):
         channel.post(message_id, ALICE, f"第 {message_id} 則")
     anchor = next(value for value in channel.messages if value.id == anchor_id)
-    return channel, tools.ToolContext(channel.mock, anchor, http or Mock(), message_text, image_input)
+    return channel, tools.ToolContext(channel.mock, anchor, http or Mock())
 
 
 async def call(name: str, arguments, context: tools.ToolContext) -> tuple[tools.ToolResult, dict]:
@@ -92,7 +91,7 @@ async def test_message_entries_carry_author_time_replies_and_image_markers():
     channel.post(1, ALICE, "原文")
     channel.post(2, member(2, "Bob"), "x" * 1500, reply_to=1, attachments=(attachment(png(), attachment_id=7), attachment(b"", "notes.txt", "text/plain", attachment_id=8)))
     trigger = channel.post(3, ALICE, "問題")
-    context = tools.ToolContext(channel.mock, trigger, Mock(), message_text, image_input)
+    context = tools.ToolContext(channel.mock, trigger, Mock())
     _, body = await call("read_messages", {}, context)
     assert body["messages"][1] == {"id": "2", "author": "Bob", "time": "2026-11-10 12:02", "text": "x" * 1000 + "…（截斷）\n〔圖片〕", "reply_to": "1"}
 
@@ -102,7 +101,7 @@ async def test_reading_stops_before_the_byte_budget():
     for message_id in range(1, 21):
         channel.post(message_id, ALICE, "長" * 1000)
     trigger = channel.post(21, ALICE, "問題")
-    context = tools.ToolContext(channel.mock, trigger, Mock(), message_text, image_input)
+    context = tools.ToolContext(channel.mock, trigger, Mock())
     result, body = await call("read_messages", {}, context)
     assert len(result.text.encode()) <= tools.READ_BYTES
     assert ids(body) == list(range(21 - len(body["messages"]), 21))
@@ -199,7 +198,7 @@ def with_attachments(*files: Mock) -> tools.ToolContext:
     channel = Channel()
     channel.post(5, member(2, "Bob"), "圖", attachments=files)
     trigger = channel.post(6, ALICE, "問題")
-    return tools.ToolContext(channel.mock, trigger, Mock(), message_text, image_input)
+    return tools.ToolContext(channel.mock, trigger, Mock())
 
 
 async def test_viewing_images_returns_at_most_four():
