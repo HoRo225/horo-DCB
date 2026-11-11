@@ -12,6 +12,7 @@ def log_event(code: str, error: BaseException | None = None, /, **metrics: int |
         if key in LOG_FIELDS and isinstance(value, (int, float, bool)):
             event[key] = value
     if error is not None:
+        event["error_type"] = type(error).__name__
         event["locations"] = [
             {"file": Path(frame.filename).name, "line": frame.lineno, "function": frame.name}
             for frame in traceback.extract_tb(error.__traceback__)
