@@ -86,7 +86,8 @@ def deploy(version: str) -> None:
 
     step(f"保存 {current} 的容器日誌")
     logs = run("docker", "compose", "-f", str(record_path(current)), "logs", "--no-color", "--timestamps", capture=True)
-    (DEPLOYS / f"{current}.log").write_text(logs)
+    with (DEPLOYS / f"{current}.log").open("a") as file:
+        file.write(logs)
 
     step("快轉更新 main")
     if run("git", "symbolic-ref", "--short", "HEAD", capture=True).strip() != "main":
