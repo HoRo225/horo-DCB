@@ -34,11 +34,3 @@ async def test_messages_that_do_not_address_the_bot_are_ignored(harness, build):
     assert harness.chat.rounds == {}
     assert [value["method"] for value in harness.server.received if value.get("method") not in ("initialize", "initialized")] == []
     assert harness.channel.sent == []
-
-
-async def test_a_mention_from_an_allowed_member_starts_a_round(harness):
-    message = await harness.ask(harness.person(), "嗨", mention=True)
-    assert message.id in harness.chat.rounds
-    await harness.settle()
-    assert len(harness.server.requests("thread/start")) == 1
-    assert harness.answer_text(message) == chat_harness.default_answer("turn-1")

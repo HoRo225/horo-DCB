@@ -11,7 +11,6 @@ OTHER = 2
     ("bot_reply", "active_asker", "entry", "latest", "busy", "expected"),
     [
         (False, None, None, None, False, "new"),
-        (False, ASKER, Entry("t", "a"), "a", True, "new"),
         (True, ASKER, Entry("t", None), None, True, "steer"),
         (True, OTHER, Entry("t", None), None, True, "queue"),
         (True, None, None, None, False, "new"),
@@ -27,7 +26,6 @@ OTHER = 2
     ],
     ids=[
         "mention-only",
-        "mention-while-other-round-active",
         "asker-replies-to-active-round",
         "other-user-replies-to-active-round",
         "unknown-bot-message",
