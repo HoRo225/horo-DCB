@@ -10,13 +10,16 @@ import pytest
 from horo_dcb.console import Console
 from horo_dcb.store import Store
 from horo_dcb.voice import Voice
-from tests.support.app_server import Reject
+from tests.support.app_server import MODEL, Reject
 from tests.support.discord_fakes import Guild, http_error, member, view_text
 from tests.support.waiting import until
 
 OWNER_ONLY = "只有擁有者能使用"
 NO_PLACEHOLDER = "\u200b"
 MODULES = ["AI 對話", "臨時語音"]
+MODELS = ["GPT Test", "GPT Mini"]
+EFFORTS = ["低", "中", "高"]
+MINI = {"id": "gpt-mini", "displayName": "GPT Mini", "isDefault": False, "defaultReasoningEffort": "low", "supportedReasoningEfforts": [{"reasoningEffort": "low"}, {"reasoningEffort": "medium"}]}
 DEVICE = {"loginId": "L1", "verificationUrl": "https://example.test/device", "userCode": "ABCD-EFGH"}
 LIFETIME = timedelta(minutes=14, seconds=50)
 OPENED = discord.utils.utcnow()
@@ -41,7 +44,7 @@ class Interaction:
         self.user = user or member()
         self.data = {"custom_id": custom_id} if custom_id is not None else {}
         self.created_at = created_at
-        self.response = SimpleNamespace(defer=AsyncMock(), send_message=AsyncMock())
+        self.response = SimpleNamespace(defer=AsyncMock(), send_message=AsyncMock(), send_modal=AsyncMock())
         self.followup = SimpleNamespace(send=AsyncMock())
         self.deleted = False
         self.contents: list[str] = []
@@ -115,10 +118,28 @@ def menu(view: discord.ui.LayoutView, kind: discord.ChannelType) -> discord.ui.C
     return next(item for item in view.walk_children() if isinstance(item, discord.ui.ChannelSelect) and item.channel_types == [kind])
 
 
-async def switch(interaction: Interaction, name: str) -> None:
-    picker = next(item for item in interaction.views[-1].walk_children() if isinstance(item, discord.ui.Select) and [option.label for option in item.options] == MODULES)
-    picker._values = [next(option.value for option in picker.options if option.label == name)]
+def role_menu(view: discord.ui.LayoutView) -> discord.ui.RoleSelect:
+    return next(item for item in view.walk_children() if isinstance(item, discord.ui.RoleSelect))
+
+
+def defaults(select: discord.ui.ChannelSelect | discord.ui.RoleSelect) -> list[int]:
+    return [int(value["id"]) for value in select.to_component_dict().get("default_values", [])]
+
+
+async def pick(interaction: Interaction, labels: list[str], name: str | None) -> None:
+    picker = next(item for item in interaction.views[-1].walk_children() if isinstance(item, discord.ui.Select) and [option.label for option in item.options] == labels)
+    picker._values = [option.value for option in picker.options if option.label == name]
     await picker.callback(Interaction())
+
+
+async def switch(interaction: Interaction, name: str) -> None:
+    await pick(interaction, MODULES, name)
+
+
+async def edit_instructions(interaction: Interaction) -> discord.ui.Modal:
+    presser = Interaction(custom_id="instructions")
+    await button(interaction.views[-1], "編輯").callback(presser)
+    return presser.response.send_modal.await_args.args[0]
 
 
 @pytest.fixture
@@ -596,7 +617,7 @@ async def test_the_voice_hub_menu_saves_hubs_and_seats_whoever_waits(bot, store,
     presser.guild = guild.mock
     await hubs.callback(presser)
     assert (await store.settings()).voice_hub_ids == {300}
-    assert [int(value["id"]) for value in menu(interaction.views[-1], discord.ChannelType.voice).to_component_dict()["default_values"]] == [300]
+    assert defaults(menu(interaction.views[-1], discord.ChannelType.voice)) == [300]
     assert "已啟用，1 個入口" in interaction.screen
     assert [room.name for room in guild.created] == ["▍愛麗絲的房間"]
     assert guild.moves == [(1, guild.created[0].id)]
@@ -618,3 +639,78 @@ async def test_clearing_the_voice_hub_menu_stops_opening_rooms(bot, store, conso
     assert (await store.settings()).voice_hub_ids == frozenset()
     assert "未設定入口，功能停用中" in interaction.screen
     assert guild.created == []
+
+
+@pytest.mark.parametrize(
+    ("effort", "choice", "saved", "shown"),
+    [
+        ("low", "GPT Mini", ("gpt-mini", "low"), [["GPT Mini"], ["低"]]),
+        ("high", "GPT Mini", ("gpt-mini", None), [["GPT Mini"], []]),
+        ("high", None, (None, "high"), [[], ["高"]]),
+    ],
+    ids=["effort-kept", "effort-dropped", "cleared"],
+)
+async def test_the_model_menu_saves_the_model_and_drops_an_effort_it_lacks(app_server, store, console, effort, choice, saved, shown):
+    app_server.handlers["model/list"] = lambda params: {"data": [MODEL, MINI], "nextCursor": None}
+    await store.update_settings(model="gpt-test", effort=effort)
+    interaction = await opened(console)
+    await pick(interaction, MODELS, choice)
+    settings = await store.settings()
+    assert (settings.model, settings.effort) == saved
+    assert chosen(interaction.views[-1])[1:] == shown
+
+
+async def test_the_effort_menu_saves_and_clears_the_effort(store, console):
+    interaction = await opened(console)
+    await pick(interaction, EFFORTS, "高")
+    assert (await store.settings()).effort == "high"
+    assert chosen(interaction.views[-1])[-1] == ["高"]
+    await pick(interaction, EFFORTS, None)
+    assert (await store.settings()).effort is None
+    assert chosen(interaction.views[-1])[-1] == []
+
+
+@pytest.mark.parametrize(
+    ("find", "field"),
+    [(lambda view: menu(view, discord.ChannelType.text), "ai_channel_ids"), (role_menu, "allowed_role_ids")],
+    ids=["channels", "roles"],
+)
+async def test_the_target_menus_save_and_clear_who_may_use_the_bot(store, console, find, field):
+    interaction = await opened(console)
+    select = find(interaction.views[-1])
+    select._values = [discord.Object(200), discord.Object(201)]
+    await select.callback(Interaction())
+    assert getattr(await store.settings(), field) == {200, 201}
+    assert sorted(defaults(find(interaction.views[-1]))) == [200, 201]
+    select = find(interaction.views[-1])
+    select._values = []
+    await select.callback(Interaction())
+    assert getattr(await store.settings(), field) == frozenset()
+    assert defaults(find(interaction.views[-1])) == []
+
+
+@pytest.mark.parametrize(
+    ("typed", "saved", "shown"),
+    [("喵喵喵", "喵喵喵", "已設定 3 字，只套用到新對話"), ("\n新的指示\n", "新的指示", "已設定 4 字，只套用到新對話"), ("  \n", None, "未設定")],
+    ids=["unchanged", "edited", "blank"],
+)
+async def test_submitting_the_instructions_saves_what_was_typed(store, console, typed, saved, shown):
+    await store.update_settings(instructions="喵喵喵")
+    interaction = await opened(console)
+    modal = await edit_instructions(interaction)
+    assert modal.text.default == "喵喵喵"
+    modal.text._value = typed
+    await modal.on_submit(Interaction())
+    assert (await store.settings()).instructions == saved
+    assert f"-# 固定指示\n{shown}" in interaction.screen
+
+
+async def test_a_non_owner_submitting_the_instructions_changes_nothing(bot, store, console):
+    interaction = await opened(console)
+    modal = await edit_instructions(interaction)
+    modal.text._value = "偷改"
+    bot.is_owner.return_value = False
+    presser = Interaction()
+    await modal.on_submit(presser)
+    presser.followup.send.assert_awaited_once_with(OWNER_ONLY, ephemeral=True)
+    assert (await store.settings()).instructions is None
