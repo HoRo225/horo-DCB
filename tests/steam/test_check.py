@@ -12,7 +12,7 @@ from tests.support.discord_fakes import CHANNEL_ID, Channel, Client, http_error,
 from tests.support.steam_items import game, paid
 from tests.support.waiting import until
 
-STEAM = "<:lgsteam:1559202444884578404>"
+STEAM = "<:steamlogo:1570464394452668569>"
 NAME = "Hunting Simulator 3 - Classic American Hunter Pack"
 DESCRIPTION = "在這款開放世界遊戲中，帶上忠誠的愛犬，暢享狩獵激情！從官方品牌中選擇裝備，探索荒野，尋找下一個獵物。"
 HEADER = "https://shared.akamai.steamstatic.com/store_item_assets/steam/apps/4693960/d37423b5b7941444dfe63d8b185ed680ff03009d/header.jpg?t=1793269525"

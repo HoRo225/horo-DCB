@@ -4,7 +4,7 @@ from horo_dcb.steam import Offer, ended_card, live_card
 from horo_dcb.store import Post, Promotion
 from tests.support.discord_fakes import layout
 
-STEAM = "<:lgsteam:1559202444884578404>"
+STEAM = "<:steamlogo:1570464394452668569>"
 PURPLE, GREY = 0x7F77DD, 0x80848E
 HEADER = "https://shared.akamai.steamstatic.com/store_item_assets/steam/apps/785890/abc/header.jpg?t=1"
 OFFER = Offer(1782986, 785890, "Hexologic", "數獨與六角形的解謎遊戲。", HEADER, "NT$ 102.00", 1793466000)
