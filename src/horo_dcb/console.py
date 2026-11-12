@@ -12,6 +12,7 @@ from discord import ui
 
 from . import log_event
 from .codex import choose_model
+from .steam import Health, Steam
 from .store import Settings
 
 if TYPE_CHECKING:
@@ -140,6 +141,21 @@ def voice_status(settings: Settings) -> tuple[Level, str]:
     if settings.voice_hub_ids:
         return Level.OK, f"已啟用，{len(settings.voice_hub_ids)} 個入口"
     return Level.UNKNOWN, "未設定入口，功能停用中"
+
+
+def steam_status(settings: Settings, steam: Steam) -> tuple[Level, str]:
+    if settings.steam_channel_id is None:
+        return Level.UNKNOWN, "未設定頻道，功能停用中"
+    if steam.health is Health.UNSENDABLE:
+        return Level.BAD, "無法在通知頻道發訊息"
+    if steam.health is Health.UNREACHABLE:
+        return Level.WARN, "Steam 暫時連不上，下次檢查會重試"
+    return Level.OK, "已啟用" if steam.checked_at is None else f"已啟用，<t:{steam.checked_at}:R>檢查"
+
+
+def steam_summary(console: Console, settings: Settings) -> str:
+    level, status = steam_status(settings, console.bot.steam)
+    return "已啟用" if level is Level.OK else status
 
 
 def instructions_text(instructions: str | None) -> str:
@@ -288,11 +304,37 @@ def voice_page(panel: ConsolePanel, settings: Settings) -> Page:
     return Page(level, [ui.TextDisplay(status), ui.TextDisplay("-# 入口頻道"), ui.ActionRow(hubs)])
 
 
+def steam_page(panel: ConsolePanel, settings: Settings) -> Page:
+    console = panel.console
+    level, status = steam_status(settings, console.bot.steam)
+    channels = ui.ChannelSelect(channel_types=[discord.ChannelType.text], placeholder=NO_PLACEHOLDER, min_values=0, max_values=1, default_values=[discord.Object(settings.steam_channel_id)] if settings.steam_channel_id is not None else [])
+
+    async def channel_callback(interaction: discord.Interaction) -> None:
+        await console.bot.store.update_settings(steam_channel_id=channels.values[0].id if channels.values else None)
+        await console.bot.steam.check()
+
+    channels.callback = channel_callback
+    roles = ui.RoleSelect(placeholder=NO_PLACEHOLDER, min_values=0, max_values=25, default_values=[discord.Object(value) for value in settings.steam_role_ids])
+
+    async def role_callback(interaction: discord.Interaction) -> None:
+        if any(value.id == interaction.guild_id for value in roles.values):
+            panel.notice = Note("不能選 @everyone", failed=True)
+            await panel.refresh()
+            return
+        panel.notice = None
+        await console.bot.store.update_settings(steam_role_ids=[value.id for value in roles.values])
+        await console.refresh_panels()
+
+    roles.callback = role_callback
+    return Page(level, [ui.TextDisplay(status), ui.TextDisplay("-# 通知頻道"), ui.ActionRow(channels), ui.TextDisplay("-# 提及的身分組"), ui.ActionRow(roles)])
+
+
 MODULES = {
     module.key: module
     for module in (
         Module("ai", "AI 對話", lambda console, settings: account_status(console), ai_page),
         Module("voice", "臨時語音", lambda console, settings: voice_status(settings)[1], voice_page),
+        Module("steam", "Steam 免費遊戲", steam_summary, steam_page),
     )
 }
 
@@ -303,6 +345,7 @@ class ConsolePanel(ui.LayoutView):
         self.console = console
         self.interaction = interaction
         self.module = "ai"
+        self.notice: Note | None = None
         self.deadline = interaction.created_at + PANEL_LIFETIME
         self.expires_at = int(self.deadline.timestamp())
         self.expiry: asyncio.Task | None = None
@@ -337,14 +380,16 @@ class ConsolePanel(ui.LayoutView):
         settings = await self.console.bot.store.settings()
         self.clear_items()
         page = MODULES[self.module].page(self, settings)
+        notice = [] if self.notice is None else [ui.TextDisplay(self.notice.render())]
         switch = ui.Select(options=[discord.SelectOption(label=module.name, value=module.key, description=module.summary(self.console, settings)[:100], default=module.key == self.module) for module in MODULES.values()])
 
         async def switch_callback(interaction: discord.Interaction) -> None:
             self.module = switch.values[0]
+            self.notice = None
             await self.refresh()
 
         switch.callback = switch_callback
-        self.add_item(ui.Container(ui.TextDisplay("## 控制台"), ui.ActionRow(switch), *page.items, ui.Separator(), ui.TextDisplay(f"-# 面板在 <t:{self.expires_at}:R>失效"), accent_colour=page.level.value))
+        self.add_item(ui.Container(ui.TextDisplay("## 控制台"), ui.ActionRow(switch), *page.items, *notice, ui.Separator(), ui.TextDisplay(f"-# 面板在 <t:{self.expires_at}:R>失效"), accent_colour=page.level.value))
 
     async def refresh(self) -> None:
         try:

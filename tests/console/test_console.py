@@ -1,5 +1,7 @@
 import asyncio
 import itertools
+import re
+import time
 from datetime import datetime, timedelta
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
@@ -8,15 +10,17 @@ import discord
 import pytest
 
 from horo_dcb.console import Console
+from horo_dcb.steam import Steam
 from horo_dcb.store import Store
 from horo_dcb.voice import Voice
 from tests.support.app_server import MODEL, Reject
-from tests.support.discord_fakes import Guild, http_error, member, view_text
+from tests.support.discord_fakes import CHANNEL_ID, GUILD_ID, Channel, Client, Guild, http_error, member, view_text
+from tests.support.steam_items import game
 from tests.support.waiting import until
 
 OWNER_ONLY = "只有擁有者能使用"
 NO_PLACEHOLDER = "\u200b"
-MODULES = ["AI 對話", "臨時語音"]
+MODULES = ["AI 對話", "臨時語音", "Steam 免費遊戲"]
 MODELS = ["GPT Test", "GPT Mini"]
 EFFORTS = ["低", "中", "高"]
 MINI = {"id": "gpt-mini", "displayName": "GPT Mini", "isDefault": False, "defaultReasoningEffort": "low", "supportedReasoningEfforts": [{"reasoningEffort": "low"}, {"reasoningEffort": "medium"}]}
@@ -43,6 +47,7 @@ class Interaction:
     def __init__(self, user: Mock | None = None, custom_id: str | None = None, created_at: datetime = OPENED) -> None:
         self.user = user or member()
         self.data = {"custom_id": custom_id} if custom_id is not None else {}
+        self.guild_id = GUILD_ID
         self.created_at = created_at
         self.response = SimpleNamespace(defer=AsyncMock(), send_message=AsyncMock(), send_modal=AsyncMock())
         self.followup = SimpleNamespace(send=AsyncMock())
@@ -150,13 +155,21 @@ async def store(tmp_path):
 
 
 @pytest.fixture
-async def bot(codex, store):
-    return SimpleNamespace(codex=codex, store=store, is_owner=AsyncMock(return_value=True))
+def channel():
+    return Channel()
+
+
+@pytest.fixture
+async def bot(codex, store, channel, steam_server):
+    value = SimpleNamespace(codex=codex, store=store, is_owner=AsyncMock(return_value=True), get_channel=Client(channel).get_channel)
+    value.steam = Steam(value, search_url=steam_server.url("/search"), items_url=steam_server.url("/items"))
+    return value
 
 
 @pytest.fixture
 async def console(bot):
     value = Console(bot)
+    bot.console = value
     value.start()
     yield value
     await value.close()
@@ -421,7 +434,7 @@ async def test_a_console_opened_while_codex_is_down_explains_the_outage(app_serv
         interaction = await opened(console)
     assert interaction.screen.splitlines() == ["## 控制台", *DISCONNECTED, "-# 可使用的頻道", "-# 可使用的身分組", "-# 固定指示", "未設定", FOOTER]
     view = interaction.views[-1]
-    assert summaries(view) == ["Codex 未連線", "未設定入口，功能停用中"]
+    assert summaries(view) == ["Codex 未連線", "未設定入口，功能停用中", "未設定頻道，功能停用中"]
     assert selects(view) == [MODULES]
     assert account_buttons(view) == ["重新整理"]
     assert interaction.colour == RED
@@ -555,7 +568,7 @@ async def test_a_non_owner_opening_the_instructions_is_refused(bot, console):
 async def test_the_switch_menu_summarises_each_module(store, console):
     interaction = await opened(console)
     options = next(payload["options"] for payload in select_payloads(interaction.views[-1]) if payload["type"] == 3)
-    assert [(option["label"], option.get("description")) for option in options] == [("AI 對話", "已登入 ChatGPT，方案：plus"), ("臨時語音", "未設定入口，功能停用中")]
+    assert [(option["label"], option.get("description")) for option in options] == [("AI 對話", "已登入 ChatGPT，方案：plus"), ("臨時語音", "未設定入口，功能停用中"), ("Steam 免費遊戲", "未設定頻道，功能停用中")]
     assert not any("emoji" in option for option in options)
 
 
@@ -714,3 +727,136 @@ async def test_a_non_owner_submitting_the_instructions_changes_nothing(bot, stor
     await modal.on_submit(presser)
     presser.followup.send.assert_awaited_once_with(OWNER_ONLY, ephemeral=True)
     assert (await store.settings()).instructions is None
+
+
+STEAM_OFF = "未設定頻道，功能停用中"
+EVERYONE = "不能選 @everyone"
+
+
+async def on_steam(console) -> Interaction:
+    interaction = await opened(console)
+    await switch(interaction, "Steam 免費遊戲")
+    return interaction
+
+
+def checked(line: str, since: int) -> bool:
+    found = re.fullmatch(r"已啟用，<t:(\d+):R>檢查", line)
+    return found is not None and since <= int(found.group(1)) <= time.time()
+
+
+async def test_the_steam_page_starts_switched_off(console):
+    interaction = await on_steam(console)
+    assert interaction.screen.splitlines() == ["## 控制台", STEAM_OFF, "-# 通知頻道", "-# 提及的身分組", FOOTER]
+    assert interaction.colour == GREY
+    assert chosen(interaction.views[-1]) == [["Steam 免費遊戲"]]
+    assert placeholders(interaction.views[-1]) == [None, NO_PLACEHOLDER, NO_PLACEHOLDER]
+    channels = menu(interaction.views[-1], discord.ChannelType.text).to_component_dict()
+    assert (channels["min_values"], channels["max_values"]) == (0, 1)
+    roles = role_menu(interaction.views[-1]).to_component_dict()
+    assert (roles["min_values"], roles["max_values"]) == (0, 25)
+
+
+async def test_choosing_the_steam_channel_saves_it_and_posts_running_offers_at_once(store, channel, steam_server, console):
+    steam_server.offer(game())
+    interaction = await on_steam(console)
+    since = int(time.time())
+    channels = menu(interaction.views[-1], discord.ChannelType.text)
+    channels._values = [discord.Object(CHANNEL_ID)]
+    await channels.callback(Interaction())
+    assert (await store.settings()).steam_channel_id == CHANNEL_ID
+    assert defaults(menu(interaction.views[-1], discord.ChannelType.text)) == [CHANNEL_ID]
+    assert len(channel.sent) == 1
+    assert checked(interaction.screen.splitlines()[1], since)
+    assert interaction.colour == GREEN
+
+
+async def test_clearing_the_steam_channel_switches_it_off_even_after_a_failure(bot, store, steam_server, console):
+    await store.update_settings(steam_channel_id=999)
+    await bot.steam.check()
+    interaction = await on_steam(console)
+    assert interaction.screen.splitlines()[1] == "無法在通知頻道發訊息"
+    searches = len(steam_server.searches)
+    channels = menu(interaction.views[-1], discord.ChannelType.text)
+    channels._values = []
+    await channels.callback(Interaction())
+    assert (await store.settings()).steam_channel_id is None
+    assert defaults(menu(interaction.views[-1], discord.ChannelType.text)) == []
+    assert interaction.screen.splitlines()[1] == STEAM_OFF
+    assert interaction.colour == GREY
+    assert len(steam_server.searches) == searches
+
+
+async def test_the_steam_role_menu_saves_and_clears_who_is_mentioned(store, console):
+    interaction = await on_steam(console)
+    roles = role_menu(interaction.views[-1])
+    roles._values = [discord.Object(201), discord.Object(202)]
+    await roles.callback(Interaction())
+    assert (await store.settings()).steam_role_ids == {201, 202}
+    assert sorted(defaults(role_menu(interaction.views[-1]))) == [201, 202]
+    roles = role_menu(interaction.views[-1])
+    roles._values = []
+    await roles.callback(Interaction())
+    assert (await store.settings()).steam_role_ids == frozenset()
+    assert defaults(role_menu(interaction.views[-1])) == []
+
+
+async def test_choosing_everyone_is_refused_on_that_panel_only(store, console):
+    await store.update_settings(steam_role_ids=[201])
+    interaction = await on_steam(console)
+    other = await on_steam(console)
+    roles = role_menu(interaction.views[-1])
+    roles._values = [discord.Object(GUILD_ID), discord.Object(202)]
+    await roles.callback(Interaction())
+    assert (await store.settings()).steam_role_ids == {201}
+    assert defaults(role_menu(interaction.views[-1])) == [201]
+    assert interaction.screen.splitlines()[-2] == EVERYONE
+    await console.refresh_panels()
+    assert interaction.screen.splitlines()[-2] == EVERYONE
+    assert EVERYONE not in other.screen
+    roles = role_menu(interaction.views[-1])
+    roles._values = [discord.Object(202)]
+    await roles.callback(Interaction())
+    assert (await store.settings()).steam_role_ids == {202}
+    assert EVERYONE not in interaction.screen
+
+
+async def test_leaving_the_steam_page_drops_the_refusal(console):
+    interaction = await on_steam(console)
+    roles = role_menu(interaction.views[-1])
+    roles._values = [discord.Object(GUILD_ID)]
+    await roles.callback(Interaction())
+    assert EVERYONE in interaction.screen
+    await switch(interaction, "AI 對話")
+    await switch(interaction, "Steam 免費遊戲")
+    assert EVERYONE not in interaction.screen
+
+
+@pytest.mark.parametrize(
+    ("channel_id", "unreachable", "status", "colour"),
+    [
+        (None, False, STEAM_OFF, GREY),
+        (999, False, "無法在通知頻道發訊息", RED),
+        (CHANNEL_ID, True, "Steam 暫時連不上，下次檢查會重試", YELLOW),
+    ],
+    ids=["no-channel", "unsendable", "unreachable"],
+)
+async def test_the_steam_status_follows_the_last_check(bot, store, steam_server, console, channel_id, unreachable, status, colour):
+    await store.update_settings(steam_channel_id=channel_id)
+    if unreachable:
+        steam_server.statuses["search"] = 503
+    await bot.steam.check()
+    interaction = await on_steam(console)
+    assert interaction.screen.splitlines()[1] == status
+    assert interaction.colour == colour
+    assert summaries(interaction.views[-1])[2] == status
+
+
+async def test_an_enabled_steam_module_shows_when_it_last_checked(bot, store, console):
+    await store.update_settings(steam_channel_id=CHANNEL_ID)
+    interaction = await on_steam(console)
+    assert interaction.screen.splitlines()[1] == "已啟用"
+    assert interaction.colour == GREEN
+    since = int(time.time())
+    await bot.steam.check()
+    assert checked(interaction.screen.splitlines()[1], since)
+    assert summaries(interaction.views[-1])[2] == "已啟用"
