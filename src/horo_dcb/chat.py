@@ -10,7 +10,7 @@ import discord
 
 from . import log_event, tools
 from .codex import CodexError, ThreadState, ToolCall, TurnState, choose_model
-from .content import exceeds_pixels, image_input, image_mime, message_text, stamp
+from .content import image_input, image_mime, message_text, stamp, too_large
 from .render import ALLOWED_MENTIONS, Failure, FailureReason, Renderer, render_view
 from .store import Entry
 
@@ -145,7 +145,7 @@ class Chat:
         items = []
         for attachment in message.attachments:
             mime = image_mime(attachment.content_type, attachment.filename)
-            if mime is None or exceeds_pixels(attachment.width, attachment.height):
+            if mime is None or too_large(attachment.width, attachment.height):
                 continue
             try:
                 data = await attachment.read()

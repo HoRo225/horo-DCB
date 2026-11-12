@@ -1,6 +1,6 @@
 import pytest
 
-from horo_dcb.content import exceeds_pixels, image_input, image_mime
+from horo_dcb.content import image_input, image_mime, too_large
 
 
 @pytest.mark.parametrize(
@@ -30,11 +30,11 @@ def test_other_attachments_are_not_images(content_type, filename):
 
 
 @pytest.mark.parametrize(
-    ("width", "height", "exceeds"),
-    [(None, None, False), (None, 12000, False), (8000, 6000, False), (10000, 5000, False), (10000, 5001, True), (12000, 12000, True)],
+    ("width", "height", "skipped"),
+    [(8000, 6000, False), (10000, 5000, False), (10000, 5001, True), (12000, 12000, True), (None, None, True), (None, 100, True), (100, None, True)],
 )
-def test_only_images_above_fifty_million_pixels_exceed_the_limit(width, height, exceeds):
-    assert exceeds_pixels(width, height) is exceeds
+def test_images_above_fifty_million_pixels_or_of_unknown_size_are_too_large(width, height, skipped):
+    assert too_large(width, height) is skipped
 
 
 def test_image_item_carries_the_exact_bytes_under_the_given_mime():

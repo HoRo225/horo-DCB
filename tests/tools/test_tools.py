@@ -254,13 +254,18 @@ async def test_viewing_images_skips_oversized_and_over_budget_files():
     ]
 
 
-async def test_viewing_images_skips_a_file_with_too_many_pixels_without_downloading_it():
+async def test_viewing_images_skips_files_that_are_too_large_to_decode_without_downloading_them():
     huge = attachment(b"png", "huge.png", attachment_id=1, width=12000, height=12000)
-    context = with_attachments(huge, attachment(b"png", "ok.png", attachment_id=2, width=4000, height=3000))
+    unmeasured = attachment(b"png", "unmeasured.png", attachment_id=2, width=None, height=None)
+    context = with_attachments(huge, unmeasured, attachment(b"png", "ok.png", attachment_id=3, width=4000, height=3000))
     result, body = await call("view_message_images", {"message": "5"}, context)
     huge.read.assert_not_awaited()
+    unmeasured.read.assert_not_awaited()
     assert body["attached"] == ["ok.png"]
-    assert body["skipped"] == [{"id": "1", "filename": "huge.png", "reason": "尺寸超過 5000 萬像素"}]
+    assert body["skipped"] == [
+        {"id": "1", "filename": "huge.png", "reason": "尺寸超過 5000 萬像素或無法判定"},
+        {"id": "2", "filename": "unmeasured.png", "reason": "尺寸超過 5000 萬像素或無法判定"},
+    ]
 
 
 async def test_message_without_images_is_a_failure():

@@ -20,8 +20,8 @@ def image_mime(content_type: str | None, filename: str) -> str | None:
     return IMAGE_SUFFIXES.get(filename.rsplit(".", 1)[-1].lower())
 
 
-def exceeds_pixels(width: int | None, height: int | None) -> bool:
-    return (width or 0) * (height or 0) > IMAGE_PIXELS
+def too_large(width: int | None, height: int | None) -> bool:
+    return width is None or height is None or width * height > IMAGE_PIXELS
 
 
 def image_input(mime: str, data: bytes) -> dict:

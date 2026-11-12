@@ -162,13 +162,15 @@ async def test_images_are_labelled_and_follow_their_labels(harness):
     ]
 
 
-async def test_an_image_with_too_many_pixels_is_left_out(harness):
+async def test_images_too_large_to_decode_are_left_out(harness):
     asker = harness.person()
     huge = attachment(b"huge", "huge.png", attachment_id=1, width=12000, height=12000)
-    await harness.ask(asker, "看這兩張", mention=True, attachments=(huge, picture(b"small", 2)))
+    unmeasured = attachment(b"unmeasured", "unmeasured.png", attachment_id=3, width=None, height=None)
+    await harness.ask(asker, "看這三張", mention=True, attachments=(huge, picture(b"small", 2), unmeasured))
     await harness.settle()
     [params] = harness.server.requests("turn/start")
     huge.read.assert_not_awaited()
+    unmeasured.read.assert_not_awaited()
     assert "〔圖片 2〕" not in input_text(params)
     assert params["input"][1:] == [
         {"type": "text", "text": "〔圖片 1〕", "text_elements": []},

@@ -8,7 +8,7 @@ from datetime import datetime
 import discord
 from discord.http import HTTPClient, Route
 
-from .content import exceeds_pixels, image_input, image_mime, message_text, stamp
+from .content import image_input, image_mime, message_text, stamp, too_large
 
 
 LINK = re.compile(r"https?://(?:(?:ptb|canary)\.)?discord(?:app)?\.com/channels/(\d+|@me)/(\d+)/(\d+)")
@@ -225,8 +225,8 @@ async def view_message_images(arguments: dict, context: ToolContext) -> ToolResu
         reason = None
         if len(images) == IMAGE_COUNT:
             reason = "超過一次 4 張的上限"
-        elif exceeds_pixels(attachment.width, attachment.height):
-            reason = "尺寸超過 5000 萬像素"
+        elif too_large(attachment.width, attachment.height):
+            reason = "尺寸超過 5000 萬像素或無法判定"
         elif attachment.size > IMAGE_BYTES:
             reason = "單張超過 8 MiB"
         elif attachment.size > budget:

@@ -23,7 +23,7 @@ def member(user_id: int = 1, name: str = "測試者", role_ids: tuple[int, ...] 
     return value
 
 
-def attachment(data: bytes = b"", filename: str = "image.png", content_type: str | None = "image/png", size: int | None = None, attachment_id: int = 1, width: int | None = None, height: int | None = None) -> Mock:
+def attachment(data: bytes = b"", filename: str = "image.png", content_type: str | None = "image/png", size: int | None = None, attachment_id: int = 1, width: int | None = 1, height: int | None = 1) -> Mock:
     value = Mock(spec=discord.Attachment)
     value.id = attachment_id
     value.width = width
