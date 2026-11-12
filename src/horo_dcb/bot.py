@@ -10,6 +10,7 @@ from .chat import Chat
 from .codex import CodexClient
 from .console import Console
 from .render import ALLOWED_MENTIONS
+from .steam import Steam
 from .store import Store
 from .voice import Voice
 
@@ -27,6 +28,7 @@ class HoroBot(commands.Bot):
         self.console = Console(self)
         self.chat = Chat(self)
         self.voice = Voice(self)
+        self.steam = Steam(self)
         self.synced_guilds: set[int] = set()
 
         @self.tree.command(name="控制台", description="登入 ChatGPT 與調整機器人設定")
@@ -49,6 +51,7 @@ class HoroBot(commands.Bot):
         log_event("discord_ready")
         for guild in self.guilds:
             await self.voice.settle(guild)
+        self.steam.start()
 
     async def on_guild_join(self, guild: discord.Guild) -> None:
         await self._sync_guild(guild)
@@ -80,7 +83,7 @@ class HoroBot(commands.Bot):
             log_event("shutdown_cleanup_timeout")
         finally:
             async with asyncio.timeout_at(deadline):
-                results = await asyncio.gather(self.console.close(), self.codex.close(), self.close(), return_exceptions=True)
+                results = await asyncio.gather(self.console.close(), self.steam.close(), self.codex.close(), self.close(), return_exceptions=True)
                 for result in results:
                     if isinstance(result, Exception):
                         log_event("shutdown_resource_error", result)

@@ -1,5 +1,6 @@
 import asyncio
 from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock, PropertyMock
 
 import discord
@@ -58,6 +59,22 @@ def card_of(view: discord.ui.LayoutView) -> tuple[int | None, list[str]]:
     return payload.get("accent_color"), ["---" if child["type"] == 14 else child["content"] for child in payload["components"]]
 
 
+def layout(view: discord.ui.LayoutView) -> list:
+    def describe(payload: dict):
+        match payload["type"]:
+            case 10:
+                return payload["content"]
+            case 12:
+                return {"images": [item["media"]["url"] for item in payload["items"]]}
+            case 17:
+                return {"colour": payload.get("accent_color"), "parts": [describe(child) for child in payload["components"]]}
+            case 1:
+                return {"buttons": [(child.get("label"), child.get("url")) for child in payload["components"]]}
+        raise AssertionError(payload)
+
+    return [describe(payload) for payload in view.to_components()]
+
+
 class Channel:
     def __init__(self, channel_id: int = CHANNEL_ID, guild_id: int = GUILD_ID, bot: Mock | None = None, first_sent_id: int = 10_000) -> None:
         self.messages: list[Mock] = []
@@ -66,9 +83,12 @@ class Channel:
         self.bot = bot or member(999, "樂奈", bot=True)
         self.next_sent_id = first_sent_id
         self.send_gate: asyncio.Event | None = None
+        self.edit_error: discord.HTTPException | None = None
+        self.roles: dict[int, Mock] = {}
         self.mock = Mock(spec=discord.TextChannel)
         self.mock.id = channel_id
         self.mock.guild = Mock(id=guild_id)
+        self.mock.guild.get_role = Mock(side_effect=self.roles.get)
         self.mock.last_message_id = None
         self.mock.history = Mock(side_effect=self.history)
         self.mock.fetch_message = AsyncMock(side_effect=self.fetch_message)
@@ -89,8 +109,22 @@ class Channel:
     def edit(self, sent: Mock, view: discord.ui.LayoutView) -> None:
         if sent.id in self.deleted:
             raise http_error(discord.NotFound, 404)
+        if self.edit_error is not None:
+            raise self.edit_error
         sent.views.append(view)
         sent.components = components_of(view)
+
+    def partial_message(self, message_id: int) -> Mock:
+        def edit(*, view: discord.ui.LayoutView, **options) -> None:
+            sent = next((value for value in self.sent if value.id == message_id), None)
+            if sent is None:
+                raise http_error(discord.NotFound, 404)
+            self.edit(sent, view)
+
+        value = Mock(spec=discord.PartialMessage)
+        value.id = message_id
+        value.edit = AsyncMock(side_effect=edit)
+        return value
 
     def delete(self, sent: Mock) -> None:
         if sent.id in self.deleted:
@@ -138,6 +172,19 @@ class Channel:
             if value.id == message_id:
                 return value
         raise http_error(discord.NotFound, 404)
+
+
+class Client:
+    def __init__(self, *channels: Channel) -> None:
+        self.channels = {channel.mock.id: channel for channel in channels}
+
+    def get_channel(self, channel_id: int) -> Mock | None:
+        channel = self.channels.get(channel_id)
+        return channel.mock if channel is not None else None
+
+    def get_partial_messageable(self, channel_id: int) -> SimpleNamespace:
+        channel = self.channels.get(channel_id)
+        return SimpleNamespace(get_partial_message=channel.partial_message if channel is not None else Channel(channel_id).partial_message)
 
 
 class Guild:
