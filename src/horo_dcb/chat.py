@@ -10,7 +10,7 @@ import discord
 
 from . import log_event, tools
 from .codex import CodexError, ThreadState, ToolCall, TurnState, choose_model
-from .content import image_input, is_image, message_text, stamp
+from .content import exceeds_pixels, image_input, image_mime, message_text, stamp
 from .render import ALLOWED_MENTIONS, Failure, FailureReason, Renderer, render_view
 from .store import Entry
 
@@ -144,14 +144,14 @@ class Chat:
     async def _images(self, message: discord.Message) -> list[dict]:
         items = []
         for attachment in message.attachments:
-            if not is_image(attachment):
+            mime = image_mime(attachment.content_type, attachment.filename)
+            if mime is None or exceeds_pixels(attachment.width, attachment.height):
                 continue
             try:
-                item = await asyncio.to_thread(image_input, await attachment.read())
+                data = await attachment.read()
             except (discord.HTTPException, aiohttp.ClientError, TimeoutError):
                 continue
-            if item is not None:
-                items.append(item)
+            items.append(await asyncio.to_thread(image_input, mime, data))
         return items
 
     async def _inputs(self, channel_messages: list[discord.Message], trigger: discord.Message, replied: discord.Message | None, steer: bool = False) -> tuple[list[dict], list[str]]:

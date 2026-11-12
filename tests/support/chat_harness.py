@@ -1,13 +1,11 @@
 import asyncio
 import base64
-import io
 from collections import deque
 from collections.abc import Awaitable, Callable
 from types import SimpleNamespace
 from unittest.mock import Mock
 
 import pytest
-from PIL import Image
 
 from horo_dcb import render as render_module
 from horo_dcb.chat import Chat
@@ -26,12 +24,6 @@ Script = Callable[[str, str], list[Step]]
 
 def default_answer(turn_id: str) -> str:
     return f"{turn_id} 的回答"
-
-
-def png(colour: str) -> bytes:
-    buffer = io.BytesIO()
-    Image.new("RGB", (2, 2), colour).save(buffer, "PNG")
-    return buffer.getvalue()
 
 
 def data_url(data: bytes) -> str:

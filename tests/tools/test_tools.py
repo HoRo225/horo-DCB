@@ -1,11 +1,9 @@
 import asyncio
-import io
 import json
 from unittest.mock import AsyncMock, Mock
 
 import discord
 import pytest
-from PIL import Image
 
 from horo_dcb import tools
 from tests.support.discord_fakes import CHANNEL_ID, GUILD_ID, Channel, attachment, http_error, member
@@ -16,12 +14,6 @@ MiB = 1024 * 1024
 
 def link(message_id: int, guild_id: int = GUILD_ID, channel_id: int = CHANNEL_ID, host: str = "discord.com") -> str:
     return f"https://{host}/channels/{guild_id}/{channel_id}/{message_id}"
-
-
-def png() -> bytes:
-    buffer = io.BytesIO()
-    Image.new("RGB", (4, 4), "green").save(buffer, format="PNG")
-    return buffer.getvalue()
 
 
 def setup(count: int = 70, anchor_id: int = 60, http=None) -> tuple[Channel, tools.ToolContext]:
@@ -89,11 +81,11 @@ async def test_reading_past_the_first_message_has_no_cursor():
 async def test_message_entries_carry_author_time_replies_and_image_markers():
     channel = Channel()
     channel.post(1, ALICE, "原文")
-    channel.post(2, member(2, "Bob"), "x" * 1500, reply_to=1, attachments=(attachment(png(), attachment_id=7), attachment(b"", "notes.txt", "text/plain", attachment_id=8)))
+    channel.post(2, member(2, "Bob"), "x" * 1500, reply_to=1, attachments=(attachment(b"png", attachment_id=7), attachment(b"gif", "clip.GIF", None, attachment_id=8), attachment(b"", "notes.txt", "text/plain", attachment_id=9)))
     trigger = channel.post(3, ALICE, "問題")
     context = tools.ToolContext(channel.mock, trigger, Mock())
     _, body = await call("read_messages", {}, context)
-    assert body["messages"][1] == {"id": "2", "author": "Bob", "time": "2026-11-10 12:02", "text": "x" * 1000 + "…（截斷）\n〔圖片〕", "reply_to": "1"}
+    assert body["messages"][1] == {"id": "2", "author": "Bob", "time": "2026-11-10 12:02", "text": "x" * 1000 + "…（截斷）\n〔圖片〕〔圖片〕", "reply_to": "1"}
 
 
 async def test_reading_stops_before_the_byte_budget():
@@ -131,8 +123,8 @@ async def test_reading_around_a_missing_message_fails():
     assert result.note == "失敗，找不到訊息"
 
 
-def search_hit(message_id: int, content: str) -> list[dict]:
-    raw = {"id": str(message_id), "content": content, "timestamp": "2026-11-10T04:00:00+00:00", "author": {"global_name": "Alice", "username": "alice"}, "attachments": [{"content_type": "image/png"}], "message_reference": {"message_id": "1"}}
+def search_hit(message_id: int, content: str, attachments: tuple[dict, ...] = ({"content_type": "image/png"},)) -> list[dict]:
+    raw = {"id": str(message_id), "content": content, "timestamp": "2026-11-10T04:00:00+00:00", "author": {"global_name": "Alice", "username": "alice"}, "attachments": list(attachments), "message_reference": {"message_id": "1"}}
     return [{**raw, "id": "0", "content": "前文"}, {**raw, "hit": True}]
 
 
@@ -146,6 +138,20 @@ async def test_search_sends_the_channel_query_and_pages():
     assert http.request.await_args.kwargs["params"] == {"channel_id": str(CHANNEL_ID), "content": "紫色長頸鹿", "offset": 0, "limit": 25}
     assert body == {"total": 30, "messages": [{"id": "9", "author": "Alice", "time": "2026-11-10 12:00", "text": "紫色長頸鹿\n〔圖片〕", "reply_to": "1"}], "next_offset": 25}
     assert result.note == "紫色長頸鹿，找到 30 則"
+
+
+async def test_search_marks_images_by_content_type_or_suffix():
+    attachments = (
+        {"filename": "upload", "content_type": "image/png; charset=binary"},
+        {"filename": "clip.gif"},
+        {"filename": "scan.JPG", "content_type": "application/octet-stream"},
+        {"filename": "notes.txt", "content_type": "text/plain"},
+    )
+    http = Mock()
+    http.request = AsyncMock(return_value={"total_results": 1, "messages": [search_hit(9, "紫色長頸鹿", attachments)]})
+    _, context = setup(http=http)
+    _, body = await call("search_messages", {"content": "紫色長頸鹿"}, context)
+    assert [entry["text"] for entry in body["messages"]] == ["紫色長頸鹿\n〔圖片〕〔圖片〕〔圖片〕"]
 
 
 async def test_search_has_no_next_page_on_the_last_page():
@@ -202,29 +208,59 @@ def with_attachments(*files: Mock) -> tools.ToolContext:
 
 
 async def test_viewing_images_returns_at_most_four():
-    context = with_attachments(*(attachment(png(), f"{index}.png", attachment_id=index) for index in range(1, 6)))
+    context = with_attachments(*(attachment(b"png", f"{index}.png", attachment_id=index) for index in range(1, 6)))
     result, body = await call("view_message_images", {"message": link(5)}, context)
     assert result.success
-    assert len(result.images) == 4
-    assert all(item["url"].startswith("data:image/png;base64,") for item in result.images)
+    assert result.images == ({"type": "image", "url": "data:image/png;base64,cG5n"},) * 4
     assert body["attached"] == ["1.png", "2.png", "3.png", "4.png"]
     assert body["skipped"] == [{"id": "5", "filename": "5.png", "reason": "超過一次 4 張的上限"}]
     assert result.note == "4 張圖片"
 
 
-async def test_viewing_images_skips_oversized_and_over_budget_files():
-    junk = b"\0" * (6 * MiB)
-    big = attachment(png(), "big.png", size=9 * MiB, attachment_id=1)
-    context = with_attachments(big, attachment(png(), "ok.png", attachment_id=2), attachment(junk, "a.png", attachment_id=3), attachment(junk, "b.png", attachment_id=4), attachment(junk, "c.png", attachment_id=5))
+async def test_viewing_images_sends_each_file_as_is_under_its_own_type():
+    context = with_attachments(
+        attachment(b"hello", "clip.gif", None, attachment_id=1),
+        attachment(b"hello", "upload", "image/webp; charset=binary", attachment_id=2),
+        attachment(b"hello", "notes.txt", "text/plain", attachment_id=3),
+    )
     result, body = await call("view_message_images", {"message": "5"}, context)
-    big.read.assert_not_awaited()
-    assert body["attached"] == ["ok.png"]
+    assert result.images == (
+        {"type": "image", "url": "data:image/gif;base64,aGVsbG8="},
+        {"type": "image", "url": "data:image/webp;base64,aGVsbG8="},
+    )
+    assert body["attached"] == ["clip.gif", "upload"]
+    assert body["skipped"] == []
+
+
+async def test_viewing_images_skips_oversized_and_over_budget_files():
+    declared_big = attachment(b"png", "declared-big.png", size=9 * MiB, attachment_id=1)
+    context = with_attachments(
+        declared_big,
+        attachment(b"png", "ok.png", attachment_id=2),
+        attachment(b"\0" * (9 * MiB), "really-big.png", size=1, attachment_id=3),
+        attachment(b"\0" * (6 * MiB), "six.png", attachment_id=4),
+        attachment(b"\0" * (2 * MiB), "over-total.png", size=1, attachment_id=5),
+        attachment(b"png", "late.png", attachment_id=6),
+    )
+    result, body = await call("view_message_images", {"message": "5"}, context)
+    declared_big.read.assert_not_awaited()
+    assert body["attached"] == ["ok.png", "six.png"]
+    assert len(result.images) == 2
     assert [(entry["filename"], entry["reason"]) for entry in body["skipped"]] == [
-        ("big.png", "單張超過 8 MiB"),
-        ("a.png", "圖片格式不支援或實際大小超過上限"),
-        ("b.png", "圖片格式不支援或實際大小超過上限"),
-        ("c.png", "超過這次 16 MiB 的總量"),
+        ("declared-big.png", "單張超過 8 MiB"),
+        ("really-big.png", "實際大小超過上限"),
+        ("over-total.png", "實際大小超過上限"),
+        ("late.png", "超過這次 16 MiB 的總量"),
     ]
+
+
+async def test_viewing_images_skips_a_file_with_too_many_pixels_without_downloading_it():
+    huge = attachment(b"png", "huge.png", attachment_id=1, width=12000, height=12000)
+    context = with_attachments(huge, attachment(b"png", "ok.png", attachment_id=2, width=4000, height=3000))
+    result, body = await call("view_message_images", {"message": "5"}, context)
+    huge.read.assert_not_awaited()
+    assert body["attached"] == ["ok.png"]
+    assert body["skipped"] == [{"id": "1", "filename": "huge.png", "reason": "尺寸超過 5000 萬像素"}]
 
 
 async def test_message_without_images_is_a_failure():

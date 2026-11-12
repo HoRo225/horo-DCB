@@ -8,7 +8,7 @@ from datetime import datetime
 import discord
 from discord.http import HTTPClient, Route
 
-from .content import IMAGE_TYPES, image_input, is_image, message_text, stamp
+from .content import exceeds_pixels, image_input, image_mime, message_text, stamp
 
 
 LINK = re.compile(r"https?://(?:(?:ptb|canary)\.)?discord(?:app)?\.com/channels/(\d+|@me)/(\d+)/(\d+)")
@@ -124,7 +124,7 @@ def target_id(value, context: ToolContext) -> int:
 
 
 def message_entry(message: discord.Message, context: ToolContext) -> dict:
-    images = sum(1 for attachment in message.attachments if is_image(attachment))
+    images = sum(1 for attachment in message.attachments if image_mime(attachment.content_type, attachment.filename) is not None)
     text = "\n".join(part for part in (clip(message_text(message), READ_TEXT_CHARS), "〔圖片〕" * images) if part)
     entry = {"id": str(message.id), "author": message.author.display_name, "time": stamp(message.created_at), "text": text}
     if message.reference is not None and message.reference.message_id is not None:
@@ -145,7 +145,7 @@ def raw_texts(components: list | None) -> list[str]:
 
 def raw_entry(message: dict) -> dict:
     author = message.get("author") or {}
-    images = sum(1 for attachment in message.get("attachments") or () if (attachment.get("content_type") or "").split(";")[0].lower() in IMAGE_TYPES.values())
+    images = sum(1 for attachment in message.get("attachments") or () if image_mime(attachment.get("content_type"), attachment.get("filename") or "") is not None)
     text = "\n".join(text for text in [message.get("content") or "", *raw_texts(message.get("components"))] if text.strip())
     text = "\n".join(part for part in (clip(text, SEARCH_TEXT_CHARS), "〔圖片〕" * images) if part)
     entry = {"id": str(message.get("id")), "author": author.get("global_name") or author.get("username") or "", "time": stamp(datetime.fromisoformat(message["timestamp"])), "text": text}
@@ -218,23 +218,28 @@ async def view_message_images(arguments: dict, context: ToolContext) -> ToolResu
     message = await context.channel.fetch_message(target)
     shown, skipped, images = [], [], []
     budget = IMAGE_TOTAL_BYTES
-    for attachment in (value for value in message.attachments if is_image(value)):
+    for attachment in message.attachments:
+        mime = image_mime(attachment.content_type, attachment.filename)
+        if mime is None:
+            continue
         reason = None
         if len(images) == IMAGE_COUNT:
             reason = "超過一次 4 張的上限"
+        elif exceeds_pixels(attachment.width, attachment.height):
+            reason = "尺寸超過 5000 萬像素"
         elif attachment.size > IMAGE_BYTES:
             reason = "單張超過 8 MiB"
         elif attachment.size > budget:
             reason = "超過這次 16 MiB 的總量"
         else:
             data = await attachment.read()
-            item = None if len(data) > min(IMAGE_BYTES, budget) else await asyncio.to_thread(image_input, data)
+            fits = len(data) <= min(IMAGE_BYTES, budget)
             budget -= min(len(data), budget)
-            if item is None:
-                reason = "圖片格式不支援或實際大小超過上限"
-            else:
-                images.append(item)
+            if fits:
+                images.append(await asyncio.to_thread(image_input, mime, data))
                 shown.append(attachment.filename)
+            else:
+                reason = "實際大小超過上限"
         if reason is not None:
             skipped.append({"id": str(attachment.id), "filename": attachment.filename, "reason": reason})
     result = {"message_id": str(message.id), "author": message.author.display_name, "time": stamp(message.created_at), "attached": shown, "skipped": skipped}

@@ -7,7 +7,7 @@ from horo_dcb import chat as chat_module
 from horo_dcb.chat import TOOL_IMAGE_LABEL
 from tests.support import chat_harness
 from tests.support.app_server import Reject
-from tests.support.chat_harness import data_url, default_answer, picture, png, server_request
+from tests.support.chat_harness import data_url, default_answer, picture, server_request
 from tests.support.codex_messages import agent, answer, completed, delta, note, recorded_answer, recorded_turn, started, tool_item, turn_completed
 from tests.support.discord_fakes import card_of
 from tests.support.waiting import until
@@ -153,7 +153,7 @@ def viewing(target: int):
 
 
 async def test_tool_images_are_steered_in_before_the_tool_answers(harness):
-    red = png("red")
+    red = b"red"
     shown = harness.post(harness.person(2, "路人"), "紅色的圖", attachments=(picture(red, 7),))
     harness.script(viewing(shown.id))
     await harness.ask(harness.person(), "那張圖是什麼顏色", mention=True)
@@ -171,7 +171,7 @@ async def test_tool_images_are_steered_in_before_the_tool_answers(harness):
 
 async def test_a_rejected_image_steer_fails_the_tool(harness):
     harness.server.handlers["turn/steer"] = lambda params: Reject()
-    shown = harness.post(harness.person(2, "路人"), "紅色的圖", attachments=(picture(png("red"), 7),))
+    shown = harness.post(harness.person(2, "路人"), "紅色的圖", attachments=(picture(b"red", 7),))
     harness.script(viewing(shown.id))
     await harness.ask(harness.person(), "那張圖是什麼顏色", mention=True)
     await harness.settle()

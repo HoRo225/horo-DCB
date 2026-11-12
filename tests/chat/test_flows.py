@@ -4,9 +4,9 @@ from horo_dcb import tools
 from horo_dcb.chat import LINK_HINT, STEER_LEAD
 from horo_dcb.store import Entry
 from tests.support import chat_harness
-from tests.support.chat_harness import context_text, data_url, default_answer, input_text, picture, png
+from tests.support.chat_harness import context_text, data_url, default_answer, input_text, picture
 from tests.support.codex_messages import agent, completed, delta, recorded_answer, recorded_turn, started, turn_completed
-from tests.support.discord_fakes import card_of
+from tests.support.discord_fakes import attachment, card_of
 from tests.support.waiting import until
 
 harness = chat_harness.harness
@@ -145,7 +145,7 @@ async def test_replying_to_the_latest_answer_while_its_thread_is_busy_forks(harn
 
 async def test_images_are_labelled_and_follow_their_labels(harness):
     asker = harness.person()
-    red, green, blue = png("red"), png("green"), png("blue")
+    red, green, blue = b"red", b"green", b"blue"
     harness.post(asker, "先看這張", attachments=(picture(red, 1),))
     await harness.ask(asker, "這兩張呢", mention=True, attachments=(picture(green, 2), picture(blue, 3)))
     await harness.settle()
@@ -159,6 +159,20 @@ async def test_images_are_labelled_and_follow_their_labels(harness):
         {"type": "image", "url": data_url(green)},
         {"type": "text", "text": "〔圖片 3〕", "text_elements": []},
         {"type": "image", "url": data_url(blue)},
+    ]
+
+
+async def test_an_image_with_too_many_pixels_is_left_out(harness):
+    asker = harness.person()
+    huge = attachment(b"huge", "huge.png", attachment_id=1, width=12000, height=12000)
+    await harness.ask(asker, "看這兩張", mention=True, attachments=(huge, picture(b"small", 2)))
+    await harness.settle()
+    [params] = harness.server.requests("turn/start")
+    huge.read.assert_not_awaited()
+    assert "〔圖片 2〕" not in input_text(params)
+    assert params["input"][1:] == [
+        {"type": "text", "text": "〔圖片 1〕", "text_elements": []},
+        {"type": "image", "url": data_url(b"small")},
     ]
 
 

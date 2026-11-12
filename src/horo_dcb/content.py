@@ -1,36 +1,31 @@
 import base64
-import io
-import warnings
 from datetime import datetime, timedelta, timezone
 
 import discord
-from PIL import Image, UnidentifiedImageError
 
 
 TAIPEI = timezone(timedelta(hours=8))
-IMAGE_TYPES = {"PNG": "image/png", "JPEG": "image/jpeg", "WEBP": "image/webp", "GIF": "image/gif"}
-IMAGE_SUFFIXES = ("png", "jpg", "jpeg", "webp", "gif")
+IMAGE_SUFFIXES: dict[str, str] = {"png": "image/png", "jpg": "image/jpeg", "jpeg": "image/jpeg", "webp": "image/webp", "gif": "image/gif"}
+IMAGE_PIXELS = 50_000_000
 
 
 def stamp(moment: datetime) -> str:
     return moment.astimezone(TAIPEI).strftime("%Y-%m-%d %H:%M")
 
 
-def is_image(attachment: discord.Attachment) -> bool:
-    mime = (attachment.content_type or "").split(";")[0].lower()
-    return mime in IMAGE_TYPES.values() or attachment.filename.rsplit(".", 1)[-1].lower() in IMAGE_SUFFIXES
+def image_mime(content_type: str | None, filename: str) -> str | None:
+    mime = (content_type or "").split(";")[0].strip().lower()
+    if mime in IMAGE_SUFFIXES.values():
+        return mime
+    return IMAGE_SUFFIXES.get(filename.rsplit(".", 1)[-1].lower())
 
 
-def image_input(data: bytes) -> dict | None:
-    try:
-        with warnings.catch_warnings(record=True):
-            with Image.open(io.BytesIO(data)) as image:
-                mime = IMAGE_TYPES.get(image.format)
-                if mime is None or (image.format == "GIF" and getattr(image, "is_animated", False)):
-                    return None
-        return {"type": "image", "url": f"data:{mime};base64,{base64.b64encode(data).decode('ascii')}"}
-    except (UnidentifiedImageError, OSError, ValueError, Image.DecompressionBombError):
-        return None
+def exceeds_pixels(width: int | None, height: int | None) -> bool:
+    return (width or 0) * (height or 0) > IMAGE_PIXELS
+
+
+def image_input(mime: str, data: bytes) -> dict:
+    return {"type": "image", "url": f"data:{mime};base64,{base64.b64encode(data).decode('ascii')}"}
 
 
 def component_texts(components) -> list[str]:
