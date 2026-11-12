@@ -14,11 +14,27 @@ class Settings:
     effort: str | None
     instructions: str | None
     voice_hub_ids: frozenset[int]
+    steam_channel_id: int | None = None
+    steam_role_ids: frozenset[int] = frozenset()
 
 
 class Entry(NamedTuple):
     thread: str
     turn: str | None
+
+
+class Post(NamedTuple):
+    channel: int
+    message: int
+
+
+@dataclass(frozen=True)
+class Promotion:
+    app: int
+    name: str
+    price: str
+    ends: int | None
+    post: Post | None
 
 
 def _string_map(value) -> bool:
@@ -59,6 +75,32 @@ def _snowflake(value) -> bool:
     return isinstance(value, str) and value.isascii() and value.isdigit()
 
 
+def _post_record(post) -> bool:
+    return post is None or (isinstance(post, dict) and set(post) == {"channel", "message"} and _snowflake(post["channel"]) and _snowflake(post["message"]))
+
+
+def _promotion_record(record) -> bool:
+    return (
+        isinstance(record, dict)
+        and set(record) == {"app", "name", "price", "ends", "post"}
+        and type(record["app"]) is int
+        and isinstance(record["name"], str)
+        and isinstance(record["price"], str)
+        and (record["ends"] is None or type(record["ends"]) is int)
+        and _post_record(record["post"])
+    )
+
+
+def _promotion(record: dict) -> Promotion:
+    post = record["post"]
+    return Promotion(record["app"], record["name"], record["price"], record["ends"], None if post is None else Post(int(post["channel"]), int(post["message"])))
+
+
+def _promotion_json(promotion: Promotion) -> dict:
+    post = None if promotion.post is None else {"channel": str(promotion.post.channel), "message": str(promotion.post.message)}
+    return {"app": promotion.app, "name": promotion.name, "price": promotion.price, "ends": promotion.ends, "post": post}
+
+
 class Store:
     def __init__(self, directory: Path = Path("/data/bot")) -> None:
         self.directory = directory
@@ -66,18 +108,23 @@ class Store:
         self._settings: dict = {}
         self._threads: dict = {"messages": {}, "threads": {}}
         self._rooms: dict = {}
+        self._promotions: dict = {}
 
     async def open(self) -> None:
         async with self.lock:
             self.directory.mkdir(parents=True, exist_ok=True)
-            settings = self._load("settings.json", {"ai_channel_ids": [], "allowed_role_ids": [], "model": None, "effort": None, "instructions": None, "voice_hub_ids": []})
+            settings = self._load("settings.json", {"ai_channel_ids": [], "allowed_role_ids": [], "model": None, "effort": None, "instructions": None, "voice_hub_ids": [], "steam_channel_id": None, "steam_role_ids": []})
             settings.setdefault("voice_hub_ids", [])
-            for key in ("ai_channel_ids", "allowed_role_ids", "voice_hub_ids"):
+            settings.setdefault("steam_channel_id", None)
+            settings.setdefault("steam_role_ids", [])
+            for key in ("ai_channel_ids", "allowed_role_ids", "voice_hub_ids", "steam_role_ids"):
                 if not isinstance(settings.get(key), list) or not all(type(value) is int for value in settings[key]):
                     raise ValueError("storage_invalid")
             for key in ("model", "effort", "instructions"):
                 if settings.get(key) is not None and not isinstance(settings[key], str):
                     raise ValueError("storage_invalid")
+            if settings["steam_channel_id"] is not None and type(settings["steam_channel_id"]) is not int:
+                raise ValueError("storage_invalid")
             stored = self._load("threads.json", {"messages": {}, "threads": {}})
             threads = _upgrade(stored) if set(stored) == {"messages", "cursors"} else stored
             _validate_threads(threads)
@@ -86,9 +133,13 @@ class Store:
             rooms = self._load("rooms.json", {})
             if not all(_snowflake(room) and _snowflake(owner) for room, owner in rooms.items()):
                 raise ValueError("storage_invalid")
+            promotions = self._load("steam.json", {})
+            if not all(_snowflake(package) and _promotion_record(record) for package, record in promotions.items()):
+                raise ValueError("storage_invalid")
             self._settings = settings
             self._threads = threads
             self._rooms = rooms
+            self._promotions = promotions
 
     def _load(self, filename: str, default: dict) -> dict:
         path = self.directory / filename
@@ -115,7 +166,7 @@ class Store:
         self._threads = updated
 
     def _snapshot(self) -> Settings:
-        return Settings(frozenset(self._settings["ai_channel_ids"]), frozenset(self._settings["allowed_role_ids"]), self._settings.get("model"), self._settings.get("effort"), self._settings.get("instructions"), frozenset(self._settings["voice_hub_ids"]))
+        return Settings(frozenset(self._settings["ai_channel_ids"]), frozenset(self._settings["allowed_role_ids"]), self._settings.get("model"), self._settings.get("effort"), self._settings.get("instructions"), frozenset(self._settings["voice_hub_ids"]), self._settings["steam_channel_id"], frozenset(self._settings["steam_role_ids"]))
 
     async def settings(self) -> Settings:
         async with self.lock:
@@ -186,3 +237,12 @@ class Store:
     def _save_rooms(self, rooms: dict) -> None:
         self._write("rooms.json", rooms)
         self._rooms = rooms
+
+    def promotions(self) -> dict[int, Promotion]:
+        return {int(package): _promotion(record) for package, record in self._promotions.items()}
+
+    async def save_promotion(self, package: int, promotion: Promotion) -> None:
+        async with self.lock:
+            promotions = self._promotions | {str(package): _promotion_json(promotion)}
+            self._write("steam.json", promotions)
+            self._promotions = promotions

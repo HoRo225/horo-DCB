@@ -2,7 +2,7 @@ import json
 
 import pytest
 
-from horo_dcb.store import Entry, Settings, Store
+from horo_dcb.store import Entry, Post, Promotion, Settings, Store
 
 
 def write(directory, filename: str, value) -> None:
@@ -22,18 +22,20 @@ async def opened(directory) -> Store:
 async def test_first_open_creates_empty_files(tmp_path):
     directory = tmp_path / "bot"
     store = await opened(directory)
-    assert await store.settings() == Settings(frozenset(), frozenset(), None, None, None, frozenset())
+    assert await store.settings() == Settings(frozenset(), frozenset(), None, None, None, frozenset(), None, frozenset())
     assert store.rooms() == {}
-    assert read(directory, "settings.json") == {"ai_channel_ids": [], "allowed_role_ids": [], "model": None, "effort": None, "instructions": None, "voice_hub_ids": []}
+    assert store.promotions() == {}
+    assert read(directory, "settings.json") == {"ai_channel_ids": [], "allowed_role_ids": [], "model": None, "effort": None, "instructions": None, "voice_hub_ids": [], "steam_channel_id": None, "steam_role_ids": []}
     assert read(directory, "threads.json") == {"messages": {}, "threads": {}}
     assert read(directory, "rooms.json") == {}
+    assert read(directory, "steam.json") == {}
 
 
 async def test_settings_changes_survive_a_reopen(tmp_path):
     store = await opened(tmp_path)
-    await store.update_settings(ai_channel_ids=[11, 12], allowed_role_ids=[21], model="m", effort="high", instructions="喵", voice_hub_ids=[31])
+    await store.update_settings(ai_channel_ids=[11, 12], allowed_role_ids=[21], model="m", effort="high", instructions="喵", voice_hub_ids=[31], steam_channel_id=41, steam_role_ids=[51, 52])
     reopened = await opened(tmp_path)
-    assert await reopened.settings() == Settings(frozenset({11, 12}), frozenset({21}), "m", "high", "喵", frozenset({31}))
+    assert await reopened.settings() == Settings(frozenset({11, 12}), frozenset({21}), "m", "high", "喵", frozenset({31}), 41, frozenset({51, 52}))
 
 
 async def test_settings_without_voice_hubs_open_with_none(tmp_path):
@@ -42,7 +44,16 @@ async def test_settings_without_voice_hubs_open_with_none(tmp_path):
     store = await opened(tmp_path)
     assert await store.settings() == Settings(frozenset({11}), frozenset({21}), None, None, None, frozenset())
     await store.update_settings(voice_hub_ids=[31])
-    assert read(tmp_path, "settings.json") == old | {"voice_hub_ids": [31]}
+    assert read(tmp_path, "settings.json") == old | {"voice_hub_ids": [31], "steam_channel_id": None, "steam_role_ids": []}
+
+
+async def test_settings_without_steam_fields_open_with_steam_disabled(tmp_path):
+    old = {"ai_channel_ids": [11], "allowed_role_ids": [21], "model": None, "effort": None, "instructions": None, "voice_hub_ids": [31]}
+    write(tmp_path, "settings.json", old)
+    store = await opened(tmp_path)
+    assert await store.settings() == Settings(frozenset({11}), frozenset({21}), None, None, None, frozenset({31}), None, frozenset())
+    await store.update_settings(steam_channel_id=41, steam_role_ids=[51])
+    assert read(tmp_path, "settings.json") == old | {"steam_channel_id": 41, "steam_role_ids": [51]}
 
 
 async def test_rooms_survive_a_reopen(tmp_path):
@@ -156,10 +167,53 @@ async def test_invalid_threads_file_is_refused(tmp_path, threads):
         {"ai_channel_ids": [], "allowed_role_ids": [], "model": 5},
         {"ai_channel_ids": [], "allowed_role_ids": [], "voice_hub_ids": None},
         {"ai_channel_ids": [], "allowed_role_ids": [], "voice_hub_ids": ["1"]},
+        {"ai_channel_ids": [], "allowed_role_ids": [], "steam_channel_id": "41"},
+        {"ai_channel_ids": [], "allowed_role_ids": [], "steam_channel_id": True},
+        {"ai_channel_ids": [], "allowed_role_ids": [], "steam_role_ids": None},
+        {"ai_channel_ids": [], "allowed_role_ids": [], "steam_role_ids": ["51"]},
     ],
-    ids=["string-channel", "boolean-role", "numeric-model", "null-voice-hubs", "string-voice-hub"],
+    ids=["string-channel", "boolean-role", "numeric-model", "null-voice-hubs", "string-voice-hub", "string-steam-channel", "boolean-steam-channel", "null-steam-roles", "string-steam-role"],
 )
 async def test_invalid_settings_file_is_refused(tmp_path, settings):
     write(tmp_path, "settings.json", settings)
     with pytest.raises(ValueError):
         await opened(tmp_path)
+
+
+LIVE = Promotion(785890, "Hexologic", "NT$ 102.00", 1793466000, Post(1520357199782871081, 1570446335801426122))
+ENDED = Promotion(4693960, "獵人", "NT$ 117.00", None, None)
+LIVE_ON_DISK = {"app": 785890, "name": "Hexologic", "price": "NT$ 102.00", "ends": 1793466000, "post": {"channel": "1520357199782871081", "message": "1570446335801426122"}}
+
+
+async def test_promotions_survive_a_reopen(tmp_path):
+    store = await opened(tmp_path)
+    await store.save_promotion(1782986, LIVE)
+    await store.save_promotion(1782987, LIVE)
+    await store.save_promotion(1782987, ENDED)
+    assert read(tmp_path, "steam.json") == {"1782986": LIVE_ON_DISK, "1782987": {"app": 4693960, "name": "獵人", "price": "NT$ 117.00", "ends": None, "post": None}}
+    reopened = await opened(tmp_path)
+    assert reopened.promotions() == {1782986: LIVE, 1782987: ENDED}
+
+
+@pytest.mark.parametrize(
+    "promotions",
+    [
+        [],
+        {"package": LIVE_ON_DISK},
+        {"1": LIVE_ON_DISK | {"extra": 1}},
+        {"1": {key: value for key, value in LIVE_ON_DISK.items() if key != "ends"}},
+        {"1": LIVE_ON_DISK | {"app": "785890"}},
+        {"1": LIVE_ON_DISK | {"app": True}},
+        {"1": LIVE_ON_DISK | {"price": 102}},
+        {"1": LIVE_ON_DISK | {"ends": "1793466000"}},
+        {"1": LIVE_ON_DISK | {"post": {"channel": 1, "message": "2"}}},
+        {"1": LIVE_ON_DISK | {"post": {"channel": "1"}}},
+        {"1": LIVE_ON_DISK | {"post": "1/2"}},
+    ],
+    ids=["not-an-object", "non-digit-package", "unknown-key", "missing-ends", "string-app", "boolean-app", "numeric-price", "string-ends", "numeric-post-channel", "post-without-message", "string-post"],
+)
+async def test_invalid_steam_file_is_refused(tmp_path, promotions):
+    write(tmp_path, "steam.json", promotions)
+    with pytest.raises(ValueError):
+        await opened(tmp_path)
+    assert read(tmp_path, "steam.json") == promotions
