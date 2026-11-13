@@ -25,7 +25,6 @@ ITEMS_URL = "https://api.steampowered.com/IStoreBrowseService/GetItems/v1"
 SEARCH_PARAMS = {"maxprice": "free", "specials": "1", "category1": "998", "json": "1", "cc": "tw", "l": "tchinese"}
 ASSET_ROOT = "https://shared.akamai.steamstatic.com/store_item_assets/"
 APP_IN_LOGO = re.compile(r"/apps/(\d+)/")
-STEAM_EMOJI = "<:steamlogo:1570464394452668569>"
 LIVE_COLOUR = 0x7F77DD
 ENDED_COLOUR = 0x80848E
 INTERVAL = 900
@@ -118,7 +117,7 @@ def live_card(offer: Offer, roles: Iterable[discord.abc.Snowflake]) -> ui.Layout
         view.add_item(ui.TextDisplay(mentions))
     deadline = "" if offer.ends is None else f" · <t:{offer.ends}:f> 截止（<t:{offer.ends}:R>）"
     parts: list[ui.Item] = [] if offer.header is None else [ui.MediaGallery(discord.MediaGalleryItem(offer.header))]
-    parts.append(ui.TextDisplay(f"## {STEAM_EMOJI} {escape_markdown(offer.name)}\n-# 限時免費 · ~~{offer.price}~~{deadline}"))
+    parts.append(ui.TextDisplay(f"## {escape_markdown(offer.name)}\n-# 限時免費 · ~~{offer.price}~~{deadline}"))
     if offer.description:
         parts.append(ui.TextDisplay(escape_markdown(offer.description)))
     view.add_item(ui.Container(*parts, accent_colour=LIVE_COLOUR))
@@ -129,7 +128,7 @@ def live_card(offer: Offer, roles: Iterable[discord.abc.Snowflake]) -> ui.Layout
 def ended_card(promotion: Promotion) -> ui.LayoutView:
     view = ui.LayoutView(timeout=None)
     deadline = "" if promotion.ends is None else f" · <t:{promotion.ends}:f> 截止"
-    view.add_item(ui.Container(ui.TextDisplay(f"## {STEAM_EMOJI} {escape_markdown(promotion.name)}\n-# 限免已結束 · 原價 {promotion.price}{deadline}"), accent_colour=ENDED_COLOUR))
+    view.add_item(ui.Container(ui.TextDisplay(f"## {escape_markdown(promotion.name)}\n-# 限免已結束 · 原價 {promotion.price}{deadline}"), accent_colour=ENDED_COLOUR))
     view.add_item(store_button("Steam 商店頁", promotion.app))
     return view
 

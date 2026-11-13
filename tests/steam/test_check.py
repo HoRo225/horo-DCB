@@ -12,7 +12,6 @@ from tests.support.discord_fakes import CHANNEL_ID, Channel, Client, http_error,
 from tests.support.steam_items import game, paid
 from tests.support.waiting import until
 
-STEAM = "<:steamlogo:1570464394452668569>"
 NAME = "Hunting Simulator 3 - Classic American Hunter Pack"
 DESCRIPTION = "在這款開放世界遊戲中，帶上忠誠的愛犬，暢享狩獵激情！從官方品牌中選擇裝備，探索荒野，尋找下一個獵物。"
 HEADER = "https://shared.akamai.steamstatic.com/store_item_assets/steam/apps/4693960/d37423b5b7941444dfe63d8b185ed680ff03009d/header.jpg?t=1793269525"
@@ -23,12 +22,12 @@ STORE_PAGE = f"https://store.steampowered.com/app/{APP}/"
 
 def live(ends: int = ENDS) -> list:
     return [
-        {"colour": 0x7F77DD, "parts": [{"images": [HEADER]}, f"## {STEAM} {NAME}\n-# 限時免費 · ~~NT$ 117.00~~ · <t:{ends}:f> 截止（<t:{ends}:R>）", DESCRIPTION]},
+        {"colour": 0x7F77DD, "parts": [{"images": [HEADER]}, f"## {NAME}\n-# 限時免費 · ~~NT$ 117.00~~ · <t:{ends}:f> 截止（<t:{ends}:R>）", DESCRIPTION]},
         {"buttons": [("前往 Steam 領取", STORE_PAGE)]},
     ]
 
 
-ENDED = [{"colour": 0x80848E, "parts": [f"## {STEAM} {NAME}\n-# 限免已結束 · 原價 NT$ 117.00 · <t:{ENDS}:f> 截止"]}, {"buttons": [("Steam 商店頁", STORE_PAGE)]}]
+ENDED = [{"colour": 0x80848E, "parts": [f"## {NAME}\n-# 限免已結束 · 原價 NT$ 117.00 · <t:{ENDS}:f> 截止"]}, {"buttons": [("Steam 商店頁", STORE_PAGE)]}]
 
 
 def record(message: int | None, ends: int = ENDS, app: int = APP) -> dict:
