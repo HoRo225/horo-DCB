@@ -40,6 +40,12 @@ def test_card_asset_holds_fifty_two_faces_and_a_back():
     assert len({face(index).tobytes() for index in range(53)}) == 53
 
 
+def test_card_faces_fill_their_cell():
+    for index in range(53):
+        left, top, right, bottom = face(index).getchannel("A").getbbox() or (0, 0, 0, 0)
+        assert (left, right) == (0, CARD_W) and top <= 1 and bottom >= CARD_H - 1
+
+
 def test_hand_lays_cards_left_to_right(deck):
     image = opened(deck.hand([Card("10", "S"), None])).convert("RGBA")
     assert image.size == (HAND_W, CARD_H + 2 * HAND_PAD)

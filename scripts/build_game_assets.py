@@ -23,7 +23,10 @@ BLUR_SQUASH = 6
 def svg(path: Path, width: int) -> Image.Image:
     text = path.read_text(encoding="utf-8")
     end = text.index(">", text.index("<svg"))
-    head = re.sub(r'((?:width|height)="[\d.]+)(?:in|mm|pt)"', r'\1"', text[:end])
+    box = re.search(r'viewBox="[-\d.]+ [-\d.]+ ([\d.]+) ([\d.]+)"', text[:end])
+    if box is None:
+        raise ValueError(path.name)
+    head = re.sub(r'\bheight="[^"]*"', f'height="{box[2]}"', re.sub(r'\bwidth="[^"]*"', f'width="{box[1]}"', text[:end]))
     return Image.open(io.BytesIO(bytes(resvg_py.svg_to_bytes(svg_string=head + text[end:], width=width)))).convert("RGBA")
 
 
