@@ -106,6 +106,7 @@ class Interaction:
         self.client = SimpleNamespace(user=None)
         self.response = Response(message)
         self.delete_original_response = AsyncMock()
+        self.created_at = discord.utils.utcnow()
 
 
 def player(user_id: int = 1) -> Mock:

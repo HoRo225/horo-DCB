@@ -482,6 +482,7 @@ class Games:
         except discord.HTTPException as error:
             log_event("games_show_error", error)
         else:
+            log_event("games_spin_shown", duration_ms=round((discord.utils.utcnow() - interaction.created_at).total_seconds() * 1000))
             await asyncio.sleep(SPIN_HOLD)
         table.advance(Settled(spin, amount, amount * spin.multiplier))
         await self._show(interaction, table)
