@@ -19,8 +19,10 @@ packages = ["src/horo_dcb"]
 
 [dependency-groups]
 dev = [
+    "pillow>=13.0.0",
     "pytest>=9.2.0",
     "pytest-asyncio>=1.4.1.post1",
+    "resvg-py>=0.5.0",
     "ruff>=0.17.4",
 ]
 

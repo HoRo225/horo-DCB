@@ -29,6 +29,15 @@ class Post(NamedTuple):
 
 
 @dataclass(frozen=True)
+class Wallet:
+    chips: int
+    stake: int | None
+
+
+FLOOR_CHIPS = 1000
+
+
+@dataclass(frozen=True)
 class Promotion:
     app: int
     name: str
@@ -91,6 +100,25 @@ def _promotion_record(record) -> bool:
     )
 
 
+def _chips_record(record) -> bool:
+    return (
+        isinstance(record, dict)
+        and set(record) == {"chips", "stake", "refilled"}
+        and type(record["chips"]) is int
+        and record["chips"] >= 0
+        and (record["stake"] is None or (type(record["stake"]) is int and record["stake"] > 0))
+        and isinstance(record["refilled"], str)
+    )
+
+
+def _refilled(record: dict | None, today: str) -> dict:
+    if record is None:
+        return {"chips": FLOOR_CHIPS, "stake": None, "refilled": today}
+    if record["refilled"] == today:
+        return record
+    return record | {"chips": max(record["chips"], FLOOR_CHIPS), "refilled": today}
+
+
 def _promotion(record: dict) -> Promotion:
     post = record["post"]
     return Promotion(record["app"], record["name"], record["price"], record["ends"], None if post is None else Post(int(post["channel"]), int(post["message"])))
@@ -109,6 +137,7 @@ class Store:
         self._threads: dict = {"messages": {}, "threads": {}}
         self._rooms: dict = {}
         self._promotions: dict = {}
+        self._chips: dict = {}
 
     async def open(self) -> None:
         async with self.lock:
@@ -136,8 +165,15 @@ class Store:
             promotions = self._load("steam.json", {})
             if not all(_snowflake(package) and _promotion_record(record) for package, record in promotions.items()):
                 raise ValueError("storage_invalid")
+            chips = self._load("chips.json", {})
+            if not all(_snowflake(user) and _chips_record(record) for user, record in chips.items()):
+                raise ValueError("storage_invalid")
+            refunded = {user: record | {"chips": record["chips"] + (record["stake"] or 0), "stake": None} for user, record in chips.items()}
+            if refunded != chips:
+                self._write("chips.json", refunded)
             self._settings = settings
             self._threads = threads
+            self._chips = refunded
             self._rooms = rooms
             self._promotions = promotions
 
@@ -246,3 +282,35 @@ class Store:
             promotions = self._promotions | {str(package): _promotion_json(promotion)}
             self._write("steam.json", promotions)
             self._promotions = promotions
+
+    def _save_wallet(self, user_id: int, record: dict) -> Wallet:
+        chips = self._chips | {str(user_id): record}
+        self._write("chips.json", chips)
+        self._chips = chips
+        return Wallet(record["chips"], record["stake"])
+
+    async def wallet(self, user_id: int, today: str) -> Wallet:
+        async with self.lock:
+            current = self._chips.get(str(user_id))
+            record = _refilled(current, today)
+            return Wallet(record["chips"], record["stake"]) if record is current else self._save_wallet(user_id, record)
+
+    async def wager(self, user_id: int, today: str, stake: int, payout: int | None) -> Wallet | None:
+        async with self.lock:
+            record = _refilled(self._chips.get(str(user_id)), today)
+            if not 0 < stake <= record["chips"]:
+                return None
+            if payout is None:
+                return self._save_wallet(user_id, record | {"chips": record["chips"] - stake, "stake": stake})
+            return self._save_wallet(user_id, record | {"chips": record["chips"] - stake + payout})
+
+    async def settle(self, user_id: int, payout: int) -> Wallet:
+        async with self.lock:
+            record = self._chips[str(user_id)]
+            return self._save_wallet(user_id, record | {"chips": record["chips"] + payout, "stake": None})
+
+    async def forfeit(self, user_id: int) -> None:
+        async with self.lock:
+            record = self._chips.get(str(user_id))
+            if record is not None and record["stake"] is not None:
+                self._save_wallet(user_id, record | {"stake": None})

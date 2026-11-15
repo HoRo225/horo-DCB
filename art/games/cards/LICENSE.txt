@@ -1,0 +1,8 @@
+Playing card designs by Adrian Kennard, https://www.me.uk/cards/
+
+The source page states: "Released under CC0 Public Domain licence".
+CC0 1.0 Universal: https://creativecommons.org/publicdomain/zero/1.0/legalcode
+
+Downloaded 2026-11-15 from the deck generator (makeadeck.cgi) as "zip file of SVG for web use" with these settings:
+size poker, ace of spades Fancy with ace1, ace2 and qr left empty, back Diamond, back and front colour #ffffff,
+pips Normal, black #000000, red #ff0000. back.svg is 1B.svg from that zip, and T is the 10.

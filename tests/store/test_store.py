@@ -2,7 +2,7 @@ import json
 
 import pytest
 
-from horo_dcb.store import Entry, Post, Promotion, Settings, Store
+from horo_dcb.store import Entry, Post, Promotion, Settings, Store, Wallet
 
 
 def write(directory, filename: str, value) -> None:
@@ -29,6 +29,7 @@ async def test_first_open_creates_empty_files(tmp_path):
     assert read(directory, "threads.json") == {"messages": {}, "threads": {}}
     assert read(directory, "rooms.json") == {}
     assert read(directory, "steam.json") == {}
+    assert read(directory, "chips.json") == {}
 
 
 async def test_settings_changes_survive_a_reopen(tmp_path):
@@ -217,3 +218,82 @@ async def test_invalid_steam_file_is_refused(tmp_path, promotions):
     with pytest.raises(ValueError):
         await opened(tmp_path)
     assert read(tmp_path, "steam.json") == promotions
+
+
+async def test_new_player_starts_with_a_thousand_chips(tmp_path):
+    store = await opened(tmp_path)
+    assert read(tmp_path, "chips.json") == {}
+    assert await store.wallet(7, "2026-11-15") == Wallet(1000, None)
+    assert read(tmp_path, "chips.json") == {"7": {"chips": 1000, "stake": None, "refilled": "2026-11-15"}}
+
+
+async def test_blackjack_stake_is_held_until_settled(tmp_path):
+    store = await opened(tmp_path)
+    assert await store.wager(7, "2026-11-15", 100, None) == Wallet(900, 100)
+    assert read(tmp_path, "chips.json")["7"] == {"chips": 900, "stake": 100, "refilled": "2026-11-15"}
+    assert await store.settle(7, 250) == Wallet(1150, None)
+    assert read(tmp_path, "chips.json")["7"] == {"chips": 1150, "stake": None, "refilled": "2026-11-15"}
+
+
+async def test_forfeit_drops_the_stake_without_refund(tmp_path):
+    store = await opened(tmp_path)
+    await store.wager(7, "2026-11-15", 100, None)
+    await store.forfeit(7)
+    await store.forfeit(8)
+    assert read(tmp_path, "chips.json") == {"7": {"chips": 900, "stake": None, "refilled": "2026-11-15"}}
+
+
+async def test_slots_wager_debits_and_pays_in_one_write(tmp_path):
+    store = await opened(tmp_path)
+    assert await store.wager(7, "2026-11-15", 100, 1500) == Wallet(2400, None)
+    assert read(tmp_path, "chips.json")["7"]["chips"] == 2400
+
+
+@pytest.mark.parametrize("stake", [1001, 0])
+async def test_wager_beyond_the_balance_changes_nothing(tmp_path, stake):
+    store = await opened(tmp_path)
+    await store.wallet(7, "2026-11-15")
+    assert await store.wager(7, "2026-11-15", stake, None) is None
+    assert read(tmp_path, "chips.json")["7"] == {"chips": 1000, "stake": None, "refilled": "2026-11-15"}
+
+
+async def test_low_balance_refills_once_per_taipei_day(tmp_path):
+    write(tmp_path, "chips.json", {"7": {"chips": 30, "stake": None, "refilled": "2026-11-14"}, "8": {"chips": 5000, "stake": None, "refilled": "2026-11-14"}})
+    store = await opened(tmp_path)
+    assert await store.wallet(7, "2026-11-14") == Wallet(30, None)
+    assert await store.wallet(7, "2026-11-15") == Wallet(1000, None)
+    await store.wager(7, "2026-11-15", 1000, 0)
+    assert await store.wallet(7, "2026-11-15") == Wallet(0, None)
+    assert await store.wallet(8, "2026-11-15") == Wallet(5000, None)
+    assert read(tmp_path, "chips.json") == {"7": {"chips": 0, "stake": None, "refilled": "2026-11-15"}, "8": {"chips": 5000, "stake": None, "refilled": "2026-11-15"}}
+
+
+async def test_reopen_refunds_stakes_left_by_a_restart(tmp_path):
+    store = await opened(tmp_path)
+    await store.wager(7, "2026-11-15", 100, None)
+    reopened = await opened(tmp_path)
+    assert read(tmp_path, "chips.json")["7"] == {"chips": 1000, "stake": None, "refilled": "2026-11-15"}
+    assert await reopened.wallet(7, "2026-11-15") == Wallet(1000, None)
+    await opened(tmp_path)
+    assert read(tmp_path, "chips.json")["7"]["chips"] == 1000
+
+
+@pytest.mark.parametrize(
+    "chips",
+    [
+        [],
+        {"player": {"chips": 1, "stake": None, "refilled": "2026-11-15"}},
+        {"7": {"chips": "1", "stake": None, "refilled": "2026-11-15"}},
+        {"7": {"chips": True, "stake": None, "refilled": "2026-11-15"}},
+        {"7": {"chips": -1, "stake": None, "refilled": "2026-11-15"}},
+        {"7": {"chips": 1, "stake": 0, "refilled": "2026-11-15"}},
+        {"7": {"chips": 1, "stake": None, "refilled": 20261115}},
+        {"7": {"chips": 1, "stake": None}},
+    ],
+    ids=["not-an-object", "non-digit-user", "string-chips", "boolean-chips", "negative-chips", "zero-stake", "numeric-date", "missing-date"],
+)
+async def test_invalid_chips_file_is_refused(tmp_path, chips):
+    write(tmp_path, "chips.json", chips)
+    with pytest.raises(ValueError):
+        await opened(tmp_path)
+    assert read(tmp_path, "chips.json") == chips
