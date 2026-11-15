@@ -1,6 +1,5 @@
 import asyncio
 import json
-import re
 from itertools import product
 from dataclasses import dataclass, field
 from types import SimpleNamespace
@@ -12,7 +11,7 @@ import pytest
 from horo_dcb import games as games_module
 from horo_dcb import slots
 from horo_dcb.blackjack import Card
-from horo_dcb.games import ACTION_TEMPLATE, BetModal, Games, Lobby
+from horo_dcb.games import BetModal, Games, Lobby
 from horo_dcb.store import Store
 from tests.support.discord_fakes import http_error, member, view_text
 from tests.support.waiting import until
@@ -99,9 +98,11 @@ class Response:
 
 
 class Interaction:
-    def __init__(self, user: Mock, message: Message | None = None) -> None:
+    def __init__(self, user: Mock, message: Message | None = None, custom_id: str | None = None) -> None:
         self.user = user
         self.message = message
+        self.type = discord.InteractionType.application_command if custom_id is None else discord.InteractionType.component
+        self.data = {} if custom_id is None else {"custom_id": custom_id}
         self.guild = SimpleNamespace(me=SimpleNamespace(display_name="樂奈"))
         self.client = SimpleNamespace(user=None)
         self.response = Response(message)
@@ -130,7 +131,7 @@ async def games(tmp_path, monkeypatch):
     monkeypatch.setattr(games_module, "today", lambda: "2026-11-15")
     store = Store(tmp_path)
     await store.open()
-    value = Games(SimpleNamespace(store=store, add_dynamic_items=Mock()))
+    value = Games(SimpleNamespace(store=store))
     yield value
     await value.close()
 
@@ -167,13 +168,8 @@ async def open_table(games: Games, user: Mock, game: str, message_id: int = 500)
 
 async def press(games: Games, user: Mock, message: Message, label: str, shot: Shot | None = None) -> Interaction:
     button = (shot or message.screen).button(label)
-    interaction = Interaction(user, message)
-    if button.custom_id and button.custom_id.startswith("horo:game:rules:"):
-        await games.explain(interaction, button.custom_id.rsplit(":", 1)[1])  # ty: ignore[invalid-argument-type]
-        return interaction
-    match = re.fullmatch(ACTION_TEMPLATE, button.custom_id or "")
-    assert match is not None
-    await games.press(interaction, match["token"], match["action"])  # ty: ignore[invalid-argument-type]
+    interaction = Interaction(user, message, button.custom_id)
+    await games.route(interaction)  # ty: ignore[invalid-argument-type]
     return interaction
 
 
@@ -320,8 +316,8 @@ async def test_stale_button_only_redraws_the_current_state(games, tmp_path, monk
 
 async def test_unknown_table_gets_no_response(games):
     message = Message(999)
-    interaction = Interaction(player(), message)
-    await games.press(interaction, "0" * 32, "bet100")
+    interaction = Interaction(player(), message, f"horo:game:{'0' * 32}:bet100")
+    await games.route(interaction)  # ty: ignore[invalid-argument-type]
     assert not interaction.response.is_done()
     assert message.screens == []
 
@@ -333,7 +329,7 @@ async def test_new_table_replaces_the_old_and_forfeits_its_hand(games, tmp_path,
     new = await open_table(games, player(), "slots", 501)
     assert old.deleted and not new.deleted
     assert chips(tmp_path)["1"] == {"chips": 900, "stake": None, "refilled": "2026-11-15"}
-    await games.press(Interaction(player(), old), "0" * 32, "hit")
+    await games.route(Interaction(player(), old, f"horo:game:{'0' * 32}:hit"))  # ty: ignore[invalid-argument-type]
     assert chips(tmp_path)["1"]["chips"] == 900
 
 
@@ -385,6 +381,31 @@ async def test_double_click_while_spinning_bets_once(games, tmp_path, monkeypatc
     assert second.response.deferred == 1
     assert chips(tmp_path)["1"]["chips"] == 900
     assert sum(shot.files == ["spin.gif"] for shot in message.screens) == 1
+
+
+async def test_click_on_buttons_already_gone_is_still_acknowledged(games, tmp_path, monkeypatch):
+    monkeypatch.setattr(games_module, "SPIN_HOLD", 0.2)
+    rig_spin(monkeypatch, games_module.IDLE_STOPS)
+    message = await open_table(games, player(), "slots")
+    idle = message.screen
+    first = asyncio.create_task(press(games, player(), message, "下注 10", shot=idle))
+    await until(lambda: any(shot.files == ["spin.gif"] for shot in message.screens))
+    assert message.screen.labels() == []
+    late = await press(games, player(), message, "下注 10", shot=idle)
+    await first
+    assert late.response.deferred == 1
+    after = await press(games, player(), message, "下注 50", shot=idle)
+    assert after.response.is_done()
+    assert message.screen.labels()[:2] == ["下注 10", "下注 50"]
+    assert chips(tmp_path)["1"]["chips"] == 990
+
+
+async def test_unrelated_interactions_are_ignored(games):
+    other = Interaction(player(), Message(500), "console:refresh")
+    await games.route(other)  # ty: ignore[invalid-argument-type]
+    command = Interaction(player())
+    await games.route(command)  # ty: ignore[invalid-argument-type]
+    assert not other.response.is_done() and not command.response.is_done()
 
 
 async def test_rules_card_is_private_and_lists_odds(games):

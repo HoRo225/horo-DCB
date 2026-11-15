@@ -77,6 +77,9 @@ class HoroBot(commands.Bot):
             await self.tree.sync(guild=guild)
             self.synced_guilds.add(guild.id)
 
+    async def on_interaction(self, interaction: discord.Interaction) -> None:
+        await self.games.route(interaction)
+
     async def on_message(self, message: discord.Message) -> None:
         await self.chat.receive(message)
 

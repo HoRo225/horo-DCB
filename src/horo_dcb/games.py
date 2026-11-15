@@ -3,7 +3,6 @@ import contextlib
 import io
 import re
 import time
-from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING, Literal, cast
@@ -33,8 +32,8 @@ IDLE_SECONDS = 300
 SWEEP_SECONDS = 60
 SPIN_HOLD = STOPS_AT[-1] + BOUNCE_TIME + 1.2
 IDLE_STOPS = (7, 22, 30)
-ACTION_TEMPLATE = r"horo:game:(?P<token>[0-9a-f]{32}):(?P<action>bet\d{1,9}|custom|hit|stand)"
-RULES_TEMPLATE = r"horo:game:rules:(?P<game>blackjack|slots)"
+ACTION_ID = re.compile(r"horo:game:(?P<token>[0-9a-f]{32}):(?P<action>bet\d{1,9}|custom|hit|stand)")
+RULES_ID = re.compile(r"horo:game:rules:(?P<game>blackjack|slots)")
 TITLES: dict[Game, str] = {"blackjack": "21 點", "slots": "拉霸"}
 SUMMARIES: dict[Game, str] = {"blackjack": "跟{host}比點數 · 叫牌或停牌", "slots": "3×3 盤面 · 各線倍數相加"}
 OUTCOMES = {"win": ("🏆", "你贏了"), "blackjack": ("✨", "Blackjack"), "push": ("🤝", "平手"), "lose": ("💔", "你輸了"), "bust": ("💔", "你輸了")}
@@ -300,54 +299,15 @@ class BetModal(ui.Modal):
         log_event("games_interaction_error", error)
 
 
-type Press = Callable[[discord.Interaction, str, str], Awaitable[None]]
-type Explain = Callable[[discord.Interaction, Game], Awaitable[None]]
-
-
-def action_item(press: Press) -> type[ui.DynamicItem[ui.Button]]:
-    class ActionButton(ui.DynamicItem[ui.Button], template=ACTION_TEMPLATE):
-        def __init__(self, token: str, action: str) -> None:
-            super().__init__(ui.Button(custom_id=action_id(token, action)))
-            self.token = token
-            self.action = action
-
-        @classmethod
-        async def from_custom_id(cls, interaction: discord.Interaction, item: ui.Item, match: re.Match[str], /) -> ActionButton:
-            return cls(match["token"], match["action"])
-
-        async def callback(self, interaction: discord.Interaction) -> None:
-            await press(interaction, self.token, self.action)
-
-    return ActionButton
-
-
-def rules_item(explain: Explain) -> type[ui.DynamicItem[ui.Button]]:
-    class RulesButton(ui.DynamicItem[ui.Button], template=RULES_TEMPLATE):
-        def __init__(self, game: Game) -> None:
-            super().__init__(ui.Button(custom_id=rules_id(game)))
-            self.game: Game = game
-
-        @classmethod
-        async def from_custom_id(cls, interaction: discord.Interaction, item: ui.Item, match: re.Match[str], /) -> RulesButton:
-            return cls(cast(Game, match["game"]))
-
-        async def callback(self, interaction: discord.Interaction) -> None:
-            await explain(interaction, self.game)
-
-    return RulesButton
-
-
 class Games:
     def __init__(self, bot: HoroBot) -> None:
         self.bot = bot
         self.tables: dict[int, Table] = {}
         self.deck = Deck()
         self.reel = Reel()
-        self.items = (action_item(self.press), rules_item(self.explain))
         self.sweeper: asyncio.Task | None = None
 
     def start(self) -> None:
-        self.bot.add_dynamic_items(*self.items)
         if self.sweeper is None:
             self.sweeper = asyncio.create_task(self._sweep())
 
@@ -363,6 +323,18 @@ class Games:
             now = time.monotonic()
             for table in [table for table in self.tables.values() if not table.lock.locked() and now - table.touched >= IDLE_SECONDS]:
                 await self._close(table)
+
+    async def route(self, interaction: discord.Interaction) -> None:
+        if interaction.type is not discord.InteractionType.component:
+            return
+        custom_id = str((interaction.data or {}).get("custom_id", ""))
+        try:
+            if action := ACTION_ID.fullmatch(custom_id):
+                await self.press(interaction, action["token"], action["action"])
+            elif rules := RULES_ID.fullmatch(custom_id):
+                await self.explain(interaction, cast(Game, rules["game"]))
+        except Exception as error:
+            log_event("games_interaction_error", error)
 
     async def lobby(self, interaction: discord.Interaction) -> None:
         wallet = await self.bot.store.wallet(interaction.user.id, today())
