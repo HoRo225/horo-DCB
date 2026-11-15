@@ -9,6 +9,7 @@ from . import log_event
 from .chat import Chat
 from .codex import CodexClient
 from .console import Console
+from .games import Games
 from .render import ALLOWED_MENTIONS
 from .steam import Steam
 from .store import Store
@@ -29,12 +30,18 @@ class HoroBot(commands.Bot):
         self.chat = Chat(self)
         self.voice = Voice(self)
         self.steam = Steam(self)
+        self.games = Games(self)
         self.synced_guilds: set[int] = set()
 
         @self.tree.command(name="控制台", description="登入 ChatGPT 與調整機器人設定")
         @app_commands.guild_only()
         async def console_command(interaction: discord.Interaction) -> None:
             await self.console.open(interaction)
+
+        @self.tree.command(name="遊戲台", description="開啟遊戲大廳")
+        @app_commands.guild_only()
+        async def games_command(interaction: discord.Interaction) -> None:
+            await self.games.lobby(interaction)
 
         @self.tree.error
         async def command_error(interaction: discord.Interaction, error: app_commands.AppCommandError) -> None:
@@ -44,6 +51,7 @@ class HoroBot(commands.Bot):
         await self.store.open()
         self.codex.start()
         self.console.start()
+        self.games.start()
 
     async def on_ready(self) -> None:
         for guild in self.guilds:
@@ -83,7 +91,7 @@ class HoroBot(commands.Bot):
             log_event("shutdown_cleanup_timeout")
         finally:
             async with asyncio.timeout_at(deadline):
-                results = await asyncio.gather(self.console.close(), self.steam.close(), self.codex.close(), self.close(), return_exceptions=True)
+                results = await asyncio.gather(self.console.close(), self.steam.close(), self.games.close(), self.codex.close(), self.close(), return_exceptions=True)
                 for result in results:
                     if isinstance(result, Exception):
                         log_event("shutdown_resource_error", result)
