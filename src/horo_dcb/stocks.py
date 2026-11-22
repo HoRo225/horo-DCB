@@ -174,7 +174,7 @@ def holding_line(holding: Holding, quote: Quote | None) -> str:
 
 def picker(listings: dict[str, Listing], snapshot: dict[str, Daily], name: str | None, page: int, chips: int) -> list[ui.Item]:
     names = shelves(listings, snapshot)
-    parts: list[ui.Item] = [ui.Separator(), ui.TextDisplay("-# 選股 · 前一交易日收盤" if snapshot else "-# 選股")]
+    parts: list[ui.Item] = [ui.Separator(), ui.TextDisplay("-# 選股 · 每日收盤資料" if snapshot else "-# 選股")]
     if not names:
         return [*parts, ui.TextDisplay(f"-# {UNLISTED}")]
     name = name if name in names else names[0]

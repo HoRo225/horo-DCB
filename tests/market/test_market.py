@@ -76,14 +76,16 @@ async def test_listing_under_several_industries_appears_once(market, market_serv
         (["化學生技醫療", "化學工業"], "化學塑橡"),
         (["創新板股票"], "其他"),
         (["創新板股票", "生技醫療業"], "生技醫療"),
-        (["觀光事業"], "其他"),
+        (["太空產業"], "其他"),
+        (["觀光事業"], "觀光休閒"),
+        (["電子通路類"], "其他電子"),
         (["電子工業", "其他"], "其他"),
         (["金融保險", "電子零組件業"], "電子零組件"),
         (["上櫃指數股票型基金(ETF)", "上櫃ETF"], "ETF"),
         (["數位雲端類"], "資訊與雲端"),
         (["電子通路業", "文化創意業"], "其他電子"),
     ],
-    ids=["specific-after-broad", "specific-before-broad", "electronics-alone", "chem-bio-alone", "chem-bio-with-chemistry", "innovation-alone", "innovation-with-biotech", "unknown-name", "other-beats-broad", "table-order", "tpex-etf", "cloud", "distribution"],
+    ids=["specific-after-broad", "specific-before-broad", "electronics-alone", "chem-bio-alone", "chem-bio-with-chemistry", "innovation-alone", "innovation-with-biotech", "unknown-name", "tourism-alias", "distribution-alias", "other-beats-broad", "table-order", "tpex-etf", "cloud", "distribution"],
 )
 async def test_sector_merges_every_category_of_a_code(market, market_server, categories, sector):
     market_server.bodies["TaiwanStockInfo", None] = success([VALID | {"industry_category": category} for category in categories])

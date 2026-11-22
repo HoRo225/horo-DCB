@@ -411,7 +411,7 @@ async def test_holdings_page_is_private_and_lists_each_stock(stocks, tmp_path):
         "**2888**\n-# 5 股 · 均價 20 · 查無報價\n"
         "持股市值 29 · 籌碼 3,230 · 合計 3,259\n"
         "除權息與分割入帳 +2,260\n"
-        "-# 選股 · 前一交易日收盤"
+        "-# 選股 · 每日收盤資料"
     )
     assert page.colour == DOWN
     select = page.select()
@@ -421,7 +421,7 @@ async def test_holdings_page_is_private_and_lists_each_stock(stocks, tmp_path):
 
 async def test_empty_holdings_page_explains_how_to_start(stocks):
     page = (await command(stocks, None)).reply
-    assert page.text == "## 我的持股\n還沒有持股，從下面的選單挑一檔股票查價後買進\n-# 選股 · 前一交易日收盤"
+    assert page.text == "## 我的持股\n還沒有持股，從下面的選單挑一檔股票查價後買進\n-# 選股 · 每日收盤資料"
     assert [select.custom_id for select in page.selects()] == ["horo:stock:shelf", "horo:stock:pick"]
 
 
@@ -603,7 +603,7 @@ async def test_nothing_affordable_explains_instead_of_showing_a_menu(stocks, mar
     market_server.boards["tpex"] = []
     [page] = (await press(stocks, "horo:stock:shelf", values=["我買得起的"])).edits
     assert page.menu("horo:stock:pick") is None
-    assert page.text.endswith("\n-# 選股 · 前一交易日收盤\n-# 目前的籌碼買不起任何一檔")
+    assert page.text.endswith("\n-# 選股 · 每日收盤資料\n-# 目前的籌碼買不起任何一檔")
 
 
 async def test_empty_shelf_explains_instead_of_showing_a_menu(stocks, market_server):
