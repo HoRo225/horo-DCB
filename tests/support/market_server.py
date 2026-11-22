@@ -28,7 +28,9 @@ class FakeMarket:
     def __init__(self) -> None:
         self.rows: dict[str, dict] = {f"{row['ex']}_{row['c']}": row for row in fixture("mis.json")["msgArray"] if row.get("c")}
         self.bodies: dict[tuple[str, str | None], object] = {key: fixture(name) for key, name in FILES.items()}
+        self.boards: dict[str, object] = {"twse": fixture("twse_day_all.json"), "tpex": fixture("tpex_quotes.json")}
         self.statuses: dict[str, int] = {}
+        self.board_requests: list[str] = []
         self.quote_requests: list[list[str]] = []
         self.finmind_requests: list[dict[str, str]] = []
         self.server: TestServer | None = None
@@ -37,6 +39,8 @@ class FakeMarket:
         app = web.Application()
         app.router.add_get("/quote", self.quote)
         app.router.add_get("/finmind", self.finmind)
+        app.router.add_get("/twse", self.board)
+        app.router.add_get("/tpex", self.board)
         self.server = TestServer(app)
         await self.server.start_server()
 
@@ -65,3 +69,10 @@ class FakeMarket:
         if dataset in self.statuses:
             return web.Response(status=self.statuses[dataset])
         return web.json_response(self.bodies.get((dataset, query.get("data_id")), success([])))
+
+    async def board(self, request: web.Request) -> web.Response:
+        name = request.path.strip("/")
+        self.board_requests.append(name)
+        if name in self.statuses:
+            return web.Response(status=self.statuses[name])
+        return web.json_response(self.boards[name])

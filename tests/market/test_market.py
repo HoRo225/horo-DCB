@@ -5,20 +5,20 @@ from decimal import Decimal
 import pytest
 
 from horo_dcb import market as market_module
-from horo_dcb.market import Listing, Market, MarketError, Quote
+from horo_dcb.market import Daily, Listing, Market, MarketError, Quote
 from horo_dcb.portfolio import Bar, Dividend, Split
 from tests.support.market_server import success
 
 TODAY = date(2026, 11, 22)
-TSMC = Listing("2330", "台積電", "tse")
-GLOBALWAFERS = Listing("6488", "環球晶", "otc")
-SHINKONG = Listing("2888", "新光金", "tse")
+TSMC = Listing("2330", "台積電", "tse", "半導體")
+GLOBALWAFERS = Listing("6488", "環球晶", "otc", "半導體")
+SHINKONG = Listing("2888", "新光金", "tse", "金融")
 VALID = {"industry_category": "半導體業", "stock_id": "2330", "stock_name": "台積電", "type": "twse", "date": "2026-11-22"}
 
 
 @pytest.fixture
 async def market(market_server):
-    value = Market(quote_url=market_server.url("/quote"), finmind_url=market_server.url("/finmind"))
+    value = Market(quote_url=market_server.url("/quote"), finmind_url=market_server.url("/finmind"), twse_url=market_server.url("/twse"), tpex_url=market_server.url("/tpex"))
     yield value
     await value.close()
 
@@ -28,11 +28,11 @@ async def test_listings_keep_only_current_listed_stocks_and_etfs(market):
     assert listings == {
         "2330": TSMC,
         "6488": GLOBALWAFERS,
-        "00400A": Listing("00400A", "主動國泰動能高息", "tse"),
-        "0050": Listing("0050", "元大台灣50", "tse"),
-        "00878": Listing("00878", "國泰永續高股息", "tse"),
-        "00632R": Listing("00632R", "元大台灣50反1", "tse"),
-        "2881": Listing("2881", "富邦金", "tse"),
+        "00400A": Listing("00400A", "主動國泰動能高息", "tse", "ETF"),
+        "0050": Listing("0050", "元大台灣50", "tse", "ETF"),
+        "00878": Listing("00878", "國泰永續高股息", "tse", "ETF"),
+        "00632R": Listing("00632R", "元大台灣50反1", "tse", "ETF"),
+        "2881": Listing("2881", "富邦金", "tse", "金融"),
     }
 
 
@@ -64,6 +64,30 @@ async def test_each_rule_alone_drops_a_row(market, market_server, row):
 async def test_listing_under_several_industries_appears_once(market, market_server):
     market_server.bodies["TaiwanStockInfo", None] = success([VALID, VALID | {"industry_category": "電子工業"}])
     assert await market.listings(TODAY) == {"2330": TSMC}
+
+
+@pytest.mark.parametrize(
+    ("categories", "sector"),
+    [
+        (["電子工業", "半導體業"], "半導體"),
+        (["半導體業", "電子工業"], "半導體"),
+        (["電子工業"], "其他電子"),
+        (["化學生技醫療"], "生技醫療"),
+        (["化學生技醫療", "化學工業"], "化學塑橡"),
+        (["創新板股票"], "其他"),
+        (["創新板股票", "生技醫療業"], "生技醫療"),
+        (["觀光事業"], "其他"),
+        (["電子工業", "其他"], "其他"),
+        (["金融保險", "電子零組件業"], "電子零組件"),
+        (["上櫃指數股票型基金(ETF)", "上櫃ETF"], "ETF"),
+        (["數位雲端類"], "資訊與雲端"),
+        (["電子通路業", "文化創意業"], "其他電子"),
+    ],
+    ids=["specific-after-broad", "specific-before-broad", "electronics-alone", "chem-bio-alone", "chem-bio-with-chemistry", "innovation-alone", "innovation-with-biotech", "unknown-name", "other-beats-broad", "table-order", "tpex-etf", "cloud", "distribution"],
+)
+async def test_sector_merges_every_category_of_a_code(market, market_server, categories, sector):
+    market_server.bodies["TaiwanStockInfo", None] = success([VALID | {"industry_category": category} for category in categories])
+    assert (await market.listings(TODAY))["2330"].sector == sector
 
 
 async def test_listings_are_fetched_once_a_day_and_kept_when_the_refresh_fails(market, market_server):
@@ -123,7 +147,7 @@ async def test_quotes_are_reused_for_five_seconds(market, market_server, monkeyp
 
 
 async def test_more_than_sixty_quotes_are_split_into_requests(market, market_server):
-    listings = [Listing(f"{1000 + number}", f"股{number}", "tse") for number in range(61)]
+    listings = [Listing(f"{1000 + number}", f"股{number}", "tse", "其他") for number in range(61)]
     assert await market.quotes(listings) == {}
     assert [len(channels) for channels in market_server.quote_requests] == [60, 1]
 
@@ -197,3 +221,65 @@ async def test_concurrent_requests_for_the_same_day_share_one_fetch(market, mark
     await asyncio.gather(*(market.history("2330", TODAY) for _ in range(3)), *(market.listings(TODAY) for _ in range(3)))
     assert market_server.finmind_count("TaiwanStockPrice") == 1
     assert market_server.finmind_count("TaiwanStockInfo") == 1
+
+
+async def test_snapshot_parses_both_boards(market):
+    assert await market.snapshot(TODAY) == {
+        "00400A": Daily(Decimal("9.80"), Decimal("-0.76"), 640498037),
+        "0050": Daily(Decimal("84.45"), Decimal("-5.75"), 74858941327),
+        "00632R": Daily(Decimal("12.52"), Decimal("0.84"), 7112127823),
+        "00878": Daily(Decimal("28.03"), Decimal("-1.75"), 4951558372),
+        "2330": Daily(Decimal("2000"), Decimal("-100"), 177284650683),
+        "2881": Daily(Decimal("136.5"), Decimal("-11.5"), 4625582667),
+        "0051": Daily(Decimal("105.95"), Decimal("0"), 32332912),
+        "6488": Daily(Decimal("441.5"), Decimal("-48.5"), 3383488000),
+        "00687B": Daily(Decimal("27.47"), Decimal("0.08"), 1345725260),
+        "00719B": Daily(Decimal("31.99"), Decimal("0"), 177897600),
+        "00679B": Daily(Decimal("26.15"), None, 1470790310),
+    }
+
+
+async def test_snapshot_drops_untraded_rows_and_zeroes_odd_amounts(market, market_server):
+    market_server.boards["twse"] = [
+        {"Code": "1101", "ClosingPrice": "", "Change": "0.0000", "TradeValue": ""},
+        {"Code": "1102", "ClosingPrice": "", "Change": "0.0000", "TradeValue": "30745"},
+        {"Code": "1103", "ClosingPrice": "0.00", "Change": "0.0000", "TradeValue": "100"},
+        {"Code": "1104", "ClosingPrice": "10.00", "Change": "1.0000", "TradeValue": ""},
+        {"Code": "1105", "ClosingPrice": "5.00", "Change": "5.0000", "TradeValue": "100"},
+    ]
+    market_server.boards["tpex"] = [
+        {"SecuritiesCompanyCode": "6101", "Close": "----", "Change": "---", "TransactionAmount": "0"},
+        {"SecuritiesCompanyCode": "6102", "Close": "8.00", "Change": "除權", "TransactionAmount": "--"},
+        {"SecuritiesCompanyCode": "6103", "Close": "8.00", "Change": "+1.20", "TransactionAmount": "1,000"},
+    ]
+    assert await market.snapshot(TODAY) == {
+        "1104": Daily(Decimal("10"), Decimal("1"), 0),
+        "1105": Daily(Decimal("5"), None, 100),
+        "6102": Daily(Decimal("8"), None, 0),
+        "6103": Daily(Decimal("8"), Decimal("1.2"), 0),
+    }
+
+
+async def test_snapshot_is_fetched_once_a_day(market, market_server):
+    await market.snapshot(TODAY)
+    await asyncio.gather(market.snapshot(TODAY), market.snapshot(TODAY))
+    assert sorted(market_server.board_requests) == ["tpex", "twse"]
+    await market.snapshot(date(2026, 11, 23))
+    assert sorted(market_server.board_requests) == ["tpex", "tpex", "twse", "twse"]
+
+
+@pytest.mark.parametrize(
+    ("board", "status", "body"),
+    [("twse", 500, None), ("tpex", 503, None), ("twse", 200, {"stat": "ok"}), ("tpex", 200, [{"Close": "1.00"}])],
+    ids=["twse-down", "tpex-down", "not-a-list", "bad-row"],
+)
+async def test_snapshot_fails_whole_when_either_board_fails(market, market_server, board, status, body):
+    if status != 200:
+        market_server.statuses[board] = status
+    else:
+        market_server.boards[board] = body
+    with pytest.raises(MarketError):
+        await market.snapshot(TODAY)
+    market_server.statuses.clear()
+    market_server.boards[board] = []
+    assert await market.snapshot(TODAY)
