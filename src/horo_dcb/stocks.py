@@ -1,8 +1,10 @@
 import asyncio
 import re
 from collections.abc import Sequence
+from dataclasses import dataclass
 from datetime import date, datetime
 from decimal import Decimal
+from math import ceil
 from typing import TYPE_CHECKING, Literal, cast
 
 import discord
@@ -12,7 +14,7 @@ from discord.utils import escape_markdown
 from . import chart, log_event
 from .chart import Span
 from .games import GREY, TAIPEI, Screen, TableView, gallery, signed
-from .market import CODE, Listing, Market, MarketError, Quote
+from .market import CODE, SECTORS, Daily, Listing, Market, MarketError, Quote
 from .portfolio import Bar, Holding, standing
 from .store import Short
 
@@ -29,9 +31,21 @@ SPAN_ID = re.compile(rf"horo:stock:span:(?P<code>{CODE}):(?P<span>1m|3m|1y)")
 TRADE_ID = re.compile(rf"horo:stock:(?P<side>buy|sell):(?P<code>{CODE})")
 MINE_ID = "horo:stock:mine"
 OPEN_ID = "horo:stock:open"
+SHELF_ID = "horo:stock:shelf"
+PICK_ID = "horo:stock:pick"
+MOVE_ID = re.compile(r"horo:stock:(?:prev|next):(?P<name>[^:]+):(?P<page>\d+)")
+HOT, AFFORD = "熱門", "我買得起的"
+PAGE = 25
 CLOSING = "13:30:00"
 CHOICES = 25
 UNLISTED = "暫時抓不到股票清單，請稍後再試"
+
+
+@dataclass(frozen=True)
+class Shelf:
+    items: tuple[tuple[Listing, Daily | None], ...]
+    page: int
+    pages: int
 
 
 def today() -> date:
@@ -60,6 +74,28 @@ def matches(listings: dict[str, Listing], text: str) -> list[Listing]:
     by_code = sorted((listing for listing in listings.values() if listing.code.startswith(code)), key=lambda listing: listing.code)
     by_name = sorted((listing for listing in listings.values() if text in listing.name and not listing.code.startswith(code)), key=lambda listing: (listing.name.index(text), listing.code))
     return (by_code + by_name)[:CHOICES]
+
+
+def shelves(listings: dict[str, Listing], snapshot: dict[str, Daily]) -> list[str]:
+    present = {listing.sector for listing in listings.values()}
+    return [*([HOT, AFFORD] if snapshot else []), *(name for name in SECTORS if name in present)]
+
+
+def shelf(listings: dict[str, Listing], snapshot: dict[str, Daily], name: str, page: int, chips: int) -> Shelf:
+    def rank(listing: Listing) -> tuple[bool, int, str]:
+        daily = snapshot.get(listing.code)
+        return daily is None, 0 if daily is None else -daily.amount, listing.code
+
+    ranked = sorted(listings.values(), key=rank)
+    if name == HOT:
+        chosen = [listing for listing in ranked if listing.code in snapshot][:PAGE]
+    elif name == AFFORD:
+        chosen = [listing for listing in ranked if listing.code in snapshot and snapshot[listing.code].close <= chips]
+    else:
+        chosen = [listing for listing in ranked if listing.sector == name]
+    pages = max(1, ceil(len(chosen) / PAGE))
+    page = min(max(page, 0), pages - 1)
+    return Shelf(tuple((listing, snapshot.get(listing.code)) for listing in chosen[page * PAGE : (page + 1) * PAGE]), page, pages)
 
 
 def resolve(listings: dict[str, Listing], text: str) -> Listing | None:
@@ -97,6 +133,16 @@ def source_line(quote: Quote, day: date) -> str:
     return f"-# 報價來源 證交所 · {quote.time}"
 
 
+def daily_line(daily: Daily) -> str:
+    close = f"收盤 {money(daily.close)}"
+    if daily.change is None:
+        return close
+    if not daily.change:
+        return f"{close} · ±0"
+    arrow = "▲" if daily.change > 0 else "▼"
+    return f"{close} · {arrow} {abs(daily.change) / (daily.close - daily.change) * 100:.2f}%"
+
+
 def card(listing: Listing, quote: Quote, daily: Sequence[Bar], span: Span, day: date) -> Screen:
     bars = with_today(daily, quote)
     parts: list[ui.Item] = [ui.TextDisplay(f"## {named(listing)}\n{price_line(quote)}\n{detail_line(quote)}")]
@@ -126,7 +172,31 @@ def holding_line(holding: Holding, quote: Quote | None) -> str:
     return f"-# {average} · 現價 {money(quote.price)} · 損益 {signed(result.gain)}{ratio}"
 
 
-def holdings_view(holdings: dict[str, Holding], listings: dict[str, Listing], quotes: dict[str, Quote], chips: int, paid: int) -> ui.LayoutView:
+def picker(listings: dict[str, Listing], snapshot: dict[str, Daily], name: str | None, page: int, chips: int) -> list[ui.Item]:
+    names = shelves(listings, snapshot)
+    parts: list[ui.Item] = [ui.Separator(), ui.TextDisplay("-# 選股 · 前一交易日收盤" if snapshot else "-# 選股")]
+    if not names:
+        return [*parts, ui.TextDisplay(f"-# {UNLISTED}")]
+    name = name if name in names else names[0]
+    found = shelf(listings, snapshot, name, page, chips)
+    parts.append(ui.ActionRow(ui.Select(custom_id=SHELF_ID, options=[discord.SelectOption(label=option, value=option, default=option == name) for option in names])))
+    if found.items:
+        options = [discord.SelectOption(label=f"{listing.code} {listing.name}", value=listing.code, description=None if daily is None else daily_line(daily)) for listing, daily in found.items]
+        parts.append(ui.ActionRow(ui.Select(custom_id=PICK_ID, placeholder="選一檔看報價", options=options)))
+    else:
+        parts.append(ui.TextDisplay("-# 目前的籌碼買不起任何一檔" if name == AFFORD else "-# 這個分類沒有股票"))
+    if found.pages > 1:
+        parts.append(
+            ui.ActionRow(
+                ui.Button(label="上一頁", custom_id=f"horo:stock:prev:{name}:{max(found.page - 1, 0)}", disabled=found.page == 0),
+                ui.Button(label=f"第 {found.page + 1} / {found.pages} 頁", custom_id=f"horo:stock:at:{name}:{found.page}", disabled=True),
+                ui.Button(label="下一頁", custom_id=f"horo:stock:next:{name}:{min(found.page + 1, found.pages - 1)}", disabled=found.page == found.pages - 1),
+            )
+        )
+    return parts
+
+
+def holdings_view(holdings: dict[str, Holding], listings: dict[str, Listing], quotes: dict[str, Quote], chips: int, paid: int, browse: Sequence[ui.Item]) -> ui.LayoutView:
     lines = ["## 我的持股"]
     worth = gain = 0
     for code, holding in sorted(holdings.items()):
@@ -140,15 +210,15 @@ def holdings_view(holdings: dict[str, Holding], listings: dict[str, Listing], qu
     if holdings:
         lines.append(f"持股市值 {worth:,} · 籌碼 {chips:,} · 合計 {worth + chips:,}")
     else:
-        lines.append("還沒有持股，用 /股市 加上股票代號查價後買進")
+        lines.append("還沒有持股，從下面的選單挑一檔股票查價後買進")
     if paid:
         lines.append(f"除權息與分割入帳 +{paid:,}")
     parts: list[ui.Item] = [ui.TextDisplay("\n".join(lines))]
     options = [discord.SelectOption(label=f"{code} {listings[code].name}", value=code) for code in sorted(holdings) if code in listings][:CHOICES]
     if options:
-        parts.append(ui.ActionRow(ui.Select(custom_id=OPEN_ID, placeholder="開啟查價卡片", options=options)))
+        parts.append(ui.ActionRow(ui.Select(custom_id=OPEN_ID, placeholder="開啟持股的查價卡片", options=options)))
     view = TableView()
-    view.add_item(ui.Container(*parts, accent_colour=shade(gain)))
+    view.add_item(ui.Container(*parts, *browse, accent_colour=shade(gain)))
     return view
 
 
@@ -176,16 +246,20 @@ class Stocks:
     async def close(self) -> None:
         await self.market.close()
 
-    async def choices(self, current: str) -> list[app_commands.Choice[str]]:
-        text = current.strip()
-        if not text:
-            return []
+    async def choices(self, user_id: int, current: str) -> list[app_commands.Choice[str]]:
+        text, day = current.strip(), today()
         try:
-            listings = await self.market.listings(today())
+            listings = await self.market.listings(day)
         except Exception as error:
             log_event("stocks_autocomplete_error", error)
             return []
-        return [app_commands.Choice(name=f"{listing.code} {listing.name}", value=listing.code) for listing in matches(listings, text)]
+        if text:
+            found = matches(listings, text)
+        else:
+            held = [listings[code] for code in sorted(await self.bot.store.holdings(user_id)) if code in listings]
+            hot = [listing for listing, _ in shelf(listings, await self._snapshot(day), HOT, 0, 0).items]
+            found = list(dict.fromkeys([*held, *hot]))[:CHOICES]
+        return [app_commands.Choice(name=f"{listing.code} {listing.name}", value=listing.code) for listing in found]
 
     async def command(self, interaction: discord.Interaction, stock: str | None) -> None:
         try:
@@ -208,6 +282,7 @@ class Stocks:
             return
         data = cast(dict, interaction.data or {})
         custom_id = str(data.get("custom_id", ""))
+        value = str((data.get("values") or [""])[0])
         try:
             if found := SPAN_ID.fullmatch(custom_id):
                 await self._switch(interaction, found["code"], cast(Span, found["span"]))
@@ -215,8 +290,12 @@ class Stocks:
                 await self._prompt(interaction, cast(Side, found["side"]), found["code"])
             elif custom_id == MINE_ID:
                 await self._holdings(interaction)
-            elif custom_id == OPEN_ID:
-                await self._open(interaction, str((data.get("values") or [""])[0]))
+            elif custom_id in (OPEN_ID, PICK_ID):
+                await self._open(interaction, value)
+            elif custom_id == SHELF_ID:
+                await self._browse(interaction, value, 0)
+            elif found := MOVE_ID.fullmatch(custom_id):
+                await self._browse(interaction, found["name"], int(found["page"]))
         except Exception as error:
             log_event("stocks_interaction_error", error)
 
@@ -331,9 +410,23 @@ class Stocks:
             lines.append(f"除權息與分割入帳 +{paid:,}")
         await interaction.followup.send("\n".join(lines), ephemeral=True)
 
+    async def _snapshot(self, day: date) -> dict[str, Daily]:
+        try:
+            return await self.market.snapshot(day)
+        except MarketError as error:
+            log_event("stocks_market_error", error)
+            return {}
+
     async def _holdings(self, interaction: discord.Interaction) -> None:
         await interaction.response.defer(ephemeral=True, thinking=True)
-        day, user = today(), interaction.user.id
+        await interaction.followup.send(view=await self._page(interaction.user.id, None, 0), ephemeral=True)
+
+    async def _browse(self, interaction: discord.Interaction, name: str, page: int) -> None:
+        await interaction.response.defer()
+        await interaction.edit_original_response(view=await self._page(interaction.user.id, name, page))
+
+    async def _page(self, user: int, name: str | None, page: int) -> ui.LayoutView:
+        day = today()
         try:
             listings = await self.market.listings(day)
         except MarketError as error:
@@ -347,5 +440,6 @@ class Stocks:
         except MarketError as error:
             log_event("stocks_market_error", error)
             quotes = {}
+        snapshot = await self._snapshot(day) if listings else {}
         wallet = await self.bot.store.wallet(user, day.isoformat())
-        await interaction.followup.send(view=holdings_view(holdings, listings, quotes, wallet.chips, paid), ephemeral=True)
+        return holdings_view(holdings, listings, quotes, wallet.chips, paid, picker(listings, snapshot, name, page, wallet.chips))

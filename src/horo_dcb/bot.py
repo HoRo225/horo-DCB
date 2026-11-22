@@ -54,7 +54,7 @@ class HoroBot(commands.Bot):
 
         @stocks_command.autocomplete("stock")
         async def stock_choices(interaction: discord.Interaction, current: str) -> list[app_commands.Choice[str]]:
-            return await self.stocks.choices(current)
+            return await self.stocks.choices(interaction.user.id, current)
 
         @self.tree.error
         async def command_error(interaction: discord.Interaction, error: app_commands.AppCommandError) -> None:
