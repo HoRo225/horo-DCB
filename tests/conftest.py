@@ -3,6 +3,7 @@ import pytest
 from horo_dcb import codex as codex_module
 from horo_dcb.codex import CodexClient
 from tests.support.app_server import FakeAppServer
+from tests.support.market_server import FakeMarket
 from tests.support.steam_server import FakeSteam
 
 
@@ -17,6 +18,14 @@ async def app_server():
 @pytest.fixture
 async def steam_server():
     server = FakeSteam()
+    await server.start()
+    yield server
+    await server.close()
+
+
+@pytest.fixture
+async def market_server():
+    server = FakeMarket()
     await server.start()
     yield server
     await server.close()

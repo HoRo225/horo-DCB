@@ -1,0 +1,139 @@
+{
+ "msg": "success",
+ "status": 200,
+ "data": [
+  {
+   "industry_category": "所有證券",
+   "stock_id": "710509",
+   "stock_name": "建榮凱基9B購01",
+   "type": "tpex",
+   "date": "2020-11-15"
+  },
+  {
+   "industry_category": "存託憑證",
+   "stock_id": "9102",
+   "stock_name": "東亞科",
+   "type": "twse",
+   "date": "2024-12-04"
+  },
+  {
+   "industry_category": "金融保險",
+   "stock_id": "2888",
+   "stock_name": "新光金",
+   "type": "twse",
+   "date": "2026-07-03"
+  },
+  {
+   "industry_category": "電腦及週邊設備業",
+   "stock_id": "6599",
+   "stock_name": "普達系統",
+   "type": "emerging",
+   "date": "2026-11-22"
+  },
+  {
+   "industry_category": "半導體業",
+   "stock_id": "6488",
+   "stock_name": "環球晶",
+   "type": "tpex",
+   "date": "2026-11-22"
+  },
+  {
+   "industry_category": "ETF",
+   "stock_id": "00400A",
+   "stock_name": "主動國泰動能高息",
+   "type": "twse",
+   "date": "2026-11-22"
+  },
+  {
+   "industry_category": "半導體業",
+   "stock_id": "2330",
+   "stock_name": "台積電",
+   "type": "twse",
+   "date": "2026-11-22"
+  },
+  {
+   "industry_category": "電子工業",
+   "stock_id": "2330",
+   "stock_name": "台積電",
+   "type": "twse",
+   "date": "2026-11-22"
+  },
+  {
+   "industry_category": "ETF",
+   "stock_id": "00878",
+   "stock_name": "國泰永續高股息",
+   "type": "twse",
+   "date": "2026-11-22"
+  },
+  {
+   "industry_category": "ETF",
+   "stock_id": "00632R",
+   "stock_name": "元大台灣50反1",
+   "type": "twse",
+   "date": "2026-11-22"
+  },
+  {
+   "industry_category": "ETF",
+   "stock_id": "0050",
+   "stock_name": "元大台灣50",
+   "type": "twse",
+   "date": "2026-11-22"
+  },
+  {
+   "industry_category": "指數投資證券(ETN)",
+   "stock_id": "020040",
+   "stock_name": "元大上櫃ESG龍頭N",
+   "type": "tpex",
+   "date": "2026-11-22"
+  },
+  {
+   "industry_category": "受益證券",
+   "stock_id": "01001T",
+   "stock_name": "土銀富邦R1",
+   "type": "twse",
+   "date": "2026-11-22"
+  },
+  {
+   "industry_category": "ETN",
+   "stock_id": "020000",
+   "stock_name": "富邦特選蘋果N",
+   "type": "twse",
+   "date": "2026-11-22"
+  },
+  {
+   "industry_category": "金融保險",
+   "stock_id": "2881",
+   "stock_name": "富邦金",
+   "type": "twse",
+   "date": "2026-11-22"
+  },
+  {
+   "industry_category": "金融保險",
+   "stock_id": "2881A",
+   "stock_name": "富邦特",
+   "type": "twse",
+   "date": "2026-11-22"
+  },
+  {
+   "industry_category": "金融保險",
+   "stock_id": "2887Z1",
+   "stock_name": "台新新光己特",
+   "type": "twse",
+   "date": "2026-11-22"
+  },
+  {
+   "industry_category": "Index",
+   "stock_id": "OilGasElectricity",
+   "stock_name": "油電燃氣類指數",
+   "type": "twse",
+   "date": "None"
+  },
+  {
+   "industry_category": "大盤",
+   "stock_id": "TAIEX",
+   "stock_name": "加權指數",
+   "type": "twse",
+   "date": "None"
+  }
+ ]
+}
