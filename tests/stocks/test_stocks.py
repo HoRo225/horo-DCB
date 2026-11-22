@@ -341,8 +341,19 @@ async def test_trading_settles_dividends_first(stocks, tmp_path):
     await stocks.bot.store.open()
     interaction = await submit(stocks, "horo:stock:sell:00878", "1000")
     assert interaction.reply.content == "暫時抓不到 00878 國泰永續高股息 的報價，沒有成交\n除權息與分割入帳 +2,260"
-    assert stored(tmp_path, "stocks.json") == {"1": {"00878": {"shares": 1000, "cost": 30000, "settled": "2026-11-22"}}}
+    assert stored(tmp_path, "stocks.json") == {"1": {"00878": {"shares": 1000, "cost": 30000, "settled": "2026-11-21"}}}
     assert stored(tmp_path, "chips.json")["1"]["chips"] == 3260
+
+
+async def test_trading_a_held_stock_waits_until_dividends_can_be_settled(stocks, tmp_path, market_server):
+    (tmp_path / "stocks.json").write_text(json.dumps({"1": {"00400A": {"shares": 3, "cost": 30, "settled": "2026-08-01"}}}), encoding="utf-8")
+    await stocks.bot.store.open()
+    market_server.statuses["TaiwanStockDividendResult"] = 500
+    interaction = await submit(stocks, "horo:stock:sell:00400A", "3")
+    assert (interaction.reply.content, interaction.reply.ephemeral) == ("暫時無法結算 00400A 主動國泰動能高息 的除權息，沒有成交，請稍後再試", True)
+    assert stored(tmp_path, "stocks.json") == {"1": {"00400A": {"shares": 3, "cost": 30, "settled": "2026-08-01"}}}
+    bought = await submit(stocks, "horo:stock:buy:2330", "1")
+    assert bought.reply.content.startswith("籌碼不足")
 
 
 async def test_holdings_page_is_private_and_lists_each_stock(stocks, tmp_path):

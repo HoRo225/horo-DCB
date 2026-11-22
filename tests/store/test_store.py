@@ -364,7 +364,7 @@ async def test_settling_pays_chips_and_adjusts_shares(tmp_path):
     store = await opened(tmp_path)
     events = [Split(date(2026, 6, 18), Decimal("30"), Decimal("20")), Dividend(date(2026, 7, 16), Decimal("21"), Decimal("20"))]
     assert await store.settle_stock(7, "0050", events, DAY) == 14
-    assert read(tmp_path, "stocks.json") == {"7": {"0050": {"shares": 4, "cost": 500, "settled": "2026-11-22"}}}
+    assert read(tmp_path, "stocks.json") == {"7": {"0050": {"shares": 4, "cost": 500, "settled": "2026-11-21"}}}
     assert chips_of(tmp_path) == {"chips": 1014, "stake": None, "refilled": "2026-11-22"}
     assert await store.settle_stock(7, "0050", events, DAY) == 0
     assert chips_of(tmp_path)["chips"] == 1014
@@ -375,7 +375,7 @@ async def test_settling_without_events_still_marks_the_day(tmp_path):
     store = await opened(tmp_path)
     assert await store.settle_stock(7, "0050", [], DAY) == 0
     assert await store.settle_stock(7, "2330", [], DAY) == 0
-    assert read(tmp_path, "stocks.json") == {"7": {"0050": {"shares": 3, "cost": 500, "settled": "2026-11-22"}}}
+    assert read(tmp_path, "stocks.json") == {"7": {"0050": {"shares": 3, "cost": 500, "settled": "2026-11-21"}}}
     assert read(tmp_path, "chips.json") == {}
 
 

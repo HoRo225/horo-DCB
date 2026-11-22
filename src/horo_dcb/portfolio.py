@@ -1,7 +1,7 @@
 import math
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, timedelta
 from decimal import Decimal
 
 
@@ -73,7 +73,9 @@ def sold(holding: Holding, shares: int) -> Holding | None:
 
 def settle(holding: Holding, events: Iterable[Event], today: date) -> tuple[Holding | None, int]:
     shares, paid = holding.shares, 0
+    settled = max(holding.settled, today - timedelta(days=1))
     for event in sorted((event for event in events if holding.settled < event.day <= today), key=lambda event: event.day):
+        settled = max(settled, event.day)
         match event:
             case Dividend(before=before, after=after):
                 paid += math.floor(shares * (before - after))
@@ -84,7 +86,7 @@ def settle(holding: Holding, events: Iterable[Event], today: date) -> tuple[Hold
                 shares = whole
     if shares == 0:
         return None, paid
-    return Holding(shares, holding.cost, today), paid
+    return Holding(shares, holding.cost, settled), paid
 
 
 def standing(holding: Holding, price: Decimal) -> Standing:

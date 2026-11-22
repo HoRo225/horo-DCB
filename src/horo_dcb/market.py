@@ -1,6 +1,5 @@
 import asyncio
 import re
-import ssl
 from collections.abc import Awaitable, Callable, Iterable
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
@@ -121,8 +120,6 @@ class Market:
         self.quote_url = quote_url
         self.finmind_url = finmind_url
         self._session: aiohttp.ClientSession | None = None
-        self._relaxed = ssl.create_default_context()
-        self._relaxed.verify_flags &= ~ssl.VERIFY_X509_STRICT
         self._locks: dict[tuple, asyncio.Lock] = {}
         self._daily: dict[tuple, tuple[date, Any]] = {}
         self._quotes: dict[str, tuple[float, Quote | None]] = {}
@@ -132,11 +129,11 @@ class Market:
         if self._session is not None:
             await self._session.close()
 
-    async def _get(self, url: str, params: dict[str, str], tls: ssl.SSLContext | bool = True) -> dict:
+    async def _get(self, url: str, params: dict[str, str]) -> dict:
         if self._session is None:
             self._session = aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=TIMEOUT))
         try:
-            async with self._session.get(url, params=params, ssl=tls) as response:
+            async with self._session.get(url, params=params) as response:
                 if response.status != 200:
                     raise MarketError(f"http_{response.status}")
                 body = await response.json(content_type=None)
@@ -179,7 +176,7 @@ class Market:
             now = monotonic()
             stale = [listing for code, listing in wanted.items() if code not in self._quotes or now - self._quotes[code][0] >= QUOTE_SECONDS]
             for chunk in batched(stale, BATCH):
-                body = await self._get(self.quote_url, {"ex_ch": "|".join(f"{listing.board}_{listing.code}.tw" for listing in chunk), "json": "1", "delay": "0"}, self._relaxed)
+                body = await self._get(self.quote_url, {"ex_ch": "|".join(f"{listing.board}_{listing.code}.tw" for listing in chunk), "json": "1", "delay": "0"})
                 found = _parsed(parse_quotes, body)
                 for listing in chunk:
                     self._quotes[listing.code] = (now, found.get(listing.code))

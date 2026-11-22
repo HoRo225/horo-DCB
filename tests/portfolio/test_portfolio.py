@@ -8,6 +8,7 @@ from horo_dcb.portfolio import Bar, Dividend, Holding, Split, Standing, affordab
 D = Decimal
 BEFORE = date(2026, 3, 1)
 TODAY = date(2026, 11, 22)
+YESTERDAY = date(2026, 11, 21)
 
 
 def test_buying_rounds_up_and_selling_rounds_down_without_float_error():
@@ -49,20 +50,20 @@ def test_standing_reports_value_gain_and_ratio():
 
 def test_cash_dividend_pays_the_price_drop_per_share():
     holding = Holding(1000, 1_800_000, BEFORE)
-    assert settle(holding, [Dividend(date(2026, 3, 17), D("1845"), D("1838.99"))], TODAY) == (Holding(1000, 1_800_000, TODAY), 6010)
+    assert settle(holding, [Dividend(date(2026, 3, 17), D("1845"), D("1838.99"))], TODAY) == (Holding(1000, 1_800_000, YESTERDAY), 6010)
 
 
 def test_stock_dividend_is_paid_in_chips():
-    assert settle(Holding(100, 5000, BEFORE), [Dividend(date(2026, 7, 1), D("50"), D("45.45"))], TODAY) == (Holding(100, 5000, TODAY), 455)
+    assert settle(Holding(100, 5000, BEFORE), [Dividend(date(2026, 7, 1), D("50"), D("45.45"))], TODAY) == (Holding(100, 5000, YESTERDAY), 455)
 
 
 def test_split_multiplies_shares_and_pays_the_fraction():
-    assert settle(Holding(3, 90, BEFORE), [Split(date(2026, 6, 18), D("100"), D("25"))], TODAY) == (Holding(12, 90, TODAY), 0)
-    assert settle(Holding(3, 90, BEFORE), [Split(date(2026, 6, 18), D("30"), D("20"))], TODAY) == (Holding(4, 90, TODAY), 10)
+    assert settle(Holding(3, 90, BEFORE), [Split(date(2026, 6, 18), D("100"), D("25"))], TODAY) == (Holding(12, 90, YESTERDAY), 0)
+    assert settle(Holding(3, 90, BEFORE), [Split(date(2026, 6, 18), D("30"), D("20"))], TODAY) == (Holding(4, 90, YESTERDAY), 10)
 
 
 def test_reverse_split_merges_shares_and_pays_the_fraction():
-    assert settle(Holding(10, 33, BEFORE), [Split(date(2026, 4, 22), D("3.28"), D("22.96"))], TODAY) == (Holding(1, 33, TODAY), 9)
+    assert settle(Holding(10, 33, BEFORE), [Split(date(2026, 4, 22), D("3.28"), D("22.96"))], TODAY) == (Holding(1, 33, YESTERDAY), 9)
 
 
 def test_reverse_split_below_one_share_removes_the_holding():
@@ -79,7 +80,21 @@ def test_settling_twice_on_the_same_day_pays_once():
 
 def test_events_apply_in_date_order():
     events = [Dividend(date(2026, 9, 1), D("21"), D("20")), Split(date(2026, 6, 1), D("30"), D("20"))]
-    assert settle(Holding(3, 90, BEFORE), events, TODAY) == (Holding(4, 90, TODAY), 14)
+    assert settle(Holding(3, 90, BEFORE), events, TODAY) == (Holding(4, 90, YESTERDAY), 14)
+
+
+def test_an_event_published_late_on_its_own_day_still_pays():
+    held = Holding(10, 100, BEFORE)
+    early, paid = settle(held, [], TODAY)
+    assert (early, paid) == (Holding(10, 100, YESTERDAY), 0)
+    assert early is not None
+    late = [Dividend(TODAY, D("11"), D("10"))]
+    assert settle(early, late, TODAY) == (Holding(10, 100, TODAY), 10)
+    assert settle(early, late, date(2026, 11, 23)) == (Holding(10, 100, TODAY), 10)
+
+
+def test_settling_never_moves_a_newer_settled_day_back():
+    assert settle(Holding(10, 100, TODAY), [], TODAY) == (Holding(10, 100, TODAY), 0)
 
 
 def test_only_events_after_the_settled_day_up_to_today_apply():

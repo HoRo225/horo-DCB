@@ -286,14 +286,14 @@ class Stocks:
             held = holding.shares
         await interaction.response.send_modal(TradeModal(self, listing, side, held))
 
-    async def _settle(self, user_id: int, code: str, holding: Holding | None, day: date) -> int:
+    async def _settle(self, user_id: int, code: str, holding: Holding | None, day: date) -> int | None:
         if holding is None or holding.settled >= day:
             return 0
         try:
             events = await self.market.events(code, holding.settled, day)
         except MarketError as error:
             log_event("stocks_settle_error", error)
-            return 0
+            return None
         return await self.bot.store.settle_stock(user_id, code, events, day)
 
     async def trade(self, interaction: discord.Interaction, listing: Listing, side: Side, text: str) -> None:
@@ -304,6 +304,9 @@ class Stocks:
         await interaction.response.defer(ephemeral=True, thinking=True)
         day, user = today(), interaction.user.id
         paid = await self._settle(user, listing.code, (await self.bot.store.holdings(user)).get(listing.code), day)
+        if paid is None:
+            await interaction.followup.send(f"暫時無法結算 {named(listing)} 的除權息，沒有成交，請稍後再試", ephemeral=True)
+            return
         try:
             quote = (await self.market.quotes([listing])).get(listing.code)
         except MarketError as error:
@@ -337,7 +340,7 @@ class Stocks:
             log_event("stocks_market_error", error)
             listings = {}
         held = await self.bot.store.holdings(user)
-        paid = sum(await asyncio.gather(*(self._settle(user, code, holding, day) for code, holding in held.items())))
+        paid = sum(result or 0 for result in await asyncio.gather(*(self._settle(user, code, holding, day) for code, holding in held.items())))
         holdings = await self.bot.store.holdings(user)
         try:
             quotes = await self.market.quotes([listings[code] for code in holdings if code in listings])
