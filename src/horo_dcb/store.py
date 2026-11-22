@@ -1,9 +1,14 @@
 import asyncio
 import json
 import os
+from collections.abc import Iterable
 from dataclasses import dataclass
+from datetime import date
+from decimal import Decimal
 from pathlib import Path
 from typing import NamedTuple
+
+from .portfolio import Event, Holding, affordable, bought, buy_cost, sell_value, sold, settle as settle_holding
 
 
 @dataclass(frozen=True)
@@ -35,6 +40,19 @@ class Wallet:
 
 
 FLOOR_CHIPS = 1000
+
+
+@dataclass(frozen=True)
+class Trade:
+    shares: int
+    amount: int
+    chips: int
+    holding: Holding | None
+
+
+@dataclass(frozen=True)
+class Short:
+    affordable: int
 
 
 @dataclass(frozen=True)
@@ -111,6 +129,33 @@ def _chips_record(record) -> bool:
     )
 
 
+def _day(value) -> bool:
+    try:
+        return isinstance(value, str) and date.fromisoformat(value).isoformat() == value
+    except ValueError:
+        return False
+
+
+def _holding_record(record) -> bool:
+    return (
+        isinstance(record, dict)
+        and set(record) == {"shares", "cost", "settled"}
+        and type(record["shares"]) is int
+        and record["shares"] > 0
+        and type(record["cost"]) is int
+        and record["cost"] >= 0
+        and _day(record["settled"])
+    )
+
+
+def _holding(record: dict) -> Holding:
+    return Holding(record["shares"], record["cost"], date.fromisoformat(record["settled"]))
+
+
+def _holding_json(holding: Holding) -> dict:
+    return {"shares": holding.shares, "cost": holding.cost, "settled": holding.settled.isoformat()}
+
+
 def _refilled(record: dict | None, today: str) -> dict:
     if record is None:
         return {"chips": FLOOR_CHIPS, "stake": None, "refilled": today}
@@ -138,6 +183,7 @@ class Store:
         self._rooms: dict = {}
         self._promotions: dict = {}
         self._chips: dict = {}
+        self._stocks: dict = {}
 
     async def open(self) -> None:
         async with self.lock:
@@ -168,12 +214,16 @@ class Store:
             chips = self._load("chips.json", {})
             if not all(_snowflake(user) and _chips_record(record) for user, record in chips.items()):
                 raise ValueError("storage_invalid")
+            stocks = self._load("stocks.json", {})
+            if not all(_snowflake(user) and isinstance(holdings, dict) and all(isinstance(code, str) and _holding_record(record) for code, record in holdings.items()) for user, holdings in stocks.items()):
+                raise ValueError("storage_invalid")
             refunded = {user: record | {"chips": record["chips"] + (record["stake"] or 0), "stake": None} for user, record in chips.items()}
             if refunded != chips:
                 self._write("chips.json", refunded)
             self._settings = settings
             self._threads = threads
             self._chips = refunded
+            self._stocks = stocks
             self._rooms = rooms
             self._promotions = promotions
 
@@ -314,3 +364,55 @@ class Store:
             record = self._chips.get(str(user_id))
             if record is not None and record["stake"] is not None:
                 self._save_wallet(user_id, record | {"stake": None})
+
+    def _held(self, user_id: int, code: str) -> Holding | None:
+        record = self._stocks.get(str(user_id), {}).get(code)
+        return None if record is None else _holding(record)
+
+    def _save_holding(self, user_id: int, code: str, holding: Holding | None) -> None:
+        mine = {key: record for key, record in self._stocks.get(str(user_id), {}).items() if key != code}
+        if holding is not None:
+            mine[code] = _holding_json(holding)
+        stocks = {user: holdings for user, holdings in self._stocks.items() if user != str(user_id)} | ({str(user_id): mine} if mine else {})
+        self._write("stocks.json", stocks)
+        self._stocks = stocks
+
+    async def holdings(self, user_id: int) -> dict[str, Holding]:
+        async with self.lock:
+            return {code: _holding(record) for code, record in self._stocks.get(str(user_id), {}).items()}
+
+    async def buy(self, user_id: int, today: date, code: str, shares: int, price: Decimal) -> Trade | Short:
+        async with self.lock:
+            record = _refilled(self._chips.get(str(user_id)), today.isoformat())
+            cost = buy_cost(price, shares)
+            if cost > record["chips"]:
+                return Short(affordable(price, record["chips"]))
+            holding = bought(self._held(user_id, code), shares, cost, today)
+            self._save_holding(user_id, code, holding)
+            wallet = self._save_wallet(user_id, record | {"chips": record["chips"] - cost})
+            return Trade(shares, cost, wallet.chips, holding)
+
+    async def sell(self, user_id: int, today: date, code: str, shares: int, price: Decimal) -> Trade | None:
+        async with self.lock:
+            held = self._held(user_id, code)
+            if held is None or not 0 < shares <= held.shares:
+                return None
+            value = sell_value(price, shares)
+            record = _refilled(self._chips.get(str(user_id)), today.isoformat())
+            wallet = self._save_wallet(user_id, record | {"chips": record["chips"] + value})
+            holding = sold(held, shares)
+            self._save_holding(user_id, code, holding)
+            return Trade(shares, value, wallet.chips, holding)
+
+    async def settle_stock(self, user_id: int, code: str, events: Iterable[Event], today: date) -> int:
+        async with self.lock:
+            held = self._held(user_id, code)
+            if held is None:
+                return 0
+            holding, paid = settle_holding(held, events, today)
+            if paid:
+                record = _refilled(self._chips.get(str(user_id)), today.isoformat())
+                self._save_wallet(user_id, record | {"chips": record["chips"] + paid})
+            if holding != held:
+                self._save_holding(user_id, code, holding)
+            return paid

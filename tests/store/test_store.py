@@ -1,8 +1,13 @@
 import json
+from datetime import date
+from decimal import Decimal
 
 import pytest
 
-from horo_dcb.store import Entry, Post, Promotion, Settings, Store, Wallet
+from horo_dcb.portfolio import Dividend, Holding, Split
+from horo_dcb.store import Entry, Post, Promotion, Settings, Short, Store, Trade, Wallet
+
+DAY = date(2026, 11, 22)
 
 
 def write(directory, filename: str, value) -> None:
@@ -297,3 +302,118 @@ async def test_invalid_chips_file_is_refused(tmp_path, chips):
     with pytest.raises(ValueError):
         await opened(tmp_path)
     assert read(tmp_path, "chips.json") == chips
+
+
+def chips_of(directory, user: str = "7") -> dict:
+    return read(directory, "chips.json")[user]
+
+
+async def test_buying_debits_chips_and_records_the_holding(tmp_path):
+    store = await opened(tmp_path)
+    assert read(tmp_path, "stocks.json") == {}
+    assert await store.buy(7, DAY, "00400A", 3, Decimal("9.8")) == Trade(3, 30, 970, Holding(3, 30, DAY))
+    assert await store.buy(7, DAY, "00400A", 10, Decimal("9.9")) == Trade(10, 99, 871, Holding(13, 129, DAY))
+    assert read(tmp_path, "stocks.json") == {"7": {"00400A": {"shares": 13, "cost": 129, "settled": "2026-11-22"}}}
+    assert chips_of(tmp_path) == {"chips": 871, "stake": None, "refilled": "2026-11-22"}
+    assert await store.holdings(7) == {"00400A": Holding(13, 129, DAY)}
+    assert await store.holdings(8) == {}
+
+
+async def test_buying_beyond_the_chips_changes_nothing(tmp_path):
+    store = await opened(tmp_path)
+    assert await store.buy(7, DAY, "2330", 1, Decimal("1000.5")) == Short(0)
+    assert await store.buy(7, DAY, "00400A", 200, Decimal("9.8")) == Short(102)
+    assert read(tmp_path, "stocks.json") == {}
+    assert read(tmp_path, "chips.json") == {}
+
+
+async def test_buying_can_spend_every_chip(tmp_path):
+    store = await opened(tmp_path)
+    assert await store.buy(7, DAY, "0050", 10, Decimal("100")) == Trade(10, 1000, 0, Holding(10, 1000, DAY))
+    assert chips_of(tmp_path)["chips"] == 0
+
+
+async def test_buying_uses_the_daily_refill(tmp_path):
+    write(tmp_path, "chips.json", {"7": {"chips": 10, "stake": None, "refilled": "2026-11-21"}})
+    store = await opened(tmp_path)
+    assert await store.buy(7, DAY, "00400A", 100, Decimal("9.8")) == Trade(100, 980, 20, Holding(100, 980, DAY))
+    assert chips_of(tmp_path) == {"chips": 20, "stake": None, "refilled": "2026-11-22"}
+
+
+async def test_selling_part_and_then_all(tmp_path):
+    store = await opened(tmp_path)
+    await store.buy(7, DAY, "00400A", 10, Decimal("9.8"))
+    assert await store.sell(7, DAY, "00400A", 4, Decimal("10.5")) == Trade(4, 42, 944, Holding(6, 58, DAY))
+    assert read(tmp_path, "stocks.json") == {"7": {"00400A": {"shares": 6, "cost": 58, "settled": "2026-11-22"}}}
+    assert await store.sell(7, DAY, "00400A", 6, Decimal("9.75")) == Trade(6, 58, 1002, None)
+    assert read(tmp_path, "stocks.json") == {}
+    assert chips_of(tmp_path)["chips"] == 1002
+
+
+@pytest.mark.parametrize(("code", "shares"), [("00400A", 4), ("00400A", 0), ("2330", 1)])
+async def test_selling_more_than_held_changes_nothing(tmp_path, code, shares):
+    store = await opened(tmp_path)
+    await store.buy(7, DAY, "00400A", 3, Decimal("9.8"))
+    assert await store.sell(7, DAY, code, shares, Decimal("9.8")) is None
+    assert read(tmp_path, "stocks.json") == {"7": {"00400A": {"shares": 3, "cost": 30, "settled": "2026-11-22"}}}
+    assert chips_of(tmp_path)["chips"] == 970
+
+
+async def test_settling_pays_chips_and_adjusts_shares(tmp_path):
+    write(tmp_path, "stocks.json", {"7": {"0050": {"shares": 3, "cost": 500, "settled": "2026-06-01"}}})
+    store = await opened(tmp_path)
+    events = [Split(date(2026, 6, 18), Decimal("30"), Decimal("20")), Dividend(date(2026, 7, 16), Decimal("21"), Decimal("20"))]
+    assert await store.settle_stock(7, "0050", events, DAY) == 14
+    assert read(tmp_path, "stocks.json") == {"7": {"0050": {"shares": 4, "cost": 500, "settled": "2026-11-22"}}}
+    assert chips_of(tmp_path) == {"chips": 1014, "stake": None, "refilled": "2026-11-22"}
+    assert await store.settle_stock(7, "0050", events, DAY) == 0
+    assert chips_of(tmp_path)["chips"] == 1014
+
+
+async def test_settling_without_events_still_marks_the_day(tmp_path):
+    write(tmp_path, "stocks.json", {"7": {"0050": {"shares": 3, "cost": 500, "settled": "2026-06-01"}}})
+    store = await opened(tmp_path)
+    assert await store.settle_stock(7, "0050", [], DAY) == 0
+    assert await store.settle_stock(7, "2330", [], DAY) == 0
+    assert read(tmp_path, "stocks.json") == {"7": {"0050": {"shares": 3, "cost": 500, "settled": "2026-11-22"}}}
+    assert read(tmp_path, "chips.json") == {}
+
+
+async def test_settling_a_reverse_split_below_one_share_removes_the_holding(tmp_path):
+    write(tmp_path, "stocks.json", {"7": {"00632R": {"shares": 5, "cost": 17, "settled": "2026-04-01"}, "2330": {"shares": 1, "cost": 2000, "settled": "2026-11-22"}}})
+    store = await opened(tmp_path)
+    assert await store.settle_stock(7, "00632R", [Split(date(2026, 4, 22), Decimal("3.28"), Decimal("22.96"))], DAY) == 16
+    assert read(tmp_path, "stocks.json") == {"7": {"2330": {"shares": 1, "cost": 2000, "settled": "2026-11-22"}}}
+    assert chips_of(tmp_path)["chips"] == 1016
+
+
+async def test_holdings_survive_a_reopen(tmp_path):
+    store = await opened(tmp_path)
+    await store.buy(7, DAY, "00400A", 3, Decimal("9.8"))
+    reopened = await opened(tmp_path)
+    assert await reopened.holdings(7) == {"00400A": Holding(3, 30, DAY)}
+    assert await reopened.wallet(7, "2026-11-22") == Wallet(970, None)
+
+
+@pytest.mark.parametrize(
+    "stocks",
+    [
+        [],
+        {"player": {}},
+        {"7": []},
+        {"7": {"2330": {"shares": 0, "cost": 0, "settled": "2026-11-22"}}},
+        {"7": {"2330": {"shares": True, "cost": 0, "settled": "2026-11-22"}}},
+        {"7": {"2330": {"shares": 1, "cost": -1, "settled": "2026-11-22"}}},
+        {"7": {"2330": {"shares": 1, "cost": 1.5, "settled": "2026-11-22"}}},
+        {"7": {"2330": {"shares": 1, "cost": 1, "settled": "20261122"}}},
+        {"7": {"2330": {"shares": 1, "cost": 1, "settled": "2026-02-30"}}},
+        {"7": {"2330": {"shares": 1, "cost": 1}}},
+        {"7": {"2330": {"shares": 1, "cost": 1, "settled": "2026-11-22", "extra": 1}}},
+    ],
+    ids=["not-an-object", "non-digit-user", "holdings-not-an-object", "zero-shares", "boolean-shares", "negative-cost", "float-cost", "basic-date", "impossible-date", "missing-date", "extra-field"],
+)
+async def test_invalid_stocks_file_is_refused(tmp_path, stocks):
+    write(tmp_path, "stocks.json", stocks)
+    with pytest.raises(ValueError):
+        await opened(tmp_path)
+    assert read(tmp_path, "stocks.json") == stocks

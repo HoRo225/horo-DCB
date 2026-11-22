@@ -12,6 +12,7 @@ from .console import Console
 from .games import Games
 from .render import ALLOWED_MENTIONS
 from .steam import Steam
+from .stocks import Stocks
 from .store import Store
 from .voice import Voice
 
@@ -31,6 +32,7 @@ class HoroBot(commands.Bot):
         self.voice = Voice(self)
         self.steam = Steam(self)
         self.games = Games(self)
+        self.stocks = Stocks(self)
         self.synced_guilds: set[int] = set()
 
         @self.tree.command(name="控制台", description="登入 ChatGPT 與調整機器人設定")
@@ -42,6 +44,17 @@ class HoroBot(commands.Bot):
         @app_commands.guild_only()
         async def games_command(interaction: discord.Interaction) -> None:
             await self.games.lobby(interaction)
+
+        @self.tree.command(name="股市", description="查台股報價、買賣與看持股")
+        @app_commands.guild_only()
+        @app_commands.rename(stock="股票")
+        @app_commands.describe(stock="代號或名稱")
+        async def stocks_command(interaction: discord.Interaction, stock: str | None = None) -> None:
+            await self.stocks.command(interaction, stock)
+
+        @stocks_command.autocomplete("stock")
+        async def stock_choices(interaction: discord.Interaction, current: str) -> list[app_commands.Choice[str]]:
+            return await self.stocks.choices(current)
 
         @self.tree.error
         async def command_error(interaction: discord.Interaction, error: app_commands.AppCommandError) -> None:
@@ -79,6 +92,7 @@ class HoroBot(commands.Bot):
 
     async def on_interaction(self, interaction: discord.Interaction) -> None:
         await self.games.route(interaction)
+        await self.stocks.route(interaction)
 
     async def on_message(self, message: discord.Message) -> None:
         await self.chat.receive(message)
@@ -94,7 +108,7 @@ class HoroBot(commands.Bot):
             log_event("shutdown_cleanup_timeout")
         finally:
             async with asyncio.timeout_at(deadline):
-                results = await asyncio.gather(self.console.close(), self.steam.close(), self.games.close(), self.codex.close(), self.close(), return_exceptions=True)
+                results = await asyncio.gather(self.console.close(), self.steam.close(), self.games.close(), self.stocks.close(), self.codex.close(), self.close(), return_exceptions=True)
                 for result in results:
                     if isinstance(result, Exception):
                         log_event("shutdown_resource_error", result)
